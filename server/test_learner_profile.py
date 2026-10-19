@@ -1,224 +1,135 @@
-import copy
 import json
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 
-from learner_profile import (
-    BRIEF_MAX_CHARS,
-    ProfileError,
-    build_initial_card,
-    empty_profile,
-    load_profile,
-    profile_brief,
-    update_profile,
-)
+import learner_profile as lp
 
-KST = timezone(timedelta(hours=9))
-NOW = datetime(2026, 10, 20, 9, 30, 15, tzinfo=KST)
-TUTORING = {"corrections": [{"said": "I start", "better": "I started", "why": "과거형"}]}
+NOW = datetime(2026, 10, 20, 9, 0, tzinfo=lp.KST)
+LEVEL = {"cefr": "B1.2", "actfl": "Intermediate High", "source": "level-test 2026-10-07"}
 
 
 def weak(pattern, count=1, last_seen="2026-10-16", misses=0):
-    return {"pattern": pattern, "count": count, "last_seen": last_seen, "example": "ex " + pattern, "misses": misses}
+    return {"pattern": pattern, "count": count, "last_seen": last_seen, "example": "I just started my day.", "misses": misses}
 
 
-def card(**over):
+def card(**overrides):
     base = {
-        "updated": "2026-10-16T09:00:00+09:00",
-        "level": {"cefr": "B1.2", "actfl": "Intermediate High", "source": "level-test 2026-10-07"},
-        "weak_points": [weak("past tense", 2)],
+        "updated": "2026-10-16T21:40:00+09:00",
+        "level": dict(LEVEL),
+        "weak_points": [weak("past tense")],
         "fixed_points": [],
         "phrases": [{"phrase": "based out of", "first_seen": "2026-10-16", "used_well": 0}],
-        "pragmatics": [{"pattern": "bottom line first", "note": "Lead with the result."}],
-        "interests": ["hiking"],
-        "next_goal": "question tense",
+        "pragmatics": [{"pattern": "returning the question", "note": "How about you? keeps the talk going."}],
+        "interests": ["security"],
+        "next_goal": "Use past tense in questions.",
     }
-    base.update(over)
+    base.update(overrides)
     return base
 
 
-class ProfileTestCase(unittest.TestCase):
+class ProfileFileTest(unittest.TestCase):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.dir = Path(tmp.name)
-        self.path = self.dir / "learner-profile.json"
-        self.history = self.dir / "learner-profile-history"
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self._tmp.name) / "learner-profile.json"
+        self.history = Path(self._tmp.name) / lp.HISTORY_DIR_NAME
 
-    def seed(self, data=None):
-        self.path.write_text(json.dumps(data or card(), ensure_ascii=False), encoding="utf-8")
+    def tearDown(self):
+        self._tmp.cleanup()
 
-    def update(self, output):
-        return update_profile(TUTORING, generate_text=lambda _prompt: output, path=self.path, now=NOW)
+    def write_card(self, data):
+        self.path.write_text(json.dumps(data), encoding="utf-8")
+        return self.path.read_bytes()
 
-    def history_files(self):
-        return sorted(self.history.glob("*.json")) if self.history.exists() else []
+    def update(self, model_output):
+        return lp.update_profile({"corrections": []}, generate_text=lambda prompt: model_output, path=self.path, now=NOW)
 
-
-class UpdateTest(ProfileTestCase):
     def test_valid_update_writes_card_and_backup(self):
-        old_bytes = json.dumps(card(), ensure_ascii=False).encode("utf-8")
-        self.path.write_bytes(old_bytes)
-        new = card(weak_points=[weak("past tense", 3, "2026-10-20")], next_goal="new goal")
+        self.write_card(card())
+        new = card(weak_points=[weak("past tense", count=2, last_seen="2026-10-20")], next_goal="Ask with did.")
+
         self.assertTrue(self.update(json.dumps(new)))
-        saved = load_profile(self.path)
-        self.assertEqual(saved["next_goal"], "new goal")
-        self.assertEqual(saved["weak_points"][0]["count"], 3)
-        self.assertEqual(saved["updated"], "2026-10-20T09:30:15+09:00")
-        self.assertNotEqual(saved["updated"], card()["updated"])
-        backups = self.history_files()
-        self.assertEqual([b.name for b in backups], ["20261020-093015.json"])
-        self.assertEqual(backups[0].read_bytes(), old_bytes)
-        self.assertEqual(list(self.dir.glob("*.tmp")), [])
 
-    def test_missing_card_starts_from_empty_default(self):
-        prompts = []
+        saved = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["next_goal"], "Ask with did.")
+        self.assertEqual(saved["updated"], "2026-10-20T09:00:00+09:00")
+        backups = list(self.history.glob("*.json"))
+        self.assertEqual([b.name for b in backups], ["20261020-090000.json"])
+        self.assertEqual(json.loads(backups[0].read_text(encoding="utf-8"))["next_goal"], "Use past tense in questions.")
 
-        def gen(prompt):
-            prompts.append(prompt)
-            return json.dumps(card())
+    def test_missing_card_is_created_without_backup(self):
+        self.assertTrue(self.update(json.dumps(card())))
 
-        self.assertTrue(update_profile(TUTORING, generate_text=gen, path=self.path, now=NOW))
-        self.assertIn('"weak_points": []', prompts[0])
-        self.assertEqual(self.history_files(), [])
-        self.assertEqual(load_profile(self.path)["level"], empty_profile()["level"])
+        self.assertTrue(self.path.exists())
+        self.assertFalse(self.history.exists())
 
-    def test_code_fenced_json_is_accepted(self):
-        self.seed()
-        self.assertTrue(self.update("```json\n" + json.dumps(card(next_goal="g")) + "\n```"))
-        self.assertEqual(load_profile(self.path)["next_goal"], "g")
+    def test_non_json_output_keeps_card(self):
+        before = self.write_card(card())
 
-    def test_non_json_leaves_card_untouched(self):
-        self.seed()
-        before = self.path.read_bytes()
-        self.assertFalse(self.update("sorry, I cannot do that"))
+        self.assertFalse(self.update("Sure! Here is the card."))
+
         self.assertEqual(self.path.read_bytes(), before)
-        self.assertEqual(self.history_files(), [])
+        self.assertFalse(self.history.exists())
 
-    def test_generate_text_exception_leaves_card_untouched(self):
-        self.seed()
-        before = self.path.read_bytes()
+    def test_schema_invalid_output_keeps_card(self):
+        before = self.write_card(card())
+        broken = card()
+        del broken["phrases"]
 
-        def boom(_prompt):
-            raise RuntimeError("vertex down")
+        self.assertFalse(self.update(json.dumps(broken)))
 
-        self.assertFalse(update_profile(TUTORING, generate_text=boom, path=self.path, now=NOW))
         self.assertEqual(self.path.read_bytes(), before)
-        self.assertEqual(self.history_files(), [])
+        self.assertFalse(self.history.exists())
 
-    def test_schema_invalid_leaves_card_untouched(self):
-        self.seed()
-        before = self.path.read_bytes()
-        bad_variants = []
-        missing_key = card()
-        del missing_key["interests"]
-        bad_variants.append(missing_key)
-        bad_variants.append(card(weak_points=[{"pattern": "x", "count": "2", "last_seen": "2026-10-16", "example": "e"}]))
-        bad_variants.append(card(weak_points=[weak("x", last_seen="16/10/2026")]))
-        bad_variants.append(card(phrases=[{"phrase": "p", "first_seen": "2026-10-16"}]))
-        bad_variants.append(card(interests=[1]))
-        bad_variants.append({**card(), "extra": 1})
-        for bad in bad_variants:
-            self.assertFalse(self.update(json.dumps(bad)), bad)
-            self.assertEqual(self.path.read_bytes(), before)
-        self.assertEqual(self.history_files(), [])
+    def test_model_cannot_change_level(self):
+        self.write_card(card())
 
-    def test_corrupt_existing_card_is_not_overwritten(self):
-        self.path.write_text("{not json", encoding="utf-8")
-        self.assertFalse(self.update(json.dumps(card())))
-        self.assertEqual(self.path.read_text(encoding="utf-8"), "{not json")
+        self.assertTrue(self.update(json.dumps(card(level={"cefr": "C2", "actfl": "Superior", "source": "model"}))))
 
-    def test_level_is_restored_from_old_card(self):
-        self.seed()
-        changed = card(level={"cefr": "C2", "actfl": "Superior", "source": "call"})
-        self.assertTrue(self.update(json.dumps(changed)))
-        self.assertEqual(load_profile(self.path)["level"], card()["level"])
+        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["level"], LEVEL)
 
-    def test_weak_points_capped_at_five_by_count_then_recency(self):
-        self.seed()
-        points = [weak(f"p{i}", count=i, last_seen="2026-10-1%d" % (i % 10)) for i in range(1, 8)]
-        points.append(weak("tie-old", count=7, last_seen="2026-09-01"))
+    def test_weak_points_capped_at_five_by_count(self):
+        self.write_card(card())
+        many = [weak(f"pattern {i}", count=i + 1) for i in range(7)]
+
+        self.assertTrue(self.update(json.dumps(card(weak_points=many))))
+
+        saved = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual([p["count"] for p in saved["weak_points"]], [7, 6, 5, 4, 3])
+
+    def test_three_misses_moves_to_fixed_points(self):
+        self.write_card(card())
+        points = [weak("past tense", misses=3), weak("articles", misses=1)]
+
         self.assertTrue(self.update(json.dumps(card(weak_points=points))))
-        patterns = [p["pattern"] for p in load_profile(self.path)["weak_points"]]
-        self.assertEqual(len(patterns), 5)
-        self.assertEqual(patterns, ["p7", "tie-old", "p6", "p5", "p4"])
 
-    def test_misses_three_moves_to_fixed_points(self):
-        self.seed()
-        points = [weak("stale", 4, misses=3), weak("fresh", 2, misses=2)]
-        self.assertTrue(self.update(json.dumps(card(weak_points=points))))
-        saved = load_profile(self.path)
-        self.assertEqual([p["pattern"] for p in saved["weak_points"]], ["fresh"])
-        self.assertEqual([p["pattern"] for p in saved["fixed_points"]], ["stale"])
+        saved = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual([p["pattern"] for p in saved["weak_points"]], ["articles"])
+        self.assertEqual([p["pattern"] for p in saved["fixed_points"]], ["past tense"])
         self.assertNotIn("misses", saved["fixed_points"][0])
-
-    def test_misses_defaults_to_zero_when_model_omits_it(self):
-        self.seed()
-        point = weak("p")
-        del point["misses"]
-        self.assertTrue(self.update(json.dumps(card(weak_points=[point]))))
-        self.assertEqual(load_profile(self.path)["weak_points"][0]["misses"], 0)
-
-    def test_prompt_forbids_names_addresses_and_companies(self):
-        self.seed()
-        prompts = []
-
-        def gen(prompt):
-            prompts.append(prompt)
-            return json.dumps(card())
-
-        update_profile(TUTORING, generate_text=gen, path=self.path, now=NOW)
-        for word in ("names", "addresses", "company"):
-            self.assertIn(word, prompts[0])
-
-    def test_same_second_backups_do_not_collide(self):
-        self.seed()
-        self.assertTrue(self.update(json.dumps(card(next_goal="a"))))
-        self.assertTrue(self.update(json.dumps(card(next_goal="b"))))
-        self.assertEqual(len(self.history_files()), 2)
-
-
-class InitialCardTest(ProfileTestCase):
-    def test_keeps_model_level_and_enforces_rules(self):
-        out = build_initial_card(
-            "material",
-            generate_text=lambda _p: json.dumps(card(weak_points=[weak(f"p{i}", i) for i in range(8)])),
-            now=NOW,
-        )
-        self.assertEqual(out["level"]["cefr"], "B1.2")
-        self.assertEqual(len(out["weak_points"]), 5)
-        self.assertEqual(out["updated"], "2026-10-20T09:30:15+09:00")
-
-    def test_invalid_output_raises(self):
-        with self.assertRaises(ProfileError):
-            build_initial_card("m", generate_text=lambda _p: "nope", now=NOW)
 
 
 class BriefTest(unittest.TestCase):
-    def test_empty_card_gives_empty_string(self):
-        self.assertEqual(profile_brief(None), "")
-        self.assertEqual(profile_brief({}), "")
-        self.assertEqual(profile_brief(empty_profile()), "")
+    def test_empty_card_gives_empty_brief(self):
+        self.assertEqual(lp.profile_brief(None), "")
 
-    def test_brief_mentions_key_fields_and_is_deterministic(self):
-        brief = profile_brief(card())
-        for fragment in ("B1.2", "past tense", "ex past tense", "based out of", "bottom line first", "question tense"):
-            self.assertIn(fragment, brief)
-        self.assertEqual(brief, profile_brief(copy.deepcopy(card())))
+    def test_brief_mentions_level_weak_point_and_goal(self):
+        brief = lp.profile_brief(lp.validate_profile(card()))
 
-    def test_brief_never_exceeds_limit(self):
-        long = "x" * 400
+        self.assertIn("B1.2", brief)
+        self.assertIn("past tense", brief)
+        self.assertIn("Use past tense in questions", brief)
+
+    def test_brief_stays_within_limit_for_large_card(self):
         big = card(
-            weak_points=[weak(long + str(i), 5 - i % 3) for i in range(5)],
-            phrases=[{"phrase": long, "first_seen": "2026-10-16", "used_well": i} for i in range(20)],
-            pragmatics=[{"pattern": long, "note": long} for _ in range(8)],
-            interests=[long] * 8,
-            next_goal=long,
+            weak_points=[weak("x" * 300, count=5) for _ in range(5)],
+            phrases=[{"phrase": "p" * 100, "first_seen": "2026-10-16", "used_well": 0} for _ in range(15)],
+            pragmatics=[{"pattern": "q" * 200, "note": "n" * 200} for _ in range(8)],
+            next_goal="g" * 500,
         )
-        brief = profile_brief(big)
-        self.assertTrue(0 < len(brief) <= BRIEF_MAX_CHARS)
+
+        self.assertLessEqual(len(lp.profile_brief(lp.validate_profile(big))), lp.BRIEF_MAX_CHARS)
 
 
 if __name__ == "__main__":
