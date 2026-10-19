@@ -407,6 +407,12 @@ export class GeminiLiveAPI {
     this.sendMessage(sessionSetupMessage);
   }
 
+  sendPlainText(text) {
+    if (this.webSocket && this.webSocket.readyState === WebSocket.OPEN) {
+      this.webSocket.send(text);
+    }
+  }
+
   sendTextMessage(text) {
     const textMessage = {
       client_content: {

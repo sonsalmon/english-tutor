@@ -22,6 +22,15 @@ import {
   FunctionCallDefinition,
 } from "../lib/gemini-live/geminilive.js";
 import { AudioStreamer, AudioPlayer } from "../lib/gemini-live/mediaUtils.js";
+import {
+  OPENER_TEXT,
+  fetchLearnerBrief,
+  freeTalkInstruction,
+  missionFlowBlock,
+  personaPrefix,
+} from "../lib/ms-park.js";
+
+const START_COPY = "Ms. Park speaks first.";
 
 class ViewChat extends HTMLElement {
   constructor() {
@@ -64,6 +73,18 @@ class ViewChat extends HTMLElement {
 
   _isTeachback() {
     return !!(this._mission && this._mission.type === 'teachback');
+  }
+
+  _isFreeTalk() {
+    return !!(this._mission && this._mission.type === 'freetalk');
+  }
+
+  _startButtonHtml() {
+    const label = this._isFreeTalk() ? 'Start Free Talk' : 'Start Mission';
+    return `
+            <span style="font-size: 1.3rem; font-weight: 800; margin-bottom: 2px; letter-spacing: 0.02em;">${label}</span>
+            <span style="font-size: 0.85rem; opacity: 0.9; font-style: italic;">${START_COPY}</span>
+          `;
   }
 
   // 준비 화면에서 받은 sections를 서버 lesson_text와 같은 형식으로 이어 6000자에서 자른다.
@@ -318,10 +339,7 @@ ${this._retryBlock()}`;
 
         <div style="margin-bottom: var(--spacing-xxl); display: flex; flex-direction: column; gap: var(--spacing-lg); align-items: center;">
            
-           <button id="mic-btn" class="chat-cta-btn">
-            <span style="font-size: 1.3rem; font-weight: 800; margin-bottom: 2px; letter-spacing: 0.02em;">Start Mission</span>
-            <span style="font-size: 0.85rem; opacity: 0.9; font-style: italic;">You start the conversation!</span>
-          </button>
+           <button id="mic-btn" class="chat-cta-btn">${this._startButtonHtml()}</button>
 
            <p id="connection-status" style="
              margin-top: var(--spacing-sm);
@@ -532,6 +550,8 @@ ${this._retryBlock()}`;
 
     this.client.onOpen = () => {
       console.log("🔓 [Gemini] WebSocket connection opened");
+      // 설정 메시지가 나간 뒤에 보내면 서버 큐가 세션 준비가 끝날 때까지 들고 있다가 넘긴다.
+      if (!this._isTeachback()) this.client.sendPlainText(OPENER_TEXT);
     };
 
     this.client.onReceiveResponse = (response) => {
@@ -623,10 +643,18 @@ ${this._retryBlock()}`;
           let systemInstruction = "";
 
           const isTeachback = this._isTeachback();
+          const isFreeTalk = this._isFreeTalk();
+          const brief = isTeachback ? "" : await fetchLearnerBrief();
 
           if (isTeachback) {
             // Teach-back 수업 모드: 일반 롤플레이 지시문 대신 수업 지시문 틀을 쓴다.
             systemInstruction = this._teachbackInstruction();
+          } else if (isFreeTalk) {
+            systemInstruction = freeTalkInstruction({
+              topic: this._mission.topic,
+              brief,
+              retry: this._retry,
+            });
           } else if (mode === "immergo_teacher") {
             // Teacher Mode Prompt
             systemInstruction = `
@@ -696,7 +724,12 @@ Once the retry exchange is complete:
 `;
           }
 
-          if (!isTeachback && this._retry && (this._retry.goal || (this._retry.target_phrases && this._retry.target_phrases.length))) {
+          if (!isTeachback && !isFreeTalk) {
+            systemInstruction =
+              personaPrefix(brief) + missionFlowBlock(targetRole, !!brief) + systemInstruction;
+          }
+
+          if (!isTeachback && !isFreeTalk && this._retry && (this._retry.goal || (this._retry.target_phrases && this._retry.target_phrases.length))) {
             const retryGoal = (this._retry.goal || "").trim();
             const retryPhrases = Array.isArray(this._retry.target_phrases)
               ? this._retry.target_phrases.filter(Boolean)
@@ -779,10 +812,7 @@ When the learner makes a grammar or word-form mistake, do not ignore it and do n
           isSpeaking = false;
           micBtn.classList.remove('active');
           // Reset button content to "Start Mission"
-          micBtn.innerHTML = `
-              <span style="font-size: 1.3rem; font-weight: 800; margin-bottom: 2px; letter-spacing: 0.02em;">Start Mission</span>
-              <span style="font-size: 0.85rem; opacity: 0.9; font-style: italic;">You start the conversation!</span>
-          `;
+          micBtn.innerHTML = this._startButtonHtml();
 
           userViz.disconnect();
           modelViz.disconnect();
