@@ -1,0 +1,94 @@
+[
+  {
+    "id": 0,
+    "title": "Day 1 Team Intro",
+    "difficulty": "Easy",
+    "desc": "Your goal: Introduce yourself to the team on a video call by sharing your role, background, and one fun fact, then ask a brief question back.",
+    "target_role": "Welcoming, energetic tech lead running a remote team call who values concise, warm introductions"
+  },
+  {
+    "id": 1,
+    "title": "First Coffee Chat",
+    "difficulty": "Easy",
+    "desc": "Your goal: Have a casual 1-on-1 coffee chat with a new teammate, exchange light small talk about where you are based and hobbies, and wrap up smoothly.",
+    "target_role": "Friendly remote software engineer having a 15-minute coffee chat who enjoys quick, natural small talk before work"
+  },
+  {
+    "id": 2,
+    "title": "Daily Standup Update",
+    "difficulty": "Medium",
+    "desc": "Your goal: Deliver a concise standup update leading with the bottom line: yesterday's key outcome, today's priority, and your blocker status.",
+    "target_role": "Direct, fast-paced scrum master running standup who expects the bottom line upfront and clear blocker flags"
+  },
+  {
+    "id": 3,
+    "title": "Asking for Help",
+    "difficulty": "Medium",
+    "desc": "Your goal: Ask a senior engineer for technical guidance directly without over-apologizing, clearly stating the problem and what you already tried.",
+    "target_role": "Pragmatic, busy senior engineer who is eager to unblock teammates when questions are direct, contextualized, and free of excessive apologies"
+  },
+  {
+    "id": 4,
+    "title": "Code Review Discussion",
+    "difficulty": "Medium",
+    "desc": "Your goal: Acknowledge review feedback, politely disagree on one implementation point with sound technical reasoning, and offer an alternative.",
+    "target_role": "Constructive senior peer reviewer who welcomes collaborative, reasoned pushback rather than passive agreement"
+  },
+  {
+    "id": 5,
+    "title": "Declining Extra Work",
+    "difficulty": "Medium",
+    "desc": "Your goal: Politely decline a coworker's request to take on extra work due to sprint priorities, and propose an alternative timeline or resource.",
+    "target_role": "Collaborative but overloaded teammate seeking help who values honest capacity boundaries and workable alternative options"
+  },
+  {
+    "id": 6,
+    "title": "First Manager 1:1",
+    "difficulty": "Hard",
+    "desc": "Your goal: Share your 90-day growth goals, proactively ask for feedback on your early performance, and align on clear expectations.",
+    "target_role": "Supportive engineering manager who appreciates self-driven goal setting, direct bottom-line communication, and proactive feedback seeking"
+  },
+  {
+    "id": 7,
+    "title": "Pushing Back on a Plan",
+    "difficulty": "Hard",
+    "desc": "Your goal: Speak up in a team sync to tactfully push back on a risky release plan, explain the architectural risk, and propose a phased compromise.",
+    "target_role": "Decisive systems architect leading a technical planning meeting who values candid, evidence-based risk assessment and pragmatic compromise"
+  },
+  {
+    "id": 8,
+    "title": "Accepting Team Praise",
+    "difficulty": "Medium",
+    "desc": "Your goal: Gracefully accept public praise for your production fix during all-hands, credit teammate support, and keep the conversation flowing without deflecting.",
+    "target_role": "Enthusiastic engineering director giving a public all-hands shout-out who expects gracious ownership and positive forward momentum"
+  },
+  {
+    "id": 9,
+    "title": "Apartment Viewing & Terms",
+    "difficulty": "Medium",
+    "desc": "Your goal: Tour an apartment, ask about lease terms, utilities, and move-in policies, and negotiate one condition such as waiving a fee or flexible move-in.",
+    "target_role": "Professional, efficient leasing agent who is polite, direct, and open to reasonable negotiation on lease conditions"
+  },
+  {
+    "id": 10,
+    "title": "Calling a Clinic",
+    "difficulty": "Medium",
+    "desc": "Your goal: Call an urgent care clinic, clearly describe your primary symptoms and duration, schedule an appointment, and confirm insurance network coverage.",
+    "target_role": "Direct, efficient medical clinic receptionist managing appointment scheduling who needs bottom-line symptom descriptions and clear insurance details"
+  },
+  {
+    "id": 11,
+    "title": "Addressing Neighbor Noise",
+    "difficulty": "Hard",
+    "desc": "Your goal: Introduce yourself to your new neighbor and tactfully address late-night bass noise, reaching an amicable compromise while staying friendly.",
+    "target_role": "Casual, slightly defensive apartment neighbor who responds well to a friendly, non-accusatory approach and a clear, respectful compromise"
+  },
+  {
+    "id": 12,
+    "title": "Teach-back: Today's Lesson",
+    "type": "teachback",
+    "difficulty": "Medium",
+    "desc": "Your goal: Teach today's lesson from your own notes to three curious American middle schoolers (Maya, Leo, Sam) in English, explaining every term and reason clearly.",
+    "target_role": "Three American middle school students (Maya, Leo, Sam) with a senior English teacher, Ms. Park"
+  }
+]

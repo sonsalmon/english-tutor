@@ -1,0 +1,9 @@
+english-tutor
+
+This product includes software derived from "Immersive Language Learning with Live API"
+(https://github.com/ZackAkil/immersive-language-learning-with-live-api),
+Copyright 2026 Google LLC, licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Changes from the original: local single-user use (deployment code removed), saved call
+transcripts, post-call tutoring, Teach-back lesson mode, context window compression and
+session resumption, and a persistent tutor (Ms. Park) that remembers the learner.
