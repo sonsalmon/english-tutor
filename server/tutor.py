@@ -198,6 +198,22 @@ def _make_client() -> genai.Client:
     return genai.Client(vertexai=True, project=project, location=location)
 
 
+def make_generate_text(model_name: Optional[str] = None) -> Callable[[str], Any]:
+    """JSON 응답을 요구하는 Vertex 텍스트 생성 함수를 만든다(analyze_*의 기본 구현과 같은 호출)."""
+    client = _make_client()
+    chosen_model = model_name or os.getenv(TUTOR_MODEL_ENV, DEFAULT_TUTOR_MODEL)
+
+    def generate_text(prompt: str) -> Any:
+        response = client.models.generate_content(
+            model=chosen_model,
+            contents=prompt,
+            config=types.GenerateContentConfig(response_mime_type="application/json"),
+        )
+        return response.text
+
+    return generate_text
+
+
 VERBATIM_PROMPT = (
     "Transcribe this recording of an English learner VERBATIM. Do NOT fix grammar, "
     "tense, plurals, articles, prepositions or word choice. Keep fillers (um, uh), "
