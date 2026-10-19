@@ -42,9 +42,11 @@ from server.lesson import (
     lesson_text,
     session_time_limit_from_env,
 )
+from server.learner_profile import ProfileError, load_profile, profile_brief, update_profile
 from server.tutor import (
     TutoringAnalysisError,
     latest_transcript_since,
+    make_generate_text,
     resolve_transcript,
     run_teachback,
     run_tutoring,
@@ -103,6 +105,40 @@ def cleanup_tokens():
 async def get_status():
     """혼자 쓰는 로컬 앱이라 배포용 설정(reCAPTCHA·Redis)이 없다. 화면 경고를 띄우지 않는다."""
     return {"mode": "local", "missing": []}
+
+@app.get("/api/learner-profile")
+async def learner_profile_endpoint():
+    """통화 시작 때 쓰는 학습자 카드 영어 요약. 카드가 없거나 깨졌으면 빈 요약."""
+    try:
+        card = await asyncio.to_thread(load_profile)
+    except ProfileError as e:
+        logger.error(f"Learner profile unreadable: {e}")
+        card = None
+    return {"brief": profile_brief(card), "updated": card["updated"] if card else None}
+
+
+# 백그라운드 카드 갱신 작업. 참조를 안 잡으면 끝나기 전에 수거될 수 있다.
+_background_tasks: "set[asyncio.Task]" = set()
+
+
+def _update_profile_sync(tutoring: dict) -> bool:
+    return update_profile(tutoring, generate_text=make_generate_text())
+
+
+def _schedule_profile_update(tutoring: dict) -> None:
+    """요약 응답을 늦추지 않도록 카드 갱신을 뒤에서 돌린다. 실패해도 클라이언트에는 영향 없다."""
+
+    async def _run():
+        try:
+            if await asyncio.to_thread(_update_profile_sync, tutoring):
+                logger.info("Learner profile updated")
+        except Exception as e:
+            logger.error(f"Learner profile update failed: {e}")
+
+    task = asyncio.create_task(_run())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
 
 def _wait_and_resolve_transcript(filename=None, started_at=None):
     """분석할 전사 파일을 정한다.
@@ -194,6 +230,7 @@ async def tutor_endpoint(request: Request):
         data, saved = await asyncio.to_thread(run_tutoring, path)
         data["saved"] = saved
         _TUTOR_CACHE[path.name] = (time.time(), data)
+        _schedule_profile_update({k: v for k, v in data.items() if k != "saved"})
     except LessonError as e:
         logger.error(f"Lesson fetch failed: {e}")
         raise HTTPException(status_code=e.status_code, detail=str(e))
