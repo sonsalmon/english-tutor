@@ -15,6 +15,13 @@
  */
 
 import missionsData from '../data/missions.json';
+import { TOPIC_MAX, sanitizeTopic } from '../lib/ms-park.js';
+
+const escapeHtml = (value) => String(value)
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;');
 
 class ViewMissions extends HTMLElement {
   connectedCallback() {
@@ -178,6 +185,57 @@ class ViewMissions extends HTMLElement {
             </div>
         </div>
 
+        <section id="free-talk" class="glass-panel" aria-labelledby="free-talk-title" style="
+            width: 100%;
+            box-sizing: border-box;
+            max-width: 900px;
+            margin: 0 auto var(--spacing-xxl) auto;
+            padding: var(--spacing-lg);
+            display: flex;
+            flex-direction: column;
+            gap: var(--spacing-md);
+        ">
+            <div style="display: flex; align-items: center; gap: 12px;">
+                <span style="font-size: 1.5rem;" aria-hidden="true">💬</span>
+                <div>
+                    <h3 id="free-talk-title" style="margin: 0; font-size: 1.3rem;">Free Talk with Ms. Park</h3>
+                    <p style="margin: 2px 0 0 0; font-size: 0.9rem; color: var(--color-text-sub);">No role-play. Pick a topic or paste something you read, and talk it over.</p>
+                </div>
+            </div>
+            <textarea id="free-talk-topic" rows="5" maxlength="${TOPIC_MAX}" aria-label="Today's topic or material" placeholder="Today's topic, or paste an article, an email, or notes…" style="
+                width: 100%;
+                box-sizing: border-box;
+                padding: 12px 16px;
+                border: var(--glass-border);
+                border-radius: var(--radius-md);
+                background: var(--color-surface);
+                color: var(--color-text-main);
+                font-family: var(--font-body);
+                font-size: 1rem;
+                line-height: 1.5;
+                resize: vertical;
+            "></textarea>
+            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--spacing-md);">
+                <div style="font-size: 0.85rem; color: var(--color-text-sub);">
+                    <span id="free-talk-count">0 / ${TOPIC_MAX.toLocaleString('en-US')}</span>
+                    <span id="free-talk-limit" role="status" style="margin-left: 8px; color: var(--color-danger);"></span>
+                </div>
+                <button id="free-talk-start" type="button" style="
+                    min-height: 44px;
+                    padding: 12px var(--spacing-xl);
+                    border: none;
+                    border-radius: var(--radius-md);
+                    background: var(--color-accent-primary);
+                    color: var(--color-surface-solid);
+                    font-family: var(--font-body);
+                    font-size: 1rem;
+                    font-weight: 800;
+                    cursor: pointer;
+                    box-shadow: var(--shadow-sm);
+                ">Start Free Talk</button>
+            </div>
+        </section>
+
         <div style="margin-bottom: var(--spacing-md); text-align: center;">
             <h2 style="font-size: 2.5rem; letter-spacing: -0.03em; margin-bottom: var(--spacing-xs);">Choose Your Quest</h2>
             <p style="opacity: 0.7; font-size: 1.1rem;">Select a scenario to begin your immersive practice</p>
@@ -337,6 +395,39 @@ class ViewMissions extends HTMLElement {
     });
 
     updateModeUI();
+
+    // Free Talk
+    const topicInput = this.querySelector('#free-talk-topic');
+    const topicCount = this.querySelector('#free-talk-count');
+    const topicLimit = this.querySelector('#free-talk-limit');
+    const updateTopicCount = () => {
+      const length = topicInput.value.length;
+      topicCount.textContent = `${length.toLocaleString('en-US')} / ${TOPIC_MAX.toLocaleString('en-US')}`;
+      topicLimit.textContent = length >= TOPIC_MAX ? 'Limit reached. Extra text is cut off.' : '';
+    };
+    topicInput.addEventListener('input', updateTopicCount);
+
+    this.querySelector('#free-talk-start').addEventListener('click', () => {
+      const topic = sanitizeTopic(topicInput.value);
+      const snippet = topic.replace(/\s+/g, ' ').slice(0, 120);
+      this.dispatchEvent(new CustomEvent('navigate', {
+        bubbles: true,
+        detail: {
+          view: 'chat',
+          mission: {
+            id: 'freetalk',
+            type: 'freetalk',
+            title: 'Free Talk',
+            desc: snippet ? `Topic: ${escapeHtml(snippet)}` : 'Ms. Park will ask what you want to talk about.',
+            target_role: 'Ms. Park',
+            topic
+          },
+          language: 'English',
+          fromLanguage: 'Korean',
+          mode: 'immergo_immersive'
+        }
+      }));
+    });
 
     // Add change listeners to persist immediately
     fromSelect.addEventListener('change', () => {
