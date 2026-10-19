@@ -16,10 +16,12 @@
 - 통화 전문: `~/dev/learning/english/sessions/`
 - 통화 뒤 튜터링: `~/dev/learning/english/tutoring/`
 - Teach-back 결과: `~/dev/learning/english/teachback/`
+- 학습자 카드: `~/dev/learning/english/learner-profile.json` (바꾸기 전 카드는 `learner-profile-history/`)
+- 첫 카드 다시 만들기: `.venv/bin/python scripts/build_learner_profile.py` (미리보기), 저장은 `--write`
 
 ## 검사
 
-- 단위 시험: `cd server && ../.venv/bin/python -m unittest test_gemini_live test_transcript_store`
+- 단위 시험: `cd server && ../.venv/bin/python -m unittest test_learner_profile test_gemini_live test_transcript_store`
 - 오프라인 검사: `.venv/bin/python scripts/tutor_offline_check.py`, `.venv/bin/python scripts/teachback_offline_check.py`
 - Vertex 연결 시험(소리 1턴, 몇 센트): `.venv/bin/python scripts/live_smoke.py`
 - 화면 빌드: `npm run build`
