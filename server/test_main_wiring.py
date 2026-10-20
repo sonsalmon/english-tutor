@@ -23,7 +23,9 @@ class TutorEndpointWiringTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         main._TUTOR_CACHE.clear()
         main._PROFILE_UPDATED.clear()
+        main._READGLOSS_PUSHED.clear()
         patches = {
+            "push": mock.patch.object(main, "push_tutoring", return_value=2),
             "resolve": mock.patch.object(main, "_wait_and_resolve_transcript", return_value=TRANSCRIPT),
             "run": mock.patch.object(main, "run_tutoring", side_effect=lambda path: (dict(TUTORING), True)),
             "schedule": mock.patch.object(main, "_schedule_profile_update"),
@@ -72,10 +74,63 @@ class TutorEndpointWiringTest(unittest.IsolatedAsyncioTestCase):
         self.mocks["schedule"].assert_called_once()
 
 
-EMPTY_PROFILE = {"brief": "", "updated": None, "weak_points": [], "next_goal": ""}
+class ReadglossWiringTest(unittest.IsolatedAsyncioTestCase):
+    setUp = TutorEndpointWiringTest.setUp
+
+    async def test_fresh_tutoring_pushes_to_readgloss_once(self):
+        first = await main.tutor_endpoint(FakeRequest({}))
+        main._TUTOR_CACHE.clear()
+        await main.tutor_endpoint(FakeRequest({}))
+
+        self.mocks["push"].assert_called_once()
+        self.assertEqual(self.mocks["push"].call_args.args[1], "English Tutor 통화 2026-10-20")
+        self.assertIn(b'"readgloss":{"saved":2}', first.body)
+
+    async def test_bridge_down_gives_null_and_retries_next_time(self):
+        self.mocks["push"].return_value = None
+        first = await main.tutor_endpoint(FakeRequest({}))
+        main._TUTOR_CACHE.clear()
+        await main.tutor_endpoint(FakeRequest({}))
+
+        self.assertIn(b'"readgloss":null', first.body)
+        self.assertEqual(self.mocks["push"].call_count, 2)
+
+    async def test_card_update_gets_no_readgloss_fields(self):
+        await main.tutor_endpoint(FakeRequest({}))
+
+        sent = self.mocks["schedule"].call_args.args[0]
+        self.assertNotIn("readgloss", sent)
+        self.assertNotIn("practice_used", sent)
+
+    async def test_practice_words_used_in_transcript_are_reported(self):
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"TUTORING_DIR": tmp}):
+            path = Path(tmp) / "2026-10-20-090000.md"
+            path.write_text("**Partner:** Mitigate it?\n**Me:** We mitigated the risk.\n", encoding="utf-8")
+            self.mocks["resolve"].return_value = path
+            res = await main.tutor_endpoint(FakeRequest({"practice_words": ["mitigate", "haphazard", "Bad Word", 3]}))
+
+        self.assertIn(b'"practice_used":["mitigate"]', res.body)
+
+
+EMPTY_PROFILE = {"brief": "", "updated": None, "weak_points": [], "next_goal": "", "practice_words": []}
 
 
 class LearnerProfileEndpointTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        patcher = mock.patch.object(main, "practice_words", return_value=[])
+        self.practice = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    async def test_readgloss_practice_words_are_passed_through(self):
+        self.practice.return_value = [{"lemma": "mitigate", "gloss": "완화하다", "source": "lookup"}]
+        with mock.patch.object(main, "load_profile", return_value=None):
+            body = await main.learner_profile_endpoint()
+
+        self.assertEqual(body["practice_words"], [{"lemma": "mitigate", "gloss": "완화하다", "source": "lookup"}])
+
     async def test_broken_card_gives_empty_brief(self):
         with mock.patch.object(main, "load_profile", side_effect=main.ProfileError("broken")):
             self.assertEqual(await main.learner_profile_endpoint(), EMPTY_PROFILE)
