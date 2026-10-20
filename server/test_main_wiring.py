@@ -52,13 +52,24 @@ class TutorEndpointWiringTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.mocks["run"].call_count, 2)
         self.mocks["schedule"].assert_called_once()
 
-    async def test_teachback_does_not_update_card(self):
+    async def _teachback(self):
+        result = {"corrections": TUTORING["corrections"], "unanswered": ["x"], "lesson_date": "2026-10-13"}
         with mock.patch.object(main, "get_lesson", return_value={"date": "2026-10-13", "sections": []}), \
                 mock.patch.object(main, "lesson_text", return_value=""), \
-                mock.patch.object(main, "run_teachback", return_value=({"unanswered": []}, True)):
+                mock.patch.object(main, "run_teachback", side_effect=lambda *a: (dict(result), True)):
             await main.tutor_endpoint(FakeRequest({"mode": "teachback"}))
 
-        self.mocks["schedule"].assert_not_called()
+    async def test_fresh_teachback_schedules_one_card_update_without_non_english_keys(self):
+        await self._teachback()
+
+        self.mocks["schedule"].assert_called_once_with({"corrections": TUTORING["corrections"]})
+
+    async def test_teachback_again_after_cache_expiry_updates_card_once(self):
+        await self._teachback()
+        main._TUTOR_CACHE.clear()
+        await self._teachback()
+
+        self.mocks["schedule"].assert_called_once()
 
 
 EMPTY_PROFILE = {"brief": "", "updated": None, "weak_points": [], "next_goal": ""}

@@ -35,6 +35,6 @@ export function callTitle(setup: CallSetup): string {
 
 export function buildInstruction(setup: CallSetup, brief: string): string {
   if (setup.kind === 'mission') return missionInstruction(setup.mission, brief, setup.retry);
-  if (setup.kind === 'teachback') return teachbackInstruction(setup.sections, setup.seniorMode, setup.retry);
+  if (setup.kind === 'teachback') return teachbackInstruction(setup.sections, setup.seniorMode, setup.retry, brief);
   return freeTalkInstruction(setup.topic, brief, setup.retry);
 }

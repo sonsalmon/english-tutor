@@ -195,13 +195,24 @@ export function lessonText(sections: LessonSection[]): string {
     .slice(0, 6000);
 }
 
-function seniorBlock(mode: SeniorMode): string {
+function seniorBlock(mode: SeniorMode, brief: string = ''): string {
   if (mode === 'after') {
     return `A senior teacher, Ms. Park, is in the room but stays completely silent during the class.`;
   }
   return `There is also a senior teacher, Ms. Park, at the back of the room. She is the teacher's English mentor.
 She speaks ONLY when the teacher's English makes the explanation hard to understand: a wrong word, confusing grammar, a Korean-style phrase an American would misread, or the teacher is stuck for more than about 8 seconds.
-She always starts with "Quick note from Ms. Park -", gives ONE short suggestion (the better English phrase), and ends with "Back to you." At most once every two minutes. She never comments on the content of the lesson.`;
+She always starts with "Quick note from Ms. Park -", gives ONE short suggestion (the better English phrase), and ends with "Back to you." At most once every two minutes. She never comments on the content of the lesson.${seniorNotes(brief)}`;
+}
+
+function seniorNotes(brief: string): string {
+  const b = (brief || '').trim();
+  if (!b) return '';
+  return `
+
+Ms. Park's private notes about the teacher's recurring English weak points from earlier calls (for her only; she uses them to decide when to step in, and she never reads them out or quotes them as something the teacher said today):
+<<<
+${b}
+>>>`;
 }
 
 function teachbackRetryBlock(retry?: Retry | null): string {
@@ -222,7 +233,7 @@ function teachbackRetryBlock(retry?: Retry | null): string {
   return lines.join('\n');
 }
 
-export function teachbackInstruction(sections: LessonSection[], seniorMode: SeniorMode, retry?: Retry | null): string {
+export function teachbackInstruction(sections: LessonSection[], seniorMode: SeniorMode, retry?: Retry | null, brief: string = ''): string {
   return `TEACH-BACK LESSON MODE
 The user is the TEACHER. You play a class of three American middle school students (about 13):
 Maya (curious, asks "Why?"), Leo (asks "Wait, what does ___ mean?"), Sam (asks for an everyday example or "So what?").
@@ -238,7 +249,7 @@ Rules for the students:
 - When the teacher wraps up, Sam asks: "So what's the one main thing we should remember?"
 - Start the class with Maya saying: "Hi! So what are we learning today?"
 
-${seniorBlock(seniorMode)}
+${seniorBlock(seniorMode, brief)}
 
 Hidden notes (the teacher's own study notes; for you only):
 <<<

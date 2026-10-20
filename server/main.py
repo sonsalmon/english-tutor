@@ -215,6 +215,12 @@ async def tutor_endpoint(request: Request):
             )
             data["saved"] = saved
             _TUTOR_CACHE[cache_key] = (time.time(), data)
+            # 카드는 영어 교정만 반영한다. unanswered는 보안 지식 공백이라 제외.
+            if path.name not in _PROFILE_UPDATED:
+                _PROFILE_UPDATED.add(path.name)
+                _schedule_profile_update(
+                    {k: v for k, v in data.items() if k not in ("saved", "lesson_date", "unanswered")}
+                )
             return JSONResponse(data)
 
         cached = _TUTOR_CACHE.get(path.name)
