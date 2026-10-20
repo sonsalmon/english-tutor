@@ -92,6 +92,7 @@ export function Call({ setup, brief, practiceWords, timeLimit, onFinished }: {
         setup,
         startedAt,
         endedAt: serverNow(),
+        pausedMs: call.pausedTotal,
         result: call.result,
         endReason: call.endReason,
         practiceWords: practiceWordsFor(setup, practiceWords).map((w) => w.lemma),

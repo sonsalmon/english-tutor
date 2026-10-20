@@ -127,6 +127,30 @@ class CompactLookupTest(unittest.TestCase):
             {"word": "Leverage", "lemma": "leverage", "gloss": "영향력", "senses": ["활용하다", "영향력", "지레의 작용", "빚을 이용해 투자하다"], "pos": "명사"},
         )
 
+    def test_dictionary_markup_and_usage_notes_are_not_meanings(self):
+        # 2026-10-20 실제 macOS 사전 응답(join): gloss가 문형 조각이고 유의어 줄(◇)이 섞여 있다.
+        join = {
+            "found": True,
+            "lemma": "join",
+            "gloss": "［join＋/join＋",
+            "entries": [
+                {
+                    "headword": "join",
+                    "senses": [
+                        {"pos": "동사, 타동사", "text": "［join＋〈목〉/join＋〈목〉＋『부사』］ …을 결합하다, 붙이다; 합병하다〔together, up〕"},
+                        {"pos": "동사, 타동사", "text": "connect 어떤 중간 매체로 결합시킴 ◇ two rooms connected by telephone"},
+                        {"pos": "동사, 타동사", "text": "〈모임·당·군대 등에〉 참가[가입]하다"},
+                        {"pos": "명사", "text": "[불]1.행동력; 효력"},
+                    ],
+                }
+            ],
+        }
+
+        out = readgloss.compact_lookup("join", join)
+
+        self.assertEqual(out["gloss"], "…을 결합하다")
+        self.assertEqual(out["senses"], ["…을 결합하다", "참가하다", "행동력"])
+
     def test_unknown_word_has_empty_meaning_and_no_pos(self):
         out = readgloss.compact_lookup("Zzzq", {"found": False, "lemma": "zzzq"})
 

@@ -1,6 +1,7 @@
 import { Check, LoaderCircle, Phone, RotateCcw } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { TutoringBlocks } from '../components/TutoringBlocks';
+import { WordText } from '../components/WordText';
 import { CallButton, QuietButton, Screen } from '../components/ui';
 import { requestTutoring, type Tutoring } from '../lib/api';
 import type { Retry } from '../lib/instructions';
@@ -35,7 +36,7 @@ function ReadingWords({ words, used, saved }: { words: string[]; used: string[];
                   className={`flex items-center gap-1 rounded-full border px-3 py-1.5 text-[15px] ${ok ? 'border-call bg-call/10 font-semibold' : 'border-line bg-surface text-ink-soft'}`}
                 >
                   {ok && <Check size={14} aria-hidden />}
-                  {w}
+                  <WordText text={w} />
                   {ok && (
                     <span lang="ko" className="sr-only">
                       {' '}(썼어요)
@@ -96,9 +97,10 @@ export function Summary({ call, onRetry }: { call: FinishedCall; onRetry: (retry
       </header>
       <h1 className="mt-2 text-[28px] font-bold leading-tight">통화가 끝났어요</h1>
       <p className="mt-1 text-ink-soft">
-        {callTitle(call.setup)}, {duration(call.endedAt - call.startedAt)}
+        <WordText text={callTitle(call.setup)} />, {duration(call.endedAt - call.startedAt - call.pausedMs)}
       </p>
       {call.endReason === 'time_limit' && <p className="mt-2 text-sm text-ink-soft">통화 시간이 다 되어 자동으로 끊었어요.</p>}
+      {call.endReason === 'pause_limit' && <p className="mt-2 text-sm text-ink-soft">일시정지가 오래 이어져 통화를 끝냈어요.</p>}
       {call.endReason === 'dropped' && <p className="mt-2 text-sm text-ink-soft">연결이 끊어져 통화를 마쳤어요.</p>}
 
       {call.result && (

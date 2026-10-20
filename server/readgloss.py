@@ -82,14 +82,19 @@ def _gloss(value: Any) -> str:
 
 
 _SENSE_SPLIT_RE = re.compile(r"[,;:，；：]")
-_SENSE_TAG_RE = re.compile(r"[〔\[][^〕\]]*[〕\]]|\([^)]*\)")
+# 사전 표기용 괄호(문형 ［join＋〈목〉］, 목적어 〈사람과〉, 분야 〔물리〕, 《미》, [불] 등)는 뜻이 아니라서 지운다.
+_SENSE_TAG_RE = re.compile(r"［[^］]*］|〈[^〉]*〉|『[^』]*』|《[^》]*》|〔[^〕]*〕|\[[^\]]*\]|\([^)]*\)|（[^）]*）")
+_SENSE_NUM_RE = re.compile(r"^\d+\.\s*")
 _HANGUL_RE = re.compile(r"[가-힣]")
 
 
 def _short_sense(text: Any) -> str:
-    """사전 뜻 한 덩어리에서 짧은 한국어 뜻 하나를 뽑는다. 한글이 없으면 빈 글."""
-    first = _SENSE_SPLIT_RE.split(_SENSE_TAG_RE.sub(" ", str(text or "")))[0]
-    first = " ".join(first.split()).rstrip(".。")
+    """사전 뜻 한 덩어리에서 짧은 한국어 뜻 하나를 뽑는다. 한글이 없거나 유의어·용례 줄(◇)이면 빈 글."""
+    raw = str(text or "")
+    if "◇" in raw:
+        return ""
+    first = _SENSE_SPLIT_RE.split(_SENSE_TAG_RE.sub("", raw))[0]
+    first = _SENSE_NUM_RE.sub("", " ".join(first.split())).rstrip(".。")
     return _gloss(first) if _HANGUL_RE.search(first) else ""
 
 
@@ -117,7 +122,8 @@ def compact_lookup(word: str, result: dict) -> Dict[str, Any]:
                 continue
             add(sense.get("text"))
             pos = pos or str(sense.get("pos") or "").strip()
-    gloss = _gloss(result.get("gloss")) or (senses[0] if senses else "")
+    # 다리의 gloss가 문형 조각("［join＋/join＋")처럼 한글 뜻이 아니면 첫 뜻을 쓴다.
+    gloss = _short_sense(result.get("gloss")) or (senses[0] if senses else "")
     out: Dict[str, Any] = {"word": word, "lemma": lemma, "gloss": gloss, "senses": senses}
     if pos:
         out["pos"] = pos[:20]

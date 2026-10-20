@@ -7,7 +7,7 @@ export type CallStatus = 'ready' | 'connecting' | 'live' | 'ended' | 'error';
 export type Speaker = 'me' | 'park';
 export type CaptionLine = { id: number; who: Speaker; text: string };
 export type MissionResult = { score: number; feedback_pointers: string[] };
-export type EndReason = 'hangup' | 'mission_complete' | 'time_limit' | 'dropped';
+export type EndReason = 'hangup' | 'mission_complete' | 'time_limit' | 'pause_limit' | 'dropped';
 
 const MISSION_END_DELAY_MS = 3500;
 
@@ -62,6 +62,9 @@ export function useCall() {
       audioRef.current.srcObject = null;
       audioRef.current.muted = false;
     }
+    // 멈춘 채로 끝나면 그 시간도 통화 시간에서 뺀다(서버 CallClock과 같게).
+    const since = pausedAtRef.current;
+    if (since !== null) setPausedTotal((total) => total + (Date.now() - since));
     pausedAtRef.current = null;
     setPausedAt(null);
     setBotSpeaking(false);
@@ -144,7 +147,7 @@ export function useCall() {
               void bell.play().catch(() => undefined);
               window.setTimeout(() => finish('mission_complete'), MISSION_END_DELAY_MS);
             } else if (data?.type === 'time_limit') {
-              reasonRef.current = 'time_limit';
+              reasonRef.current = data.reason === 'pause_limit' ? 'pause_limit' : 'time_limit';
             }
           },
           onDisconnected: () => finish('dropped'),

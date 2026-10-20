@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { List, RowLink, Screen, TopBar, useWide } from '../components/ui';
 import { TutoringBlocks } from '../components/TutoringBlocks';
+import { WordText } from '../components/WordText';
 import { getCall, getCalls, type CallDetail, type CallSummary, type CallTotals } from '../lib/api';
 import { go } from '../lib/router';
 
@@ -142,7 +143,9 @@ function CallDetailBody({ stem }: { stem: string }) {
       ) : (
         <>
           <header>
-            <h2 className="text-[22px] leading-snug font-bold">{data.call.mission}</h2>
+            <h2 className="text-[22px] leading-snug font-bold">
+              <WordText text={data.call.mission} />
+            </h2>
             <p className="mt-1 text-ink-soft">
               {formatWhen(data.call.started_at)}, {formatDuration(data.call.duration_sec)}
               {data.call.completed ? '' : ', 중간에 마쳤어요'}

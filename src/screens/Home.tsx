@@ -61,7 +61,9 @@ export function Home({
           <>
             <h2 className="text-sm font-semibold text-ink-soft">오늘 연습할 것</h2>
             <p className="mt-2 text-xl font-bold leading-snug">
-              <span className="mark">{focus.pattern}</span>
+              <span className="mark">
+                <WordText text={focus.pattern} />
+              </span>
             </p>
             {focus.example && (
               <p className="mt-2 text-ink-soft">

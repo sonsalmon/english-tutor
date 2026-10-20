@@ -23,6 +23,8 @@ export type FinishedCall = {
   setup: CallSetup;
   startedAt: number;
   endedAt: number;
+  /** 일시정지로 멈춰 있던 시간(ms). 통화 시간에서 뺀다. */
+  pausedMs: number;
   result: MissionResult | null;
   endReason: EndReason | null;
   practiceWords: string[];
