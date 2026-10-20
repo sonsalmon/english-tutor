@@ -7,6 +7,7 @@
 Google로 가는 통화 지시문에는 단어와 뜻만 넘기고, 읽던 문장·페이지 주소는 넘기지 않는다.
 """
 
+import http.client
 import json
 import logging
 import os
@@ -24,7 +25,8 @@ DEFAULT_URL = "http://127.0.0.1:47831"
 DEFAULT_TOKEN_FILE = "~/dev/readgloss/data/token"
 # 다리는 DNS 리바인딩을 막으려고 Host 머리글이 이 값인지 검사한다. 시험 다리를 다른 포트에 띄워도 같은 값을 보낸다.
 BRIDGE_HOST = "127.0.0.1:47831"
-TIMEOUT_SEC = 2.0
+TIMEOUT_SEC = 1.5
+MAX_RESPONSE_BYTES = 5_000_000
 
 PRACTICE_LIMIT = 5
 # 복습할 단어가 수십 개 밀려 있으면 최근 찾아본 단어가 안 보여서, 복습은 먼저 최대 3개만 넣고 남은 자리를 나중에 채운다.
@@ -61,8 +63,11 @@ def _request(method: str, path: str, body: Optional[dict] = None) -> Optional[An
         req.add_header("Content-Type", "application/json")
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT_SEC) as res:
-            return json.loads(res.read().decode("utf-8"))
-    except (urllib.error.URLError, OSError, ValueError) as e:
+            raw = res.read(MAX_RESPONSE_BYTES + 1)
+        if len(raw) > MAX_RESPONSE_BYTES:
+            raise ValueError("response too large")
+        return json.loads(raw.decode("utf-8"))
+    except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as e:
         logger.info("readgloss bridge %s %s skipped: %s", method, path, e)
         return None
 
@@ -116,9 +121,12 @@ def practice_words(now: Optional[datetime] = None) -> List[Dict[str, str]]:
 
 
 def _forms(lemma: str) -> set:
-    forms = {lemma, lemma + "s", lemma + "es", lemma + "ed", lemma + "d", lemma + "ing"}
+    """규칙 굴절형만(불규칙형은 빠짐). -d는 e로 끝나는 단어에만 붙여 car→card 같은 오판을 막는다."""
+    forms = {lemma, lemma + "s", lemma + "es", lemma + "ed", lemma + "ing"}
     if lemma.endswith("e"):
-        forms.add(lemma[:-1] + "ing")
+        forms |= {lemma + "d", lemma[:-1] + "ing"}
+    if re.fullmatch(r"[a-z]*[^aeiou][aeiou][bdgklmnprt]", lemma):
+        forms |= {lemma + lemma[-1] + "ed", lemma + lemma[-1] + "ing"}
     if lemma.endswith("y"):
         forms |= {lemma[:-1] + "ies", lemma[:-1] + "ied"}
     return forms

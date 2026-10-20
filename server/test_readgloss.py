@@ -72,6 +72,11 @@ class WordsUsedTest(unittest.TestCase):
 
         self.assertEqual(used, ["mitigate"])
 
+    def test_d_only_after_e_and_doubled_consonants(self):
+        used = readgloss.words_used("**Me:** I got a card. We stopped and used it.", ["car", "stop", "use"])
+
+        self.assertEqual(used, ["stop", "use"])
+
     def test_y_and_e_endings(self):
         self.assertEqual(readgloss.words_used("**Me:** It applies. I'm using it.", ["apply", "use"]), ["apply", "use"])
 
@@ -157,6 +162,12 @@ class BridgeClientTest(unittest.TestCase):
 
         self.assertEqual(readgloss.practice_words(NOW), [])
         self.assertIsNone(readgloss.push_tutoring({"vocab": [{"word": "x", "meaning_ko": ""}]}, "t"))
+
+    def test_truncated_reply_is_skipped_quietly(self):
+        import http.client
+
+        with mock.patch("urllib.request.urlopen", side_effect=http.client.IncompleteRead(b"{")):
+            self.assertEqual(readgloss.practice_words(NOW), [])
 
     def test_missing_token_file_or_bridge_down_is_skipped_quietly(self):
         self.env(f"http://127.0.0.1:{self.server.server_port}", self.token_file.parent / "nope")

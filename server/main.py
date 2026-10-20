@@ -109,8 +109,20 @@ async def learner_profile_endpoint():
             {"pattern": p["pattern"], "example": p["example"]} for p in (card["weak_points"][:3] if card else [])
         ],
         "next_goal": card["next_goal"] if card else "",
-        "practice_words": await asyncio.to_thread(practice_words),
+        "practice_words": await _practice_words_within(PRACTICE_DEADLINE_SEC),
     }
+
+
+# 다리가 멈춰 있어도 홈 화면(기억 요약)이 오래 기다리지 않게 전체 시간을 자른다.
+PRACTICE_DEADLINE_SEC = 3.0
+
+
+async def _practice_words_within(seconds: float) -> list:
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(practice_words), timeout=seconds)
+    except asyncio.TimeoutError:
+        logger.info("readgloss practice words skipped: bridge too slow")
+        return []
 
 
 # 백그라운드 카드 갱신 작업. 참조를 안 잡으면 끝나기 전에 수거될 수 있다.

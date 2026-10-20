@@ -36,7 +36,11 @@ function ReadingWords({ words, used, saved }: { words: string[]; used: string[];
                 >
                   {ok && <Check size={14} aria-hidden />}
                   {w}
-                  {ok && <span className="sr-only"> (썼어요)</span>}
+                  {ok && (
+                    <span lang="ko" className="sr-only">
+                      {' '}(썼어요)
+                    </span>
+                  )}
                 </li>
               );
             })}

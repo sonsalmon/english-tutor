@@ -124,6 +124,18 @@ class LearnerProfileEndpointTest(unittest.IsolatedAsyncioTestCase):
         self.practice = patcher.start()
         self.addCleanup(patcher.stop)
 
+    async def test_slow_bridge_does_not_hold_the_home_screen(self):
+        import threading
+
+        release = threading.Event()
+        self.addCleanup(release.set)
+        self.practice.side_effect = lambda: release.wait(5) and []
+        with mock.patch.object(main, "PRACTICE_DEADLINE_SEC", 0.1), \
+                mock.patch.object(main, "load_profile", return_value=None):
+            body = await main.learner_profile_endpoint()
+
+        self.assertEqual(body["practice_words"], [])
+
     async def test_readgloss_practice_words_are_passed_through(self):
         self.practice.return_value = [{"lemma": "mitigate", "gloss": "완화하다", "source": "lookup"}]
         with mock.patch.object(main, "load_profile", return_value=None):
