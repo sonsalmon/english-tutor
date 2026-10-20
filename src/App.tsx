@@ -45,6 +45,11 @@ export function App() {
     if ((route === 'call' && !setup) || (route === 'summary' && !finished)) go('home', true);
   }, [route, setup, finished]);
 
+  const retryProfile = useCallback(() => {
+    setProfile(null);
+    void getLearnerProfile().then(setProfile);
+  }, []);
+
   const startCall = useCallback((next: CallSetup) => {
     setSetup(next);
     setCallKey((k) => k + 1);
@@ -94,6 +99,6 @@ export function App() {
     case 'history':
       return <CallHistory stem={param} />;
     default:
-      return <Home profile={profile} totals={totals} onQuickCall={() => startCall({ kind: 'freetalk', topic: '' })} />;
+      return <Home profile={profile} totals={totals} onQuickCall={() => startCall({ kind: 'freetalk', topic: '' })} onRetryProfile={retryProfile} />;
   }
 }

@@ -7,6 +7,7 @@ export type LearnerProfile = {
   weak_points: WeakPoint[];
   next_goal: string;
   practice_words: PracticeWord[];
+  load_failed?: boolean;
 };
 export type TimeLimits = { call: number; teachback: number };
 export type Lesson = {
@@ -62,10 +63,10 @@ async function errorMessage(res: Response, fallback: string): Promise<string> {
 export async function getLearnerProfile(): Promise<LearnerProfile> {
   try {
     const res = await fetch('/api/learner-profile');
-    if (!res.ok) return EMPTY_PROFILE;
+    if (!res.ok) return { ...EMPTY_PROFILE, load_failed: true };
     return { ...EMPTY_PROFILE, ...(await res.json()) };
   } catch {
-    return EMPTY_PROFILE;
+    return { ...EMPTY_PROFILE, load_failed: true };
   }
 }
 
