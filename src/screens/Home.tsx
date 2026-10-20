@@ -1,9 +1,19 @@
 import { Briefcase, GraduationCap, History as HistoryIcon, MessageSquareText, Phone } from 'lucide-react';
-import { CallButton, List, Portrait, RowLink, Screen } from '../components/ui';
+import { CallButton, List, Portrait, QuietButton, RowLink, Screen } from '../components/ui';
 import type { CallTotals, LearnerProfile } from '../lib/api';
 import { go } from '../lib/router';
 
-export function Home({ profile, totals, onQuickCall }: { profile: LearnerProfile | null; totals: CallTotals | null; onQuickCall: () => void }) {
+export function Home({
+  profile,
+  totals,
+  onQuickCall,
+  onRetryProfile,
+}: {
+  profile: LearnerProfile | null;
+  totals: CallTotals | null;
+  onQuickCall: () => void;
+  onRetryProfile: () => void;
+}) {
   const focus = profile?.weak_points?.[0];
   return (
     <Screen>
@@ -20,6 +30,13 @@ export function Home({ profile, totals, onQuickCall }: { profile: LearnerProfile
       <section className="mt-8 rounded-2xl border border-line bg-surface p-5" aria-live="polite">
         {profile === null ? (
           <p className="text-ink-soft">지난 통화 기록을 불러오는 중이에요.</p>
+        ) : profile.load_failed ? (
+          <>
+            <p className="leading-relaxed text-ink-soft">지난 기록을 불러오지 못했어요.</p>
+            <div className="mt-3">
+              <QuietButton onClick={onRetryProfile}>다시 불러오기</QuietButton>
+            </div>
+          </>
         ) : focus ? (
           <>
             <h2 className="text-sm font-semibold text-ink-soft">오늘 연습할 것</h2>

@@ -96,13 +96,16 @@ async def get_status():
 
 @app.get("/api/learner-profile")
 async def learner_profile_endpoint():
-    """통화 시작 때 쓰는 학습자 카드 영어 요약. 카드가 없거나 깨졌으면 빈 요약."""
+    """통화 시작 때 쓰는 학습자 카드 영어 요약. 카드가 없거나 깨졌으면 빈 요약(깨졌으면 load_failed)."""
+    broken = False
     try:
         card = await asyncio.to_thread(load_profile)
     except ProfileError as e:
         logger.error(f"Learner profile unreadable: {e}")
         card = None
+        broken = True
     return {
+        "load_failed": broken,
         "brief": profile_brief(card),
         "updated": card["updated"] if card else None,
         "weak_points": [
@@ -330,7 +333,12 @@ async def offer(raw: Request, background_tasks: BackgroundTasks):
 
 @app.patch("/api/offer")
 async def ice_candidate(request: SmallWebRTCPatchRequest):
-    await _webrtc.handle_patch_request(request)
+    try:
+        await _webrtc.handle_patch_request(request)
+    except (AssertionError, ValueError, IndexError) as e:
+        logger.info(f"ICE candidate rejected: {e!r}")
+        # 모르는 pc_id는 pipecat이 이미 404를 준다. 형식이 틀린 ICE 후보는 aiortc candidate_from_sdp가 이 예외들을 내서 500이 됐다.
+        raise HTTPException(status_code=400, detail="ICE 후보 형식이 틀렸습니다.") from e
     return {"status": "success"}
 
 

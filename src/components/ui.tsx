@@ -27,7 +27,17 @@ export function TopBar({ title, onBack }: { title: string; onBack: () => void })
   );
 }
 
-export function Portrait({ size, level = 0, active = false }: { size: number; level?: number; active?: boolean }) {
+export function Portrait({
+  size,
+  level = 0,
+  active = false,
+  children,
+}: {
+  size: number;
+  level?: number;
+  active?: boolean;
+  children?: ReactNode;
+}) {
   const ring = active ? 1.06 + Math.min(level, 1) * 0.14 : 1;
   return (
     <div className="relative grid shrink-0 place-items-center" style={{ width: size, height: size }}>
@@ -36,14 +46,16 @@ export function Portrait({ size, level = 0, active = false }: { size: number; le
         className="absolute inset-0 rounded-full bg-call/20 transition-[transform,opacity] duration-150 ease-out"
         style={{ transform: `scale(${ring})`, opacity: active ? 1 : 0 }}
       />
-      <img
-        src="/ms-park.webp"
-        alt="Ms. Park"
-        width={size}
-        height={size}
-        className="relative rounded-full bg-line object-cover"
-        style={{ width: size - 8, height: size - 8 }}
-      />
+      <div className="relative" style={{ width: size - 8, height: size - 8 }}>
+        <img
+          src="/ms-park.webp"
+          alt="Ms. Park"
+          width={size}
+          height={size}
+          className="size-full rounded-full bg-line object-cover"
+        />
+        {children}
+      </div>
     </div>
   );
 }

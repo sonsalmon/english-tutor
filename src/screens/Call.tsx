@@ -51,7 +51,32 @@ export function Call({ setup, brief, practiceWords, timeLimit, onFinished }: {
   const [now, setNow] = useState(() => Date.now());
   const captionsEnd = useRef<HTMLDivElement | null>(null);
   const reported = useRef(false);
+  const pushedRef = useRef(false);
   const title = callTitle(setup);
+  const { hangUp } = call;
+
+  // 연결 중·통화 중에는 같은 #/call 항목을 하나 더 쌓아 두고, 뒤로 가기(popstate)를 끊기로 처리한다.
+  useEffect(() => {
+    if (call.status !== 'connecting' && call.status !== 'live') return;
+    if (!pushedRef.current) {
+      window.history.pushState(window.history.state, '', window.location.href);
+      pushedRef.current = true;
+    }
+    const onPop = () => {
+      pushedRef.current = false; // 쌓아 둔 항목은 뒤로 가기로 이미 소비됐다.
+      hangUp();
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, [call.status, hangUp]);
+
+  // 연결 실패로 통화 화면이 다시 준비 상태가 되면 쌓아 둔 항목을 걷어 낸다.
+  useEffect(() => {
+    if ((call.status === 'error' || call.status === 'ready') && pushedRef.current) {
+      pushedRef.current = false;
+      window.history.back();
+    }
+  }, [call.status]);
 
   useEffect(() => {
     if (call.status !== 'live') return;
@@ -62,14 +87,32 @@ export function Call({ setup, brief, practiceWords, timeLimit, onFinished }: {
   useEffect(() => {
     if (call.status === 'ended' && startedAt && !reported.current) {
       reported.current = true;
-      onFinished({
+      const finished: FinishedCall = {
         setup,
         startedAt,
         endedAt: serverNow(),
         result: call.result,
         endReason: call.endReason,
         practiceWords: practiceWordsFor(setup, practiceWords).map((w) => w.lemma),
-      });
+      };
+      if (pushedRef.current) {
+        // 끊기 버튼·미션 완료 등으로 끝난 경우: 쌓아 둔 항목을 먼저 걷어 낸 뒤 요약으로 이동한다.
+        // popstate가 오지 않는 브라우저에서도 요약을 잃지 않게 0.8초 뒤에는 그냥 넘어간다(한 번만).
+        pushedRef.current = false;
+        let sent = false;
+        const finish = () => {
+          if (sent) return;
+          sent = true;
+          window.removeEventListener('popstate', finish);
+          window.clearTimeout(fallback);
+          onFinished(finished);
+        };
+        const fallback = window.setTimeout(finish, 800);
+        window.addEventListener('popstate', finish);
+        window.history.back();
+      } else {
+        onFinished(finished);
+      }
     }
   }, [call.status, call.result, call.endReason, onFinished, setup, startedAt, practiceWords]);
 

@@ -115,7 +115,31 @@ class ReadglossWiringTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn(b'"practice_used":["mitigate"]', res.body)
 
 
-EMPTY_PROFILE = {"brief": "", "updated": None, "weak_points": [], "next_goal": "", "practice_words": []}
+class IceCandidateTest(unittest.IsolatedAsyncioTestCase):
+    def request(self, pc_id, candidate):
+        from pipecat.transports.smallwebrtc.request_handler import IceCandidate, SmallWebRTCPatchRequest
+
+        return SmallWebRTCPatchRequest(pc_id=pc_id, candidates=[IceCandidate(candidate=candidate, sdp_mid="0", sdp_mline_index=0)])
+
+    async def test_malformed_candidate_gives_400(self):
+        from fastapi import HTTPException
+
+        with mock.patch.dict(main._webrtc._pcs_map, {"pc1": mock.AsyncMock()}):
+            with self.assertRaises(HTTPException) as ctx:
+                await main.ice_candidate(self.request("pc1", "candidate:garbage"))
+
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    async def test_unknown_pc_id_stays_404(self):
+        from fastapi import HTTPException
+
+        with self.assertRaises(HTTPException) as ctx:
+            await main.ice_candidate(self.request("nope", "candidate:1 1 udp 1 127.0.0.1 9 typ host"))
+
+        self.assertEqual(ctx.exception.status_code, 404)
+
+
+EMPTY_PROFILE = {"load_failed": False, "brief": "", "updated": None, "weak_points": [], "next_goal": "", "practice_words": []}
 
 
 class LearnerProfileEndpointTest(unittest.IsolatedAsyncioTestCase):
@@ -143,9 +167,9 @@ class LearnerProfileEndpointTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(body["practice_words"], [{"lemma": "mitigate", "gloss": "완화하다", "source": "lookup"}])
 
-    async def test_broken_card_gives_empty_brief(self):
+    async def test_broken_card_gives_empty_brief_marked_as_failed(self):
         with mock.patch.object(main, "load_profile", side_effect=main.ProfileError("broken")):
-            self.assertEqual(await main.learner_profile_endpoint(), EMPTY_PROFILE)
+            self.assertEqual(await main.learner_profile_endpoint(), {**EMPTY_PROFILE, "load_failed": True})
 
     async def test_missing_card_gives_empty_brief(self):
         with mock.patch.object(main, "load_profile", return_value=None):
