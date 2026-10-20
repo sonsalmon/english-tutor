@@ -40,6 +40,22 @@ class TutorEndpointWiringTest(unittest.IsolatedAsyncioTestCase):
 
         self.mocks["schedule"].assert_called_once_with(TUTORING)
 
+    async def test_thinking_gaps_reach_card_update_in_both_modes(self):
+        gaps = [{"korean": "x", "english": "I'm swamped", "kind": "framing", "note": "n"}]
+        self.mocks["run"].side_effect = lambda path: ({**TUTORING, "thinking_gaps": gaps}, True)
+        res = json.loads((await main.tutor_endpoint(FakeRequest({}))).body)
+
+        self.assertEqual(res["stem"], TRANSCRIPT.stem)
+        self.mocks["schedule"].assert_called_once_with({**TUTORING, "thinking_gaps": gaps})
+        self.mocks["schedule"].reset_mock()
+        main._PROFILE_UPDATED.clear()
+        result = {"corrections": [], "thinking_gaps": gaps, "unanswered": ["x"], "lesson_date": "2026-10-13"}
+        with mock.patch.object(main, "get_lesson", return_value={"date": "2026-10-13", "sections": []}), \
+                mock.patch.object(main, "lesson_text", return_value=""), \
+                mock.patch.object(main, "run_teachback", side_effect=lambda *a: (dict(result), True)):
+            await main.tutor_endpoint(FakeRequest({"mode": "teachback"}))
+        self.mocks["schedule"].assert_called_once_with({"corrections": [], "thinking_gaps": gaps})
+
     async def test_cached_result_does_not_update_card(self):
         await main.tutor_endpoint(FakeRequest({}))
         await main.tutor_endpoint(FakeRequest({}))
@@ -457,6 +473,79 @@ class WordEndpointsTest(unittest.TestCase):
             res = self.post("/api/word/save", {"word": "leverage", "lemma": "leverage", "gloss": "", "sentence": ""})
 
         self.assertEqual(res.status_code, 503)
+
+
+class CultureEndpointTest(unittest.TestCase):
+    STEM = "2026-10-20-120000"
+
+    def setUp(self):
+        from fastapi.testclient import TestClient
+
+        self.client = TestClient(main.app)
+
+    def get(self, tutoring, available=True, search=None):
+        call = {"stem": self.STEM, "tutoring": tutoring}
+        with mock.patch.object(main, "load_call", return_value=call), mock.patch.object(
+            main.culturedb, "available", return_value=available
+        ), mock.patch.object(main.culturedb, "search", return_value=search or {"blend": [], "bank": []}) as s:
+            return self.client.get(f"/api/calls/{self.STEM}/culture"), s
+
+    def test_ok_extracts_terms_and_returns_hits(self):
+        tutoring = {
+            "clip_query": "the coffee at a cafe",
+            "vocab": [{"word": "latte"}, {"word": "coffee"}],
+            "thinking_gaps": [{"korean": "a", "english": "I'm swamped"}],
+        }
+        hits = {"blend": [{"id": "b"}], "bank": [{"id": "k"}]}
+        res, s = self.get(tutoring, search=hits)
+        body = res.json()
+        self.assertEqual(body["status"], "ok")
+        self.assertEqual(body["terms"], ["coffee", "cafe", "latte", "swamped"])
+        self.assertEqual((body["blend"], body["bank"]), (hits["blend"], hits["bank"]))
+        self.assertEqual(body["attribution"], main.culturedb.ATTRIBUTION)
+        s.assert_called_once_with(["coffee", "cafe", "latte", "swamped"])
+
+    def test_terms_capped_at_six(self):
+        res, _ = self.get({"clip_query": "alpha bravo charlie delta echo foxtrot golf hotel india juliet"})
+        self.assertEqual(len(res.json()["terms"]), 6)
+
+    def test_terms_prefer_topic_keywords_then_fill(self):
+        tutoring = {
+            "topic_keywords": ["Kitchen", "cutting board", "busy week"],
+            "clip_query": "coworkers talk busy week",
+            "vocab": [{"word": "swamped"}],
+            "thinking_gaps": [{"english": "cutting board"}],
+        }
+        # 이미 구절에 들어 있는 단어(busy, cutting)는 채우지 않는다
+        self.assertEqual(main._culture_terms(tutoring), ["kitchen", "cutting board", "busy week", "swamped"])
+
+    def test_generic_words_dropped(self):
+        tutoring = {
+            "topic_keywords": ["talk", "coffee"],
+            "clip_query": "coworkers talk people place thing day time week today really good great nice lot cafe",
+        }
+        self.assertEqual(main._culture_terms(tutoring), ["coffee", "cafe"])
+
+    def test_old_call_without_topic_keywords(self):
+        self.assertEqual(main._culture_terms({"clip_query": "the coffee at a cafe"}), ["coffee", "cafe"])
+        self.assertEqual(main._culture_terms({"topic_keywords": "junk", "clip_query": "coffee"}), ["coffee"])
+
+    def test_no_db(self):
+        res, s = self.get({"clip_query": "coffee"}, available=False)
+        self.assertEqual(res.json()["status"], "no_db")
+        s.assert_not_called()
+
+    def test_no_terms(self):
+        res, s = self.get({"clip_query": "to be"})
+        body = res.json()
+        self.assertEqual((body["status"], body["terms"], body["blend"], body["bank"]), ("no_terms", [], [], []))
+        s.assert_not_called()
+
+    def test_bad_stem_400_and_unknown_404(self):
+        with mock.patch.object(main, "load_call", side_effect=ValueError("bad")):
+            self.assertEqual(self.client.get("/api/calls/x/culture").status_code, 400)
+        with mock.patch.object(main, "load_call", side_effect=FileNotFoundError("none")):
+            self.assertEqual(self.client.get(f"/api/calls/{self.STEM}/culture").status_code, 404)
 
 
 class ClipsAndTtsEndpointsTest(unittest.TestCase):

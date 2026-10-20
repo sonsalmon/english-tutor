@@ -64,6 +64,11 @@ MAX_PRAGMATICS = 4
 MAX_PHRASES = 4
 MAX_UNANSWERED = 8
 MAX_CLIP_QUERY = 100
+MAX_THINKING_GAPS = 5
+GAP_KINDS = ("word", "framing")
+MAX_GAP_KOREAN = 60
+MAX_GAP_ENGLISH = 80
+MAX_GAP_NOTE = 140
 
 # teach-back에서 "답하지 못한 질문"의 원인. 계약상 이 넷 중 하나로 고정한다.
 CAUSES = ("english", "understanding", "both", "unclear")
@@ -74,7 +79,9 @@ _CONTRACT_HINT = """{
   "vocab": [{"word": "...", "meaning_ko": "...", "example": "...", "etymology": "어근이 있으면 한 줄, 없으면 빈 문자열"}],
   "pragmatics": [{"pattern": "...", "note": "미국 직장 화용 차이 한 줄(한국어)"}],
   "retry": {"goal": "다음 통화에서 쓸 목표 한두 줄(영어)", "target_phrases": ["...", "..."]},
-  "clip_query": "3-8 word English YouTube search query"
+  "clip_query": "3-8 word English YouTube search query",
+  "topic_keywords": ["kitchen", "cutting board", "busy week"],
+  "thinking_gaps": [{"korean": "학습자가 말하려던 한국어. 받아쓰기가 잘못 들었으면 문맥으로 알 수 있는 의도한 단어로 고쳐 쓴다", "english": "natural English", "kind": "word 또는 framing", "note": "한국어 한 문장"}]
 }"""
 
 _PROMPT_TEMPLATE = """You are an expert English speaking coach for a Korean learner of American workplace English.
@@ -93,6 +100,8 @@ Analysis rules:
 - retry.goal: 1-2 English sentences describing what to focus on in the next call of the same scene.
 - retry.target_phrases: 2-4 short English phrases the learner should try to use next time.
 - clip_query: a short English YouTube search query (3-8 words) for clips showing native speakers in the same topic or situation as this call, e.g. "coworkers small talk about weekend plans". Use only generic words: no personal names, addresses or company names.
+- topic_keywords: 2-5 concrete English nouns or short noun phrases (letters and spaces only, max 30 characters each) naming what the conversation was actually about, e.g. "kitchen", "cutting board", "busy week", "coffee". Never generic words such as talk, place, people, thing, coworkers, conversation, small talk, day, time. No personal names, addresses or company names.
+- thinking_gaps: one item per moment the learner switched to Korean or asked how to say something (the Partner's "You can say ..." offers often answer these). Up to {max_gaps} items. "korean" is the learner's Korean words (or the thing they asked about); "english" is the natural English; "kind" is "word" when it was just a missing word, or "framing" when English frames the idea differently from Korean (e.g. "정신없다" -> "I'm swamped", "빈둥빈둥" -> "lazing around", "입맛에 안 맞다" -> "It wasn't to my taste"). "note": ONE short Korean sentence - for "framing" how English frames the idea differently (what it focuses on, the image or structure), for "word" just that it was a missing word. If a raw verbatim transcription of the learner is given below, use it, because it keeps the Korean. The raw transcription can mishear Korean words, so "korean" is the Korean the learner MEANT, not necessarily the transcribed form. Check each Korean word against the context (what the learner asked about and what the Partner answered); if the transcribed word does not fit but a similar-sounding word does, write the intended word and never copy the misheard one. "korean" and "note" must agree: if your note names a different Korean word than "korean", fix "korean". When the learner's question and the Partner's answer make the intended word clear, write the intended word (example: the transcription says 토막 while the learner asks for a kitchen item and the Partner answers "cutting board" -> write 도마). Do not correct the learner's English. Empty list if there were none.
 
 Return ONLY valid JSON with exactly this shape (no markdown fences, no commentary, no extra keys):
 {contract}
@@ -109,6 +118,7 @@ def build_prompt(transcript: str) -> str:
         max_corrections=MAX_CORRECTIONS,
         max_good=MAX_GOOD,
         max_vocab=MAX_VOCAB,
+        max_gaps=MAX_THINKING_GAPS,
         contract=_CONTRACT_HINT,
         transcript=transcript,
     )
@@ -170,6 +180,64 @@ def normalize_clip_query(value: Any) -> str:
     return text if 2 <= len(text.split()) <= 10 else ""
 
 
+MAX_TOPIC_KEYWORDS = 5
+MAX_TOPIC_KEYWORD_CHARS = 30
+GENERIC_TOPIC_WORDS = frozenset(
+    "talk place people thing things coworker coworkers conversation small talk day days time week today "
+    "really good great nice lot".split()
+)
+_TOPIC_BAD_RE = re.compile(r"[^a-z ]")
+
+
+def normalize_topic_keywords(value: Any) -> List[str]:
+    """topic_keywords 정리: 소문자·영문과 공백만, 30자 이하, 일반어 단독 항목 제외, 중복 제거, 최대 5개."""
+    if isinstance(value, str):
+        value = value.split(",")
+    rows: List[str] = []
+    if not isinstance(value, list):
+        return rows
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        text = " ".join(_TOPIC_BAD_RE.sub(" ", item.lower()).split())
+        if not text or len(text) > MAX_TOPIC_KEYWORD_CHARS or text in rows:
+            continue
+        if all(w in GENERIC_TOPIC_WORDS for w in text.split()):
+            continue
+        rows.append(text)
+        if len(rows) >= MAX_TOPIC_KEYWORDS:
+            break
+    return rows
+
+
+def _capped(value: Any, limit: int) -> str:
+    text = " ".join(_clean_str(value).split())
+    return text[:limit].rstrip()
+
+
+def normalize_thinking_gaps(value: Any) -> List[Dict[str, str]]:
+    """thinking_gaps 정리: kind는 word/framing만, korean·english 필수, 길이 상한, 최대 5개."""
+    rows: List[Dict[str, str]] = []
+    if not isinstance(value, list):
+        return rows
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        kind = _clean_str(item.get("kind")).lower()
+        row = {
+            "korean": _capped(item.get("korean"), MAX_GAP_KOREAN),
+            "english": _capped(item.get("english"), MAX_GAP_ENGLISH),
+            "kind": kind,
+            "note": _capped(item.get("note"), MAX_GAP_NOTE),
+        }
+        if kind not in GAP_KINDS or not row["korean"] or not row["english"]:
+            continue
+        rows.append(row)
+        if len(rows) >= MAX_THINKING_GAPS:
+            break
+    return rows
+
+
 def normalize_tutor_json(raw: Any) -> Dict[str, Any]:
     """모델 출력을 고정 계약 모양으로 정리한다(누락 키 기본값, 개수 제한)."""
     data = extract_json(raw)
@@ -187,6 +255,8 @@ def normalize_tutor_json(raw: Any) -> Dict[str, Any]:
         "good": _rows(data, "good", ["said", "note"], MAX_GOOD),
         "vocab": _rows(data, "vocab", ["word", "meaning_ko", "example", "etymology"], MAX_VOCAB),
         "pragmatics": _rows(data, "pragmatics", ["pattern", "note"], MAX_PRAGMATICS),
+        "thinking_gaps": normalize_thinking_gaps(data.get("thinking_gaps")),
+        "topic_keywords": normalize_topic_keywords(data.get("topic_keywords")),
         "retry": {
             "goal": _clean_str(retry_raw.get("goal")),
             "target_phrases": phrases,
@@ -275,6 +345,7 @@ LEARNER VERBATIM (raw microphone transcription, NOT corrected - authoritative fo
 {verbatim}
 ---
 Base corrections on the VERBATIM text when it differs from the Me: lines.
+Exception: the transcription can mishear Korean words. For thinking_gaps "korean", write the Korean word the learner meant, judged from the question and the Partner's answer, not the misheard form (e.g. heard 토막 while asking for a kitchen item and the Partner answered "cutting board" -> 도마).
 For each [a/b?] item, add a correction whose `why` (Korean) says the pronunciation was unclear (e.g. '-ed 끝소리가 약해 started가 start로 들렸어요')."""
 
 
@@ -511,6 +582,8 @@ def normalize_teachback_json(raw: Any, *, max_unanswered: int = MAX_UNANSWERED) 
     data = extract_json(raw)
     result = normalize_tutor_json(data)
     result.pop("clip_query", None)  # teach-back 계약은 그대로 둔다
+    result.pop("thinking_gaps", None)
+    result.pop("topic_keywords", None)
     result["unanswered"] = _unanswered_rows(data, max_unanswered)
     return result
 
@@ -680,8 +753,23 @@ if __name__ == "__main__":
     assert normalize_clip_query("coworkers small talk, weekend!") == "coworkers small talk weekend"
     assert normalize_clip_query("Seoul") == "" and normalize_clip_query("a " * 11) == ""
     _out = analyze_transcript("Me: I am agree", generate_text=lambda _prompt: _fake)
-    assert set(_out) == {"corrections", "good", "vocab", "pragmatics", "retry", "clip_query"}, _out
-    assert _out["clip_query"] == "", _out
+    assert set(_out) == {"corrections", "good", "vocab", "pragmatics", "retry", "clip_query", "thinking_gaps", "topic_keywords"}, _out
+    assert _out["clip_query"] == "" and _out["thinking_gaps"] == [] and _out["topic_keywords"] == [], _out
+    assert normalize_topic_keywords([" Cutting-Board! ", "talk", "Small Talk", "kitchen", "kitchen", "x" * 31, 5, "a1"]) == ["cutting board", "kitchen", "a"]
+    assert "topic_keywords" not in normalize_teachback_json({"topic_keywords": ["kitchen"]})
+    _gaps = normalize_thinking_gaps(
+        [
+            {"korean": " 정신없다 ", "english": "I'm swamped", "kind": "Framing", "note": "영어는 일에 잠긴 이미지로 말해요."},
+            {"korean": "x", "english": "y", "kind": "grammar", "note": ""},
+            {"korean": "", "english": "no korean", "kind": "word", "note": ""},
+            "junk",
+            {"korean": "가" * 100, "english": "e" * 200, "kind": "word", "note": "n" * 300},
+        ]
+        + [{"korean": f"k{i}", "english": f"e{i}", "kind": "word", "note": ""} for i in range(8)]
+    )
+    assert len(_gaps) == 5 and _gaps[0]["korean"] == "정신없다" and _gaps[0]["kind"] == "framing", _gaps
+    assert len(_gaps[1]["korean"]) == MAX_GAP_KOREAN and len(_gaps[1]["english"]) == MAX_GAP_ENGLISH, _gaps
+    assert "thinking_gaps" not in normalize_teachback_json({"thinking_gaps": _gaps})
     assert len(_out["corrections"]) == 1 and _out["corrections"][0]["better"] == "I agree"
     assert _out["retry"]["target_phrases"] == ["Here's the bottom line"], _out["retry"]
 

@@ -22,6 +22,9 @@ DEFAULT_PROFILE_PATH = "~/dev/learning/english/learner-profile.json"
 HISTORY_DIR_NAME = "learner-profile-history"
 
 MAX_WEAK_POINTS = 5
+MAX_THINKING_GAPS = 8
+GAP_KINDS = ("word", "framing")
+BRIEF_GAPS = 3
 # 최근 이 횟수만큼 연속으로 통화에서 안 나오면 weak_points -> fixed_points
 MISS_LIMIT = 3
 BRIEF_MAX_CHARS = 1200
@@ -55,6 +58,7 @@ def empty_profile(now: Optional[datetime] = None) -> Dict[str, Any]:
         "pragmatics": [],
         "interests": [],
         "next_goal": "",
+        "thinking_gaps": [],
     }
 
 
@@ -122,6 +126,75 @@ def _point(item: Any, where: str) -> Dict[str, Any]:
     return out
 
 
+def _gap(item: Any, where: str) -> Dict[str, Any]:
+    _obj(item, {"korean", "english", "kind", "note", "count", "last_seen"}, where)
+    out = {
+        "korean": _str(item, "korean", where),
+        "english": _str(item, "english", where),
+        "kind": _str(item, "kind", where),
+        "note": _str(item, "note", where),
+        "count": _int(item, "count", where),
+        "last_seen": _date(item, "last_seen", where),
+    }
+    if out["kind"] not in GAP_KINDS:
+        _fail(where, "'kind'는 word 또는 framing이어야 합니다")
+    if not out["korean"].strip() or not out["english"].strip():
+        _fail(where, "'korean'과 'english'가 비었습니다")
+    return out
+
+
+def _gap_key(text: Any) -> str:
+    """비교용 키: 소문자로 바꾸고 공백·기호를 버린다(한글은 그대로 남긴다)."""
+    return re.sub(r"[\W_]+", "", str(text).lower())
+
+
+def _sort_gaps(gaps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    ordered = sorted(gaps, key=lambda g: (g["count"], g["last_seen"]), reverse=True)
+    return ordered[:MAX_THINKING_GAPS]
+
+
+def merge_thinking_gaps(old: List[Dict[str, Any]], new: Any, today: str) -> List[Dict[str, Any]]:
+    """통화 분석의 thinking_gaps를 카드 항목에 결정적으로 합친다(코드 소유).
+
+    같은 항목 = english 정규화가 같거나 korean 정규화가 같은 것. 통화 하나당 한 번만 count+1,
+    last_seen·kind·note는 최신 값으로. 새 항목은 count 1. count 내림차순, 같으면 최근 순, 8개로 자른다.
+    형식이 틀린 새 항목은 건너뛴다.
+    """
+    merged = [dict(g) for g in old]
+    touched: set = set()
+    for item in new if isinstance(new, list) else []:
+        if not isinstance(item, dict):
+            continue
+        korean, english = item.get("korean"), item.get("english")
+        kind, note = item.get("kind"), item.get("note")
+        if not (isinstance(korean, str) and isinstance(english, str) and kind in GAP_KINDS):
+            continue
+        korean, english = korean.strip(), english.strip()
+        note = note.strip() if isinstance(note, str) else ""
+        ek, kk = _gap_key(english), _gap_key(korean)
+        if not ek or not kk:
+            continue
+        found = next(
+            (i for i, g in enumerate(merged) if _gap_key(g["english"]) == ek or _gap_key(g["korean"]) == kk),
+            None,
+        )
+        if found is None:
+            merged.append(
+                {"korean": korean, "english": english, "kind": kind, "note": note, "count": 1, "last_seen": today}
+            )
+            touched.add(len(merged) - 1)
+            continue
+        gap = merged[found]
+        if found not in touched:
+            gap["count"] += 1
+            touched.add(found)
+        gap["last_seen"] = today
+        gap["kind"] = kind
+        if note:
+            gap["note"] = note
+    return _sort_gaps(merged)
+
+
 def validate_profile(card: Any) -> Dict[str, Any]:
     """4절 형식을 엄격히 검사하고 정리된 새 dict를 돌려준다. 틀리면 ProfileError.
 
@@ -133,6 +206,7 @@ def validate_profile(card: Any) -> Dict[str, Any]:
         card,
         {"updated", "level", "weak_points", "fixed_points", "phrases", "pragmatics", "interests", "next_goal"},
         "카드",
+        frozenset({"thinking_gaps"}),  # 옛 카드에는 없다 -> []
     )
     updated = _str(card, "updated", "updated")
     try:
@@ -150,7 +224,10 @@ def validate_profile(card: Any) -> Dict[str, Any]:
         "pragmatics": [],
         "interests": [],
         "next_goal": _str(card, "next_goal", "next_goal"),
+        "thinking_gaps": [],
     }
+    if "thinking_gaps" in card:
+        out["thinking_gaps"] = [_gap(g, f"thinking_gaps[{i}]") for i, g in enumerate(_list(card, "thinking_gaps"))]
     for i, p in enumerate(_list(card, "fixed_points")):
         point = _point(p, f"fixed_points[{i}]")
         point.pop("misses")
@@ -187,7 +264,12 @@ def enforce_rules(card: Dict[str, Any]) -> Dict[str, Any]:
             weak.append(point)
     # 횟수 많은 순, 같으면 최근에 본 순
     weak.sort(key=lambda p: (p["count"], p["last_seen"]), reverse=True)
-    return {**card, "weak_points": weak[:MAX_WEAK_POINTS], "fixed_points": fixed}
+    return {
+        **card,
+        "weak_points": weak[:MAX_WEAK_POINTS],
+        "fixed_points": fixed,
+        "thinking_gaps": _sort_gaps(card.get("thinking_gaps") or []),
+    }
 
 
 def load_profile(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
@@ -276,6 +358,7 @@ _RULES = f"""Rules:
 - Return ONLY the full updated card as JSON, exactly this shape (no markdown fences, no commentary, no extra keys):
 {_CARD_SHAPE}
 - Keep "level" and "updated" exactly as they are; code manages both.
+- Leave "thinking_gaps" exactly as it is in the current card (omit it if the card has none); code merges it from the tutoring.
 - weak_points: recurring grammar/expression mistakes of the learner, grouped by pattern (e.g. "past tense: I just start -> started"), NOT one row per sentence.
   If a pattern shows up in the new call, add 1 to count, set last_seen to today's date, set misses to 0 and update example with a short real sentence.
   If an existing weak point did NOT show up in the new call, keep it unchanged but add 1 to its misses.
@@ -323,6 +406,12 @@ def update_profile(
             # level·updated는 코드 소유: 모델이 바꾼 값은 무시한다.
             candidate["level"] = old_card["level"]
             candidate["updated"] = _stamp(now)
+            # thinking_gaps도 코드 소유: 모델 값은 버리고 통화 분석에서 결정적으로 합친다.
+            candidate["thinking_gaps"] = merge_thinking_gaps(
+                old_card.get("thinking_gaps") or [],
+                tutoring.get("thinking_gaps") if isinstance(tutoring, dict) else None,
+                now.astimezone(KST).strftime("%Y-%m-%d"),
+            )
             new_card = enforce_rules(validate_profile(candidate))
         except Exception as e:  # noqa: BLE001 - 어떤 실패든 카드는 그대로 둔다
             logger.error("학습자 카드 갱신 실패(카드는 그대로): %s", e)
@@ -367,6 +456,7 @@ def build_initial_card(
     except ValueError as e:  # JSONDecodeError도 ValueError
         raise ProfileError(f"모델 출력이 JSON이 아닙니다: {e}") from e
     candidate["updated"] = _stamp(now)
+    candidate["thinking_gaps"] = []  # 코드 소유: 통화 분석에서만 쌓는다
     return enforce_rules(validate_profile(candidate))
 
 
@@ -408,6 +498,15 @@ def profile_brief(card: Optional[Dict[str, Any]]) -> str:
                 item += f' (e.g. "{_clip(example, 80)}")'
             items.append(item)
         sections.append("Recurring weak points: " + "; ".join(items) + ".")
+
+    gaps = card.get("thinking_gaps") or []
+    if gaps:  # framing 먼저, 각 묶음 안에서는 저장 순서(횟수 순)
+        top = sorted(gaps, key=lambda g: g.get("kind") != "framing")[:BRIEF_GAPS]
+        items = ", ".join(f"'{_clip(g.get('english', ''), 40)}' (not '{_clip(g.get('korean', ''), 30)}')" for g in top)
+        sections.append(
+            f"Korean-to-English thinking gaps to practice: {items}. "
+            "Create a natural chance for the learner to use them."
+        )
 
     goal = card.get("next_goal", "")
     if goal:

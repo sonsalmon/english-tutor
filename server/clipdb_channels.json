@@ -11,5 +11,10 @@
   {"handle": "@hiddenbrain", "genre": "podcast"},
   {"handle": "@harvardbusinessreview", "genre": "work"},
   {"handle": "@BusinessEnglishPod", "genre": "work"},
-  {"handle": "@SimonSinek", "genre": "work"}
+  {"handle": "@SimonSinek", "genre": "work"},
+  {"handle": "@heytablo", "genre": "podcast"},
+  {"handle": "@ryan", "genre": "daily"},
+  {"handle": "@EnglishwithLucy", "genre": "daily"},
+  {"handle": "@linguamarina", "genre": "daily"},
+  {"handle": "@InteractiveEng", "genre": "daily"}
 ]

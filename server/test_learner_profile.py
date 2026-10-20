@@ -132,5 +132,135 @@ class BriefTest(unittest.TestCase):
         self.assertLessEqual(len(lp.profile_brief(lp.validate_profile(big))), lp.BRIEF_MAX_CHARS)
 
 
+def gap(korean, english, kind="framing", count=1, last_seen="2026-10-16", note="노트"):
+    return {"korean": korean, "english": english, "kind": kind, "note": note, "count": count, "last_seen": last_seen}
+
+
+def tgap(korean, english, kind="framing", note="새 노트"):
+    return {"korean": korean, "english": english, "kind": kind, "note": note}
+
+
+class ThinkingGapsTest(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self._tmp.name) / "learner-profile.json"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_old_card_without_key_validates_to_empty_list(self):
+        self.assertEqual(lp.validate_profile(card())["thinking_gaps"], [])
+        self.assertEqual(lp.empty_profile(NOW)["thinking_gaps"], [])
+
+    def test_validate_accepts_good_and_rejects_bad_shapes(self):
+        ok = lp.validate_profile(card(thinking_gaps=[gap("정신없다", "I'm swamped")]))
+        self.assertEqual(ok["thinking_gaps"][0]["english"], "I'm swamped")
+        bad = [
+            [gap("정신없다", "swamped", kind="grammar")],
+            [gap("", "swamped")],
+            [{**gap("a", "b"), "count": -1}],
+            [{**gap("a", "b"), "last_seen": "yesterday"}],
+            [{**gap("a", "b"), "extra": 1}],
+            [{k: v for k, v in gap("a", "b").items() if k != "note"}],
+            ["swamped"],
+            "swamped",
+        ]
+        for value in bad:
+            with self.assertRaises(lp.ProfileError, msg=repr(value)):
+                lp.validate_profile(card(thinking_gaps=value))
+
+    def test_merge_counts_dedupes_by_english_or_korean(self):
+        old = [gap("정신없다", "I'm swamped", count=2), gap("빈둥빈둥", "lazing around", count=1)]
+        new = [
+            tgap("바쁜", "im swamped!", note="최신 노트"),  # english 정규화가 같다
+            tgap("빈둥 빈둥", "loafing", kind="word"),  # korean 정규화가 같다
+            tgap("입맛에 안 맞다", "It wasn't to my taste"),
+            tgap("입맛에 안 맞다", "not my taste"),  # 같은 통화 안 중복은 한 번만 셌다
+            tgap("x", "y", kind="grammar"),  # 잘못된 kind는 건너뛴다
+        ]
+        merged = lp.merge_thinking_gaps(old, new, "2026-10-20")
+        by_en = {g["english"]: g for g in merged}
+        self.assertEqual(set(by_en), {"I'm swamped", "lazing around", "It wasn't to my taste"})
+        self.assertEqual(by_en["I'm swamped"]["count"], 3)
+        self.assertEqual(by_en["I'm swamped"]["last_seen"], "2026-10-20")
+        self.assertEqual(by_en["I'm swamped"]["note"], "최신 노트")
+        self.assertEqual((by_en["lazing around"]["count"], by_en["lazing around"]["kind"]), (2, "word"))
+        self.assertEqual(by_en["It wasn't to my taste"]["count"], 1)
+        self.assertEqual([g["count"] for g in merged], [3, 2, 1])  # count 내림차순
+
+    def test_merge_sorts_ties_by_recency_and_caps_at_eight(self):
+        old = [gap(f"한{i}", f"en{i}", count=1, last_seen=f"2026-10-{10 + i:02d}") for i in range(8)]
+        merged = lp.merge_thinking_gaps(old, [tgap("새것", "brand new")], "2026-10-20")
+        self.assertEqual(len(merged), 8)
+        self.assertEqual(merged[0]["english"], "brand new")  # count 1 동률 -> 가장 최근
+        self.assertNotIn("en0", [g["english"] for g in merged])  # 가장 오래된 것이 탈락
+
+    def test_update_profile_merges_in_code_and_ignores_model_value(self):
+        self.path.write_text(json.dumps(card(thinking_gaps=[gap("정신없다", "I'm swamped", count=2)])), encoding="utf-8")
+        model = card(thinking_gaps=[gap("조작", "fake", count=99)])
+        tutoring = {"thinking_gaps": [tgap("정신없다", "I'm swamped"), tgap("빈둥빈둥", "lazing around", kind="word")]}
+
+        ok = lp.update_profile(tutoring, generate_text=lambda p: json.dumps(model), path=self.path, now=NOW)
+
+        self.assertTrue(ok)
+        saved = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual([(g["english"], g["count"]) for g in saved["thinking_gaps"]], [("I'm swamped", 3), ("lazing around", 1)])
+        self.assertEqual(saved["thinking_gaps"][0]["last_seen"], "2026-10-20")
+
+    def test_update_prompt_tells_model_to_leave_gaps(self):
+        prompt = lp.build_update_prompt(lp.empty_profile(NOW), {}, "2026-10-20")
+        self.assertIn("thinking_gaps", prompt)
+
+    def test_brief_lists_up_to_three_framing_first(self):
+        gaps = [
+            gap("빈둥빈둥", "lazing around", kind="word", count=9),
+            gap("정신없다", "swamped", count=3),
+            gap("입맛에 안 맞다", "It wasn't to my taste", count=2),
+            gap("아쉽다", "bummer", count=1),
+            gap("단어", "word only", kind="word", count=1),
+        ]
+        brief = lp.profile_brief(lp.validate_profile(card(thinking_gaps=gaps)))
+
+        self.assertIn("thinking gaps to practice: 'swamped' (not '정신없다'), 'It wasn't to my taste' (not '입맛에 안 맞다'), 'bummer' (not '아쉽다')", brief)
+        self.assertNotIn("lazing around", brief)  # framing 3개가 이미 찬다
+        self.assertIn("natural chance", brief)
+        self.assertLessEqual(len(brief), lp.BRIEF_MAX_CHARS)
+
+    def test_brief_without_gaps_has_no_gap_line(self):
+        self.assertNotIn("thinking gaps", lp.profile_brief(lp.validate_profile(card())))
+
+
+class TutorNormalizeTest(unittest.TestCase):
+    def test_normalize_thinking_gaps_in_tutor_module(self):
+        try:
+            from server import tutor
+        except ImportError:
+            self.skipTest("server.tutor는 저장소 루트에서만 가져올 수 있다")
+        raw = {
+            "thinking_gaps": [
+                tgap(" 정신없다 ", "I'm swamped", kind="Framing"),
+                tgap("x", "y", kind="grammar"),
+                tgap("가" * 100, "e" * 200, kind="word"),
+            ]
+        }
+        out = tutor.normalize_tutor_json(raw)["thinking_gaps"]
+        self.assertEqual([g["kind"] for g in out], ["framing", "word"])
+        self.assertEqual(out[0]["korean"], "정신없다")
+        self.assertEqual((len(out[1]["korean"]), len(out[1]["english"])), (tutor.MAX_GAP_KOREAN, tutor.MAX_GAP_ENGLISH))
+        self.assertNotIn("thinking_gaps", tutor.normalize_teachback_json(raw))
+        self.assertTrue(tutor.is_empty_result(tutor.normalize_tutor_json(raw)))
+
+    def test_normalize_topic_keywords_in_tutor_module(self):
+        try:
+            from server import tutor
+        except ImportError:
+            self.skipTest("server.tutor는 저장소 루트에서만 가져올 수 있다")
+        raw = {"topic_keywords": [" Cutting-Board! ", "talk", "Small Talk", "Kitchen", "kitchen", "x" * 31, 5, "busy week", "a", "b", "c"]}
+        out = tutor.normalize_tutor_json(raw)["topic_keywords"]
+        self.assertEqual(out, ["cutting board", "kitchen", "busy week", "a", "b"])
+        self.assertEqual(tutor.normalize_tutor_json({})["topic_keywords"], [])
+        self.assertNotIn("topic_keywords", tutor.normalize_teachback_json(raw))
+
+
 if __name__ == "__main__":
     unittest.main()

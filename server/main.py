@@ -14,6 +14,7 @@
 
 import asyncio
 import os
+import re
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -31,7 +32,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCRequestHandler,
 )
 
-from server import clipdb, pron, tts, youtube
+from server import clipdb, culturedb, pron, tts, youtube
 from server.call_bot import parse_call_config, run_bot, smalltalk_time_limit_from_env
 from server.history import list_calls, live_cost_of, load_call, totals as call_totals
 from server.pricing import combine_cost
@@ -506,6 +507,60 @@ async def call_clips_endpoint(stem: str):
         seen.add(c.get("id"))
         clips.append({**c, "source": "search"})
     return {"query": query, "clips": clips, "status": "ok", "source": "mixed" if db_clips else "search"}
+
+
+_CULTURE_STOPWORDS = frozenset(
+    "the and for with that this from have has had are was were you your but not can will would could should about into over "
+    "out our their them they what when where which who how why been being just some any all more most very too also than then there here "
+    "small talk place people thing things coworker coworkers conversation day days time week today really good great nice lot honestly doing talking".split()
+)
+MAX_CULTURE_TERMS = 6
+
+
+def _culture_terms(tutoring: dict) -> list:
+    """문화 DB 검색어: topic_keywords(구절 그대로)를 먼저, 모자라면 clip_query·vocab·thinking_gaps 영어 단어로 채워 최대 6개."""
+    terms: list = []
+    keywords = tutoring.get("topic_keywords")
+    for kw in keywords if isinstance(keywords, list) else []:
+        if not isinstance(kw, str):
+            continue
+        phrase = " ".join(re.sub(r"[^a-z ]", " ", kw.lower()).split())
+        if phrase and phrase not in terms and not all(w in _CULTURE_STOPWORDS for w in phrase.split()):
+            terms.append(phrase)
+    texts = []
+    if isinstance(tutoring.get("clip_query"), str):
+        texts.append(tutoring["clip_query"])
+    for item in tutoring.get("vocab") or []:
+        if isinstance(item, dict) and isinstance(item.get("word"), str):
+            texts.append(item["word"])
+    for item in tutoring.get("thinking_gaps") or []:
+        if isinstance(item, dict) and isinstance(item.get("english"), str):
+            texts.append(item["english"])
+    for text in texts:
+        for w in re.findall(r"[A-Za-z]+", text):
+            w = w.lower()
+            if len(w) >= 3 and w not in _CULTURE_STOPWORDS and not any(w in t.split() for t in terms):
+                terms.append(w)
+    return terms[:MAX_CULTURE_TERMS]
+
+
+@app.get("/api/calls/{stem}/culture")
+async def call_culture_endpoint(stem: str):
+    """통화 주제와 관련된 한·미 문화 차이(BLEnD)·규범(CultureBank). DB나 검색어가 없으면 200에 status로 알린다. stem이 틀리면 400, 없으면 404."""
+    try:
+        call = await asyncio.to_thread(load_call, stem)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    empty = {"terms": [], "blend": [], "bank": [], "attribution": culturedb.ATTRIBUTION}
+    if not culturedb.available():
+        return {**empty, "status": "no_db"}
+    terms = _culture_terms(call.get("tutoring") or {})
+    if not terms:
+        return {**empty, "status": "no_terms"}
+    found = await asyncio.to_thread(culturedb.search, terms)
+    return {"status": "ok", "terms": terms, "blend": found.get("blend", []), "bank": found.get("bank", []), "attribution": culturedb.ATTRIBUTION}
 
 
 ALLOWED_TTS_VOICES = frozenset({"Kore", "Leda", "Charon", "Iapetus", "Sulafat", "Fenrir", "Zephyr"})
