@@ -182,9 +182,13 @@ def normalize_clip_query(value: Any) -> str:
 
 MAX_TOPIC_KEYWORDS = 5
 MAX_TOPIC_KEYWORD_CHARS = 30
+# 문화 DB 검색어(main._culture_terms)도 같은 집합을 쓴다. 한 곳에서만 관리한다.
 GENERIC_TOPIC_WORDS = frozenset(
     "talk place people thing things coworker coworkers conversation small talk day days time week today "
-    "really good great nice lot".split()
+    "really good great nice lot "
+    "the and for with that this from have has had are was were you your but not can will would could should about "
+    "into over out our their them they what when where which who how why been being just some any all more most "
+    "very too also than then there here honestly doing talking".split()
 )
 _TOPIC_BAD_RE = re.compile(r"[^a-z ]")
 

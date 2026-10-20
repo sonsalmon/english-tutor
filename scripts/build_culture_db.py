@@ -24,17 +24,19 @@ SOURCES = {
     "us": ("nayeon212/BLEnD", "data/annotations/US_data.json"),
     "kr": ("nayeon212/BLEnD", "data/annotations/South_Korea_data.json"),
 }
-US_EXACT = {"american", "americans", "us", "us citizens", "united states", "people in the us", "americans in general"}
-KR_EXACT = {"korean", "koreans", "south korean", "south koreans"}
+US_EXACT = frozenset({
+    "american", "americans", "americans in general", "us", "us citizens", "united states",
+    "people in the us", "people in the united states", "the us", "usa",
+})
+KR_EXACT = frozenset({"korean", "koreans", "south korean", "south koreans", "people in south korea", "koreans in korea"})
 
 
 def classify_group(group: str) -> Optional[str]:
+    """허용 목록과 정확히 일치하는 집단만 분류한다. 나머지(소수 집단·비미국인·타국 거주자)는 제외."""
     g = " ".join(group.lower().split())
-    if "latin" in g or "north korea" in g:
-        return None
-    if g in US_EXACT or "in the us" in g or "american" in g:
+    if g in US_EXACT:
         return "US"
-    if g in KR_EXACT or "in south korea" in g:
+    if g in KR_EXACT:
         return "KR"
     return None
 
@@ -75,11 +77,14 @@ def blend_rows(kr: Dict[str, Any], us: Dict[str, Any]) -> List[tuple]:
         q = kr[qid].get("en_question") or us[qid].get("en_question")
         if not q:
             continue
+        kr_ans = top_answers(kr[qid], "en_answers")
+        us_ans = top_answers(us[qid], "en_answers")
+        if not kr_ans or not us_ans:  # 한쪽 답이 비면 비교가 안 된다
+            continue
         rows.append((
             qid, q,
-            json.dumps(top_answers(kr[qid], "en_answers"), ensure_ascii=False),
-            json.dumps(top_answers(us[qid], "en_answers"), ensure_ascii=False),
-            json.dumps(top_answers(kr[qid], "answers"), ensure_ascii=False),
+            json.dumps(kr_ans, ensure_ascii=False),
+            json.dumps(us_ans, ensure_ascii=False),
         ))
     return rows
 
@@ -115,7 +120,7 @@ def write_db(db: Path, blend: List[tuple], bank: List[tuple]) -> None:
     conn = sqlite3.connect(db)
     try:
         conn.executescript(culturedb.SCHEMA)
-        conn.executemany("INSERT INTO blend VALUES (?,?,?,?,?)", blend)
+        conn.executemany("INSERT INTO blend VALUES (?,?,?,?)", blend)
         conn.executemany(
             "INSERT INTO culturebank (source, country, cultural_group, context, actor, actor_behavior, topic, agreement, \"desc\") "
             "VALUES (?,?,?,?,?,?,?,?,?)", bank)

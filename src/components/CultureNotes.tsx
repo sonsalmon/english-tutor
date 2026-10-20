@@ -31,15 +31,31 @@ function BlendRow({ item }: { item: CultureBlend }) {
 
 const LONG_TEXT = 160;
 
+const SOURCE_LABEL: Record<string, string> = { tiktok: 'TikTok', reddit: 'Reddit' };
+
+function ExtLink({ href, children }: { href: string; children: string }) {
+  return (
+    <a href={href} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-ink">
+      {children}
+    </a>
+  );
+}
+
+function Credit({ children }: { children: React.ReactNode }) {
+  return <p className="mt-2 text-xs leading-relaxed text-ink-soft break-words">{children}</p>;
+}
+
 function BankRow({ item }: { item: CultureBank }) {
   const [open, setOpen] = useState(false);
   const place = item.country === 'KR' ? '한국에서는' : '미국에서는';
   const long = item.text.length > LONG_TEXT;
+  const source = SOURCE_LABEL[(item.source || '').toLowerCase()];
   return (
     <li className="p-4">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm font-semibold">{place}</span>
         {item.topic && <span className="rounded-full bg-paper px-2.5 py-1 text-xs font-semibold">{item.topic}</span>}
+        {source && <span className="text-xs text-ink-soft">{source}</span>}
       </div>
       <p lang="en" className={`mt-1 leading-relaxed break-words ${long && !open ? 'line-clamp-3' : ''}`}>
         <WordText text={item.text} />
@@ -88,16 +104,25 @@ export function CultureNotes({ stem }: { stem: string }) {
               <BlendRow key={b.id} item={b} />
             ))}
           </ul>
+          <Credit>
+            BLEnD (<ExtLink href="https://arxiv.org/abs/2406.09948">arXiv 2406.09948</ExtLink>) ·{' '}
+            <ExtLink href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</ExtLink> · 상위 답만 골라 보여 줌
+          </Credit>
         </>
       )}
       {data.bank.length > 0 && (
-        <ul className={`divide-y divide-line rounded-2xl border border-line bg-surface ${data.blend.length ? 'mt-4' : ''}`}>
-          {data.bank.map((b, i) => (
-            <BankRow key={i} item={b} />
-          ))}
-        </ul>
+        <>
+          <ul className={`divide-y divide-line rounded-2xl border border-line bg-surface ${data.blend.length ? 'mt-6' : ''}`}>
+            {data.bank.map((b, i) => (
+              <BankRow key={i} item={b} />
+            ))}
+          </ul>
+          <Credit>
+            CultureBank (<ExtLink href="https://arxiv.org/abs/2404.15238">arXiv 2404.15238</ExtLink>) ·{' '}
+            <ExtLink href="https://huggingface.co/datasets/SALT-NLP/CultureBank">MIT</ExtLink> · 원문 일부, 출처 TikTok/Reddit
+          </Credit>
+        </>
       )}
-      {data.attribution && <p className="mt-3 text-xs leading-relaxed text-ink-soft">{data.attribution}</p>}
     </section>
   );
 }

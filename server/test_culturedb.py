@@ -65,12 +65,40 @@ class CultureDbTest(unittest.TestCase):
 
     def test_classify_group(self):
         c = build_culture_db.classify_group
-        for g in ("American", "Americans", "US citizens", "People in the US", "African Americans", "Southern Americans"):
+        for g in ("American", " Americans ", "Americans in general", "US citizens", "People in the US", "People in the United States", "The US", "USA", "United States", "us"):
             self.assertEqual(c(g), "US", g)
-        for g in ("Korean", "Koreans", "South Korean", "South Koreans", "Teens in South Korea"):
+        for g in ("Korean", "Koreans", "South Korean", "South Koreans", "People in South Korea", "Koreans in Korea"):
             self.assertEqual(c(g), "KR", g)
-        for g in ("North Korean", "North Koreans", "Latin Americans", "Latin American", "British", "Koreatown locals"):
+        excluded = (
+            "African Americans", "Native Americans", "Asian Americans", "Korean Americans", "non-American",
+            "Americans in South Korea", "Koreans in the US", "Southern Americans", "Teens in South Korea",
+            "North Korean", "North Koreans", "Latin Americans", "Latin American", "British", "Koreatown locals",
+        )
+        for g in excluded:
             self.assertIsNone(c(g), g)
+
+    def test_blend_drops_rows_with_empty_side(self):
+        kr = {**KR, "Empty-01": {"en_question": "Q?", "annotations": [_ann("x", "엑스", 1)]}}
+        us = {**US, "Empty-01": {"en_question": "Q?", "annotations": []}}
+        self.assertEqual({r[0] for r in build_culture_db.blend_rows(kr, us)}, {"Food-01", "Work-01"})
+        self.assertTrue(all(len(r) == 4 for r in build_culture_db.blend_rows(kr, us)))
+
+    def test_bank_picks_both_countries_up_to_two_each(self):
+        many = [("reddit", "US", "American", "tea", "p", "b", "tea", 0.9 - i / 100, f"US tea norm {i}") for i in range(5)]
+        many += [("reddit", "KR", "Korean", "tea", "p", "b", "tea", 0.7, f"KR tea norm {i}") for i in range(3)]
+        db = Path(self.tmp.name) / "many.db"
+        build_culture_db.write_db(db, [], many)
+        os.environ["CULTUREDB_PATH"] = str(db)
+        bank = culturedb.search(["tea"])["bank"]
+        self.assertEqual(sorted(b["country"] for b in bank), ["KR", "KR", "US", "US"])
+
+    def test_path_with_special_chars_opens(self):
+        special = Path(self.tmp.name) / "a b#c%d"
+        special.mkdir()
+        db = special / "culture.db"
+        build_culture_db.write_db(db, build_culture_db.blend_rows(KR, US), BANK)
+        os.environ["CULTUREDB_PATH"] = str(db)
+        self.assertEqual(culturedb.search(["breakfast"])["blend"][0]["id"], "Food-01")
 
     def test_bank_returns_country(self):
         res = culturedb.search(["cafe"], limit_bank=5)

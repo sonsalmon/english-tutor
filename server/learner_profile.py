@@ -25,6 +25,7 @@ MAX_WEAK_POINTS = 5
 MAX_THINKING_GAPS = 8
 GAP_KINDS = ("word", "framing")
 BRIEF_GAPS = 3
+RECYCLE_PREFIX = "Expressions to recycle (the learner recently reached for these in Korean): "
 # 최근 이 횟수만큼 연속으로 통화에서 안 나오면 weak_points -> fixed_points
 MISS_LIMIT = 3
 BRIEF_MAX_CHARS = 1200
@@ -148,20 +149,28 @@ def _gap_key(text: Any) -> str:
     return re.sub(r"[\W_]+", "", str(text).lower())
 
 
-def _sort_gaps(gaps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    ordered = sorted(gaps, key=lambda g: (g["count"], g["last_seen"]), reverse=True)
-    return ordered[:MAX_THINKING_GAPS]
+def _gap_order(g: Dict[str, Any]) -> tuple:
+    return (g["count"], g["last_seen"])
+
+
+def _sort_gaps(gaps: List[Dict[str, Any]], protected: frozenset = frozenset()) -> List[Dict[str, Any]]:
+    """count 내림차순, 같으면 최근 순으로 8개까지. protected(id) 항목은 상한에서 먼저 살린다."""
+    kept = [g for g in gaps if id(g) in protected][:MAX_THINKING_GAPS]
+    rest = sorted((g for g in gaps if id(g) not in protected), key=_gap_order, reverse=True)
+    kept += rest[: MAX_THINKING_GAPS - len(kept)]
+    return sorted(kept, key=_gap_order, reverse=True)
 
 
 def merge_thinking_gaps(old: List[Dict[str, Any]], new: Any, today: str) -> List[Dict[str, Any]]:
     """통화 분석의 thinking_gaps를 카드 항목에 결정적으로 합친다(코드 소유).
 
     같은 항목 = english 정규화가 같거나 korean 정규화가 같은 것. 통화 하나당 한 번만 count+1,
-    last_seen·kind·note는 최신 값으로. 새 항목은 count 1. count 내림차순, 같으면 최근 순, 8개로 자른다.
-    형식이 틀린 새 항목은 건너뛴다.
+    last_seen·note는 최신 값으로, kind는 한 번 framing이면 framing을 유지한다. 새 항목은 count 1.
+    count 내림차순, 같으면 최근 순, 8개로 자른다. 이번 통화에서 만난 항목은 상한에서 보호하고
+    count가 낮고 오래된 안 만난 항목부터 버린다. 형식이 틀린 새 항목은 건너뛴다.
     """
     merged = [dict(g) for g in old]
-    touched: set = set()
+    touched: set = set()  # merged 안의 위치
     for item in new if isinstance(new, list) else []:
         if not isinstance(item, dict):
             continue
@@ -189,10 +198,11 @@ def merge_thinking_gaps(old: List[Dict[str, Any]], new: Any, today: str) -> List
             gap["count"] += 1
             touched.add(found)
         gap["last_seen"] = today
-        gap["kind"] = kind
+        if gap["kind"] != "framing":  # framing은 한 번 되면 유지
+            gap["kind"] = kind
         if note:
             gap["note"] = note
-    return _sort_gaps(merged)
+    return _sort_gaps(merged, frozenset(id(merged[i]) for i in touched))
 
 
 def validate_profile(card: Any) -> Dict[str, Any]:
@@ -391,31 +401,37 @@ def update_profile(
 ) -> bool:
     """튜터링 JSON으로 카드를 갱신한다. 성공하면 True.
 
-    모델 출력이 JSON이 아니거나 형식이 틀리면 카드 파일을 건드리지 않고 로그를 남긴 뒤
-    False를 돌려준다. 쓰기 전에 기존 카드를 history에 복사하고, 임시 파일 +
-    os.replace로 원자적으로 쓴다.
+    모델 호출·파싱·검사가 실패하면 로그를 남기고 기존 카드에 thinking_gaps만 합쳐 쓴다
+    (코드 소유 필드라 모델에 의존하지 않는다). 기존 카드를 읽을 수 없거나 쓰기가 실패하면 False.
+    쓰기 전에 기존 카드를 history에 복사하고, 임시 파일 + os.replace로 원자적으로 쓴다.
     """
     path = Path(path) if path else get_profile_path()
     now = now or datetime.now(KST)
     with _UPDATE_LOCK:
+        today = now.astimezone(KST).strftime("%Y-%m-%d")
         try:
             old = load_profile(path)
-            old_card = old if old is not None else empty_profile(now)
-            raw = generate_text(build_update_prompt(old_card, tutoring, now.astimezone(KST).strftime("%Y-%m-%d")))
-            candidate = parse_model_json(raw)
-            # level·updated는 코드 소유: 모델이 바꾼 값은 무시한다.
-            candidate["level"] = old_card["level"]
-            candidate["updated"] = _stamp(now)
-            # thinking_gaps도 코드 소유: 모델 값은 버리고 통화 분석에서 결정적으로 합친다.
-            candidate["thinking_gaps"] = merge_thinking_gaps(
-                old_card.get("thinking_gaps") or [],
-                tutoring.get("thinking_gaps") if isinstance(tutoring, dict) else None,
-                now.astimezone(KST).strftime("%Y-%m-%d"),
-            )
-            new_card = enforce_rules(validate_profile(candidate))
-        except Exception as e:  # noqa: BLE001 - 어떤 실패든 카드는 그대로 둔다
+        except Exception as e:  # noqa: BLE001 - 기존 카드를 못 읽으면 건드리지 않는다
             logger.error("학습자 카드 갱신 실패(카드는 그대로): %s", e)
             return False
+        old_card = old if old is not None else empty_profile(now)
+        # thinking_gaps는 코드 소유: 모델 값은 버리고 통화 분석에서 결정적으로 합친다.
+        gaps = merge_thinking_gaps(
+            old_card.get("thinking_gaps") or [],
+            tutoring.get("thinking_gaps") if isinstance(tutoring, dict) else None,
+            today,
+        )
+        try:
+            raw = generate_text(build_update_prompt(old_card, tutoring, today))
+            candidate = parse_model_json(raw)
+            # level·updated도 코드 소유: 모델이 바꾼 값은 무시한다.
+            candidate["level"] = old_card["level"]
+            candidate["updated"] = _stamp(now)
+            candidate["thinking_gaps"] = gaps
+            new_card = enforce_rules(validate_profile(candidate))
+        except Exception as e:  # noqa: BLE001 - 모델 쪽 실패여도 생각 방식 기록은 남긴다
+            logger.error("학습자 카드 모델 갱신 실패, thinking_gaps만 합쳐 저장: %s", e)
+            new_card = enforce_rules({**old_card, "updated": _stamp(now), "thinking_gaps": gaps})
         try:
             _backup(path, now)
             _write_atomic(path, new_card)
@@ -502,11 +518,8 @@ def profile_brief(card: Optional[Dict[str, Any]]) -> str:
     gaps = card.get("thinking_gaps") or []
     if gaps:  # framing 먼저, 각 묶음 안에서는 저장 순서(횟수 순)
         top = sorted(gaps, key=lambda g: g.get("kind") != "framing")[:BRIEF_GAPS]
-        items = ", ".join(f"'{_clip(g.get('english', ''), 40)}' (not '{_clip(g.get('korean', ''), 30)}')" for g in top)
-        sections.append(
-            f"Korean-to-English thinking gaps to practice: {items}. "
-            "Create a natural chance for the learner to use them."
-        )
+        items = ", ".join(f"'{_clip(g.get('english', ''), 40)}'" for g in top)
+        sections.append(f"{RECYCLE_PREFIX}{items}.")
 
     goal = card.get("next_goal", "")
     if goal:

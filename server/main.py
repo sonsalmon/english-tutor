@@ -57,6 +57,7 @@ from server.lesson import (
 )
 from server.learner_profile import ProfileError, load_profile, profile_brief, update_profile
 from server.tutor import (
+    GENERIC_TOPIC_WORDS,
     TutoringAnalysisError,
     latest_transcript_since,
     make_generate_text,
@@ -509,23 +510,19 @@ async def call_clips_endpoint(stem: str):
     return {"query": query, "clips": clips, "status": "ok", "source": "mixed" if db_clips else "search"}
 
 
-_CULTURE_STOPWORDS = frozenset(
-    "the and for with that this from have has had are was were you your but not can will would could should about into over "
-    "out our their them they what when where which who how why been being just some any all more most very too also than then there here "
-    "small talk place people thing things coworker coworkers conversation day days time week today really good great nice lot honestly doing talking".split()
-)
 MAX_CULTURE_TERMS = 6
+MAX_CULTURE_FALLBACK_WORDS = 3
 
 
 def _culture_terms(tutoring: dict) -> list:
-    """문화 DB 검색어: topic_keywords(구절 그대로)를 먼저, 모자라면 clip_query·vocab·thinking_gaps 영어 단어로 채워 최대 6개."""
+    """문화 DB 검색어: topic_keywords(구절 그대로)를 먼저, 모자라면 clip_query·vocab·thinking_gaps 영어 단어를 최대 3개까지 채워 전체 6개 이하."""
     terms: list = []
     keywords = tutoring.get("topic_keywords")
     for kw in keywords if isinstance(keywords, list) else []:
         if not isinstance(kw, str):
             continue
         phrase = " ".join(re.sub(r"[^a-z ]", " ", kw.lower()).split())
-        if phrase and phrase not in terms and not all(w in _CULTURE_STOPWORDS for w in phrase.split()):
+        if phrase and phrase not in terms and not all(w in GENERIC_TOPIC_WORDS for w in phrase.split()):
             terms.append(phrase)
     texts = []
     if isinstance(tutoring.get("clip_query"), str):
@@ -536,12 +533,17 @@ def _culture_terms(tutoring: dict) -> list:
     for item in tutoring.get("thinking_gaps") or []:
         if isinstance(item, dict) and isinstance(item.get("english"), str):
             texts.append(item["english"])
+    terms = terms[:MAX_CULTURE_TERMS]
+    fallback = 0
     for text in texts:
         for w in re.findall(r"[A-Za-z]+", text):
             w = w.lower()
-            if len(w) >= 3 and w not in _CULTURE_STOPWORDS and not any(w in t.split() for t in terms):
+            if len(terms) >= MAX_CULTURE_TERMS or fallback >= MAX_CULTURE_FALLBACK_WORDS:
+                return terms
+            if len(w) >= 3 and w not in GENERIC_TOPIC_WORDS and not any(w in t.split() for t in terms):
                 terms.append(w)
-    return terms[:MAX_CULTURE_TERMS]
+                fallback += 1
+    return terms
 
 
 @app.get("/api/calls/{stem}/culture")

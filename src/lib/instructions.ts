@@ -36,7 +36,7 @@ function memoryBlock(brief: string, withTool = true): string {
 <<<
 ${brief.slice(0, BRIEF_MAX)}
 >>>
-The example sentences in these notes are from EARLIER calls, not this one. Never quote them as something the learner said today, and never use them in feedback${withTool ? ' or in the complete_mission tool' : ''}. Only judge what the learner actually says in this call.`;
+The example sentences in these notes are from EARLIER calls, not this one. Never quote them as something the learner said today, and never use them in feedback${withTool ? ' or in the complete_mission tool' : ''}. Only judge what the learner actually says in this call. If the notes list Expressions to recycle, steer the talk toward topics where the learner could naturally use them, and use each one yourself once so they hear it; never quiz them on it, point it out or correct them.`;
   }
   return `WHAT YOU REMEMBER ABOUT THE LEARNER: nothing yet. You have no notes about this learner.`;
 }
@@ -245,7 +245,7 @@ RESPECT: your accent and phrases are a normal, correct way of speaking English. 
 
 function partnerMemoryBlock(brief: string, withTool: boolean): string {
   const base = memoryBlock(brief, withTool);
-  return brief ? `${base}\nUse these notes only to get a feel for the learner. Never bring up their weak points or mistakes. One exception: if the notes include a pronunciation check and you are not sure which word of a listed pair the learner said, ask once, briefly, for example "Did you mean can or can't?", then carry on. That is checking what you heard, not correcting them.` : base;
+  return brief ? `${base}\nUse these notes only to get a feel for the learner. You may use the Expressions to recycle yourself, naturally, so the learner hears them; never point them out. Never bring up their weak points or mistakes. One exception: if the notes include a pronunciation check and you are not sure which word of a listed pair the learner said, ask once, briefly, for example "Did you mean can or can't?", then carry on. That is checking what you heard, not correcting them.` : base;
 }
 
 function partnerInterestsBlock(partner: Partner, interests: string[]): string {

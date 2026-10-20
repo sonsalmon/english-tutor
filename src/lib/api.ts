@@ -67,7 +67,7 @@ export type ClipStatus = 'ok' | 'no_key' | 'no_query' | 'error';
 export type ClipResult = { query: string; clips: Clip[]; status: ClipStatus };
 
 export type CultureBlend = { id: string; question: string; korea: string[]; us: string[] };
-export type CultureBank = { country: 'US' | 'KR'; topic: string | null; text: string };
+export type CultureBank = { country: 'US' | 'KR'; topic: string | null; text: string; source?: string };
 export type CultureStatus = 'ok' | 'no_db' | 'no_terms';
 export type CultureResult = { status: CultureStatus; blend: CultureBlend[]; bank: CultureBank[]; attribution: string };
 

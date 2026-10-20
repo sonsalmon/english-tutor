@@ -22,8 +22,7 @@ CREATE TABLE blend (
     id TEXT PRIMARY KEY,
     en_question TEXT NOT NULL,
     kr_answers TEXT NOT NULL,
-    us_answers TEXT NOT NULL,
-    kr_answers_ko TEXT NOT NULL
+    us_answers TEXT NOT NULL
 );
 CREATE TABLE culturebank (
     rowid INTEGER PRIMARY KEY,
@@ -56,7 +55,7 @@ def available() -> bool:
 
 
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(f"file:{db_path()}?mode=ro", uri=True)
+    conn = sqlite3.connect(db_path().resolve().as_uri() + "?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -78,7 +77,7 @@ def _loads(s: str) -> List[str]:
         return []
 
 
-def search(terms: List[str], limit_blend: int = 3, limit_bank: int = 3) -> Dict[str, List[Dict[str, Any]]]:
+def search(terms: List[str], limit_blend: int = 3, limit_bank: int = 2) -> Dict[str, List[Dict[str, Any]]]:
     out: Dict[str, List[Dict[str, Any]]] = {"blend": [], "bank": []}
     q = _match(terms)
     if not q or not available():
@@ -101,14 +100,16 @@ def search(terms: List[str], limit_blend: int = 3, limit_bank: int = 3) -> Dict[
                  "korea": _loads(r["kr_answers"]), "us": _loads(r["us_answers"])}
                 for r in rows
             ]
-        if limit_bank > 0:
-            rows = conn.execute(
-                "SELECT c.country, c.cultural_group, c.topic, c.context, c.\"desc\", c.agreement, c.source "
-                "FROM culturebank_fts JOIN culturebank c ON c.rowid = culturebank_fts.rowid "
-                "WHERE culturebank_fts MATCH ? AND (c.agreement IS NULL OR c.agreement >= ?) "
-                "ORDER BY bm25(culturebank_fts), c.agreement DESC LIMIT ?",
-                (q, MIN_AGREEMENT, limit_bank),
-            ).fetchall()
+        if limit_bank > 0:  # 국가별로 따로 뽑아 두 나라가 함께 보이게 한다(국가당 limit_bank건)
+            rows = []
+            for country in ("US", "KR"):
+                rows += conn.execute(
+                    "SELECT c.country, c.cultural_group, c.topic, c.context, c.\"desc\", c.agreement, c.source "
+                    "FROM culturebank_fts JOIN culturebank c ON c.rowid = culturebank_fts.rowid "
+                    "WHERE culturebank_fts MATCH ? AND c.country = ? AND (c.agreement IS NULL OR c.agreement >= ?) "
+                    "ORDER BY bm25(culturebank_fts), c.agreement DESC LIMIT ?",
+                    (q, country, MIN_AGREEMENT, limit_bank),
+                ).fetchall()
             out["bank"] = [
                 {"country": r["country"], "group": r["cultural_group"], "topic": r["topic"], "context": r["context"],
                  "text": r["desc"], "agreement": r["agreement"], "source": r["source"]}

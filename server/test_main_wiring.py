@@ -500,14 +500,16 @@ class CultureEndpointTest(unittest.TestCase):
         res, s = self.get(tutoring, search=hits)
         body = res.json()
         self.assertEqual(body["status"], "ok")
-        self.assertEqual(body["terms"], ["coffee", "cafe", "latte", "swamped"])
+        self.assertEqual(body["terms"], ["coffee", "cafe", "latte"])  # 폴백 단어는 최대 3개
         self.assertEqual((body["blend"], body["bank"]), (hits["blend"], hits["bank"]))
         self.assertEqual(body["attribution"], main.culturedb.ATTRIBUTION)
-        s.assert_called_once_with(["coffee", "cafe", "latte", "swamped"])
+        s.assert_called_once_with(["coffee", "cafe", "latte"])
 
     def test_terms_capped_at_six(self):
-        res, _ = self.get({"clip_query": "alpha bravo charlie delta echo foxtrot golf hotel india juliet"})
+        res, _ = self.get({"topic_keywords": ["alpha one", "bravo two", "charlie three", "delta four", "echo five", "foxtrot six", "golf seven"]})
         self.assertEqual(len(res.json()["terms"]), 6)
+        res, _ = self.get({"clip_query": "alpha bravo charlie delta echo foxtrot golf hotel india juliet"})
+        self.assertEqual(res.json()["terms"], ["alpha", "bravo", "charlie"])  # 폴백 단어만이면 3개
 
     def test_terms_prefer_topic_keywords_then_fill(self):
         tutoring = {
