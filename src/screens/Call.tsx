@@ -200,7 +200,7 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, timeLi
       </section>
 
       {showPicker && (
-        <section className="mt-4 min-h-0 flex-1 overflow-y-auto lg:col-start-2 lg:row-span-3 lg:row-start-1 lg:mt-0 lg:flex-none lg:self-center">
+        <section className="mt-4 min-h-0 flex-1 overflow-y-auto lg:col-start-2 lg:row-span-3 lg:row-start-1 lg:mt-0 lg:max-h-full lg:flex-none lg:self-center">
           <PartnerPicker value={partnerId} onChange={choosePartner} />
         </section>
       )}
