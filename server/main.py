@@ -32,7 +32,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCRequestHandler,
 )
 
-from server import clipdb, culturedb, pron, tts, youtube
+from server import chat, clipdb, culturedb, pron, tts, youtube
 from server.call_bot import parse_call_config, run_bot, smalltalk_time_limit_from_env
 from server import partner_memory
 from server.history import list_calls, live_cost_of, load_call, totals as call_totals
@@ -453,7 +453,7 @@ async def partner_memory_clear(partner_id: str):
 async def partner_memory_forget(partner_id: str, kind: str, index: int, text: Optional[str] = None):
     _partner_or_400(partner_id)
     if kind not in partner_memory.KINDS:
-        raise HTTPException(status_code=400, detail="kind는 facts 또는 threads여야 합니다.")
+        raise HTTPException(status_code=400, detail="kind는 facts, threads, self_story, jokes, episodes 중 하나여야 합니다.")
     try:
         memory = await asyncio.to_thread(partner_memory.forget_item, partner_id, kind, index, None, text)
     except partner_memory.MemoryChanged:
@@ -464,6 +464,61 @@ async def partner_memory_forget(partner_id: str, kind: str, index: int, text: Op
         logger.error(f"Partner memory unreadable: {e}")
         raise HTTPException(status_code=500, detail="친구 기억을 읽지 못했습니다.")
     return {"status": "ok", "memory": memory}
+
+
+@app.get("/api/chat/{partner_id}")
+async def chat_get(partner_id: str):
+    """친구와 주고받은 문자 최근 200개. 여섯 친구가 아니면 400."""
+    _partner_or_400(partner_id)
+    messages = await asyncio.to_thread(chat.load_messages, partner_id)
+    return {"messages": messages}
+
+
+@app.post("/api/chat/{partner_id}")
+async def chat_send(partner_id: str, raw: Request):
+    """학습자 문자 하나를 보내고 친구의 답을 받는다. 답을 만들지 못하면 502(아무것도 저장하지 않는다)."""
+    _partner_or_400(partner_id)
+    body = await _json_object(raw)
+    try:
+        instruction, message = chat.check_request(body.get("instruction"), body.get("message"))
+    except chat.ChatInputError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    try:
+        return await asyncio.to_thread(chat.send, partner_id, instruction, message)
+    except chat.ChatError:
+        raise HTTPException(status_code=502, detail="답을 받지 못했어요. 잠시 뒤에 다시 보내 주세요.")
+
+
+def _schedule_chat_memory_update(partner_id: str, turns: list, total: int) -> None:
+    async def _run():
+        nonlocal turns, total
+        try:
+            while await asyncio.to_thread(chat.finish_close, partner_id, turns, total):
+                logger.info("Partner memory updated from chat: %s", partner_id)
+                # 도는 동안 새 메시지가 쌓였으면(그 사이 close는 nothing이었다) 한 번 더 건다. 실패하면 멈춘다.
+                nxt = await asyncio.to_thread(chat.prepare_close, partner_id)
+                if nxt is None:
+                    break
+                turns, total = nxt
+        except Exception as e:  # noqa: BLE001 - 기억 갱신은 부가 기능
+            logger.error(f"Chat memory update failed: {e}")
+
+    task = asyncio.create_task(_run())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+
+@app.post("/api/chat/{partner_id}/close")
+async def chat_close(partner_id: str, raw: Request):
+    """대화를 떠날 때 부른다(JSON 본문 {} 필수). 아직 기억에 반영하지 않은 메시지가 있으면 친구 기억 갱신을 뒤에서 걸고 scheduled, 없으면 nothing."""
+    _partner_or_400(partner_id)
+    await _json_object(raw)
+    prepared = await asyncio.to_thread(chat.prepare_close, partner_id)
+    if prepared is None:
+        return {"status": "nothing"}
+    turns, total = prepared
+    _schedule_chat_memory_update(partner_id, turns, total)
+    return {"status": "scheduled"}
 
 
 MAX_CLIPS = 5
@@ -802,14 +857,21 @@ async def pron_latest_endpoint():
     return await asyncio.to_thread(pron.latest_result) or {"result": None}
 
 
+# 셸(index.html)·서비스 워커·매니페스트는 브라우저 HTTP 캐시가 옛 것을 주지 않게 매번 확인시킨다.
+NO_CACHE_FILES = ("index.html", "sw.js", "manifest.webmanifest")
+NO_CACHE_HEADERS = {"Cache-Control": "no-cache"}
+
+
 @app.get("/{full_path:path}")
 async def serve_spa(full_path: str):
     dist_dir = os.path.realpath("dist")
     file_path = os.path.realpath(os.path.join(dist_dir, full_path))
     if full_path and file_path.startswith(dist_dir + os.sep) and os.path.isfile(file_path):
+        if full_path in NO_CACHE_FILES:
+            return FileResponse(file_path, headers=NO_CACHE_HEADERS)
         return FileResponse(file_path)
 
-    return FileResponse("dist/index.html")
+    return FileResponse("dist/index.html", headers=NO_CACHE_HEADERS)
 
 if __name__ == "__main__":
     import uvicorn

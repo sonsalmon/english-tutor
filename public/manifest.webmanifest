@@ -1,0 +1,18 @@
+{
+  "id": "/",
+  "name": "English Friends",
+  "short_name": "Friends",
+  "description": "친구들과 영어로 통화하고 채팅하며 연습하는 개인 영어 앱",
+  "lang": "ko",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#f5f7fa",
+  "background_color": "#f5f7fa",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 
-export type Route = 'home' | 'smalltalk' | 'missions' | 'topic' | 'teachback' | 'pron' | 'call' | 'summary' | 'history' | 'replay';
-const ROUTES: Route[] = ['home', 'smalltalk', 'missions', 'topic', 'teachback', 'pron', 'call', 'summary', 'history', 'replay'];
+export type Route = 'home' | 'smalltalk' | 'missions' | 'topic' | 'teachback' | 'pron' | 'call' | 'summary' | 'history' | 'replay' | 'chat';
+const ROUTES: Route[] = ['home', 'smalltalk', 'missions', 'topic', 'teachback', 'pron', 'call', 'summary', 'history', 'replay', 'chat'];
 
 function segments(hash: string): string[] {
   return hash.replace(/^#\/?/, '').split('/');

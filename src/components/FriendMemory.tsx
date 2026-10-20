@@ -39,7 +39,7 @@ export function FriendMemory({ partnerId, name, state, onChange }: {
   // 지운 뒤 포커스를 보낼 곳. 다음 줄의 지우기 버튼이거나(키), 없으면 제목이다.
   const pendingFocus = useRef<string | null>(null);
   const memory = state.status === 'ready' ? state.memory : null;
-  const empty = !memory || (memory.facts.length === 0 && memory.threads.length === 0);
+  const empty = !memory || (memory.facts.length === 0 && memory.threads.length === 0 && memory.self_story.length === 0 && memory.jokes.length === 0 && memory.episodes.length === 0);
   const failed = state.status === 'failed';
 
   useEffect(() => {
@@ -152,6 +152,64 @@ export function FriendMemory({ partnerId, name, state, onChange }: {
                   {f.text}
                 </span>
                 <ForgetButton label={f.text} focusKey={`facts-${i}`} disabled={busy} onClick={() => void forget('facts', i, f.text)} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {memory && memory.self_story.length > 0 && (
+        <div className="mt-3">
+          <h3 className="text-sm font-semibold text-ink-soft">친구가 들려준 이야기</h3>
+          <ul className="divide-y divide-line">
+            {memory.self_story.map((s, i) => (
+              <li key={`${s.story}-${i}`} className="flex items-center gap-2 py-2">
+                <span className="min-w-0 flex-1">
+                  <span lang="en" className="block font-semibold">
+                    {s.story}
+                  </span>
+                  <span lang="en" className="block text-sm text-ink-soft">
+                    {s.progress}
+                  </span>
+                </span>
+                <ForgetButton label={s.story} focusKey={`self_story-${i}`} disabled={busy} onClick={() => void forget('self_story', i, s.progress)} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {memory && memory.jokes.length > 0 && (
+        <div className="mt-3">
+          <h3 className="text-sm font-semibold text-ink-soft">같이 웃은 것</h3>
+          <ul className="divide-y divide-line">
+            {memory.jokes.map((j, i) => (
+              <li key={`${j.text}-${i}`} className="flex items-center gap-2 py-2">
+                <span lang="en" className="min-w-0 flex-1 text-[15px]">
+                  {j.text}
+                </span>
+                <ForgetButton label={j.text} focusKey={`jokes-${i}`} disabled={busy} onClick={() => void forget('jokes', i, j.text)} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {memory && memory.episodes.length > 0 && (
+        <div className="mt-3">
+          <h3 className="text-sm font-semibold text-ink-soft">지난 대화</h3>
+          <ul className="divide-y divide-line">
+            {memory.episodes.map((ep, i) => (
+              <li key={`${ep.date}-${i}`} className="flex items-center gap-2 py-2">
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm text-ink-soft">
+                    {ep.date} · {ep.mode === 'chat' ? '채팅' : '통화'}
+                  </span>
+                  <span lang="en" className="block text-[15px]">
+                    {ep.summary}
+                  </span>
+                </span>
+                <ForgetButton label={`${ep.date} 대화`} focusKey={`episodes-${i}`} disabled={busy} onClick={() => void forget('episodes', i, ep.summary)} />
               </li>
             ))}
           </ul>
