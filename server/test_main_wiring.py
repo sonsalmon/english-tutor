@@ -476,6 +476,31 @@ class WordEndpointsTest(unittest.TestCase):
         self.assertEqual(res.status_code, 503)
 
 
+class LatencyEndpointTest(unittest.TestCase):
+    URL = "/api/calls/2026-10-20-120000/latency"
+
+    def setUp(self):
+        from fastapi.testclient import TestClient
+
+        self.client = TestClient(main.app)
+
+    def test_passes_body_to_save_and_maps_errors(self):
+        body = {"turns_ms": [900], "first_audio_ms": 2000}
+        with mock.patch("server.history.save_latency") as save:
+            self.assertEqual(self.client.post(self.URL, json=body).status_code, 200)
+            save.assert_called_once_with("2026-10-20-120000", body)
+        with mock.patch("server.history.save_latency", side_effect=ValueError("bad")):
+            self.assertEqual(self.client.post(self.URL, json=body).status_code, 400)
+        with mock.patch("server.history.save_latency", side_effect=FileNotFoundError("none")):
+            self.assertEqual(self.client.post(self.URL, json=body).status_code, 404)
+
+    def test_non_json_body_is_rejected_before_saving(self):
+        with mock.patch("server.history.save_latency") as save:
+            res = self.client.post(self.URL, content="x", headers={"content-type": "text/plain"})
+        self.assertEqual(res.status_code, 415)
+        save.assert_not_called()
+
+
 class CultureEndpointTest(unittest.TestCase):
     STEM = "2026-10-20-120000"
 

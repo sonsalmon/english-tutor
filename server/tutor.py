@@ -34,6 +34,7 @@ from google import genai
 from google.genai import types
 
 from server.config_utils import get_project_id
+from server.partner_memory import PARTNER_NAMES
 from server.pricing import UsageTotals
 from server.transcript_store import (
     get_audio_dir,
@@ -69,6 +70,13 @@ GAP_KINDS = ("word", "framing")
 MAX_GAP_KOREAN = 60
 MAX_GAP_ENGLISH = 80
 MAX_GAP_NOTE = 140
+MAX_FRIEND_PHRASES = 5
+MAX_FRIEND_OPENING = 120
+MAX_FRIEND_PHRASE = 80
+MAX_FRIEND_NOTE = 120
+MAX_FRIEND_NEXT = 160
+DEFAULT_PARTNER_NAME = "Ms. Park"
+_PARTNER_META_RE = re.compile(r"^- partner: (\S+)[ \t]*$", re.MULTILINE)
 
 # teach-back에서 "답하지 못한 질문"의 원인. 계약상 이 넷 중 하나로 고정한다.
 CAUSES = ("english", "understanding", "both", "unclear")
@@ -81,7 +89,8 @@ _CONTRACT_HINT = """{
   "retry": {"goal": "다음 통화에서 쓸 목표 한두 줄(영어)", "target_phrases": ["...", "..."]},
   "clip_query": "3-8 word English YouTube search query",
   "topic_keywords": ["kitchen", "cutting board", "busy week"],
-  "thinking_gaps": [{"korean": "학습자가 말하려던 한국어. 받아쓰기가 잘못 들었으면 문맥으로 알 수 있는 의도한 단어로 고쳐 쓴다", "english": "natural English", "kind": "word 또는 framing", "note": "한국어 한 문장"}]
+  "thinking_gaps": [{"korean": "학습자가 말하려던 한국어. 받아쓰기가 잘못 들었으면 문맥으로 알 수 있는 의도한 단어로 고쳐 쓴다", "english": "natural English", "kind": "word 또는 framing", "note": "한국어 한 문장"}],
+  "friend_message": {"opening": "one short, warm line specific to this call", "phrases": [{"phrase": "English phrase from this call", "note": "one short plain-English line (B1 level)"}], "next_time": "Next time, try telling me about ..."}
 }"""
 
 _PROMPT_TEMPLATE = """You are an expert English speaking coach for a Korean learner of American workplace English.
@@ -102,6 +111,7 @@ Analysis rules:
 - clip_query: a short English YouTube search query (3-8 words) for clips showing native speakers in the same topic or situation as this call, e.g. "coworkers small talk about weekend plans". Use only generic words: no personal names, addresses or company names.
 - topic_keywords: 2-5 concrete English nouns or short noun phrases (letters and spaces only, max 30 characters each) naming what the conversation was actually about, e.g. "kitchen", "cutting board", "busy week", "coffee". Never generic words such as talk, place, people, thing, coworkers, conversation, small talk, day, time. No personal names, addresses or company names.
 - thinking_gaps: one item per moment the learner switched to Korean or asked how to say something (the Partner's "You can say ..." offers often answer these). Up to {max_gaps} items. "korean" is the learner's Korean words (or the thing they asked about); "english" is the natural English; "kind" is "word" when it was just a missing word, or "framing" when English frames the idea differently from Korean (e.g. "정신없다" -> "I'm swamped", "빈둥빈둥" -> "lazing around", "입맛에 안 맞다" -> "It wasn't to my taste"). "note": ONE short Korean sentence - for "framing" how English frames the idea differently (what it focuses on, the image or structure), for "word" just that it was a missing word. If a raw verbatim transcription of the learner is given below, use it, because it keeps the Korean. The raw transcription can mishear Korean words, so "korean" is the Korean the learner MEANT, not necessarily the transcribed form. Check each Korean word against the context (what the learner asked about and what the Partner answered); if the transcribed word does not fit but a similar-sounding word does, write the intended word and never copy the misheard one. "korean" and "note" must agree: if your note names a different Korean word than "korean", fix "korean". When the learner's question and the Partner's answer make the intended word clear, write the intended word (example: the transcription says 토막 while the learner asks for a kitchen item and the Partner answers "cutting board" -> write 도마). Do not correct the learner's English. Empty list if there were none.
+- friend_message: a short text message that {partner_name}, the call partner, sends the learner right after the call, like a friend's recap. Write it in {partner_name}'s own voice, in plain, warm English (B1 level, no Korean, no markdown). "opening" is ONE short, warm line (max 120 characters) about something specific that happened in THIS call; write it fresh in your own words, never a stock greeting. "phrases" has 3-5 items (aim for 4 when the call has enough material) taken ONLY from THIS call (never invent, never reuse phrases that did not appear): (1) things the learner reached for in Korean or asked how to say, (2) the most useful fix of a mistake the learner actually made, written as the natural version, (3) useful words or expressions the Partner used or offered (for example a word the Partner taught the learner); when the Partner used or offered one, include at least one of them. Each "phrase" is the English phrase itself (max 80 characters); each "note" is ONE short plain-English line saying what it means or when to use it (max 120 characters). Keep it friendly, not a correction list. "next_time" is ONE English sentence that starts with "Next time, try telling me about" and names a topic that fits this call. Use only generic words: no real personal names, addresses or company names. If the call was too short for any real phrase, leave "phrases" empty.
 
 Return ONLY valid JSON with exactly this shape (no markdown fences, no commentary, no extra keys):
 {contract}
@@ -112,9 +122,16 @@ TRANSCRIPT:
 ---"""
 
 
+def partner_name_of(transcript: str) -> str:
+    """전문 메타의 "- partner: <id>"에서 상대 이름을 찾는다. 없거나 모르는 id면 Ms. Park."""
+    m = _PARTNER_META_RE.search(transcript or "")
+    return PARTNER_NAMES.get(m.group(1), DEFAULT_PARTNER_NAME) if m else DEFAULT_PARTNER_NAME
+
+
 def build_prompt(transcript: str) -> str:
     """분석 지침과 대화 전문을 합쳐 모델 프롬프트를 만든다."""
     return _PROMPT_TEMPLATE.format(
+        partner_name=partner_name_of(transcript),
         max_corrections=MAX_CORRECTIONS,
         max_good=MAX_GOOD,
         max_vocab=MAX_VOCAB,
@@ -242,6 +259,30 @@ def normalize_thinking_gaps(value: Any) -> List[Dict[str, str]]:
     return rows
 
 
+def normalize_friend_message(value: Any) -> Optional[Dict[str, Any]]:
+    """friend_message 정리: 길이 상한, 빈 항목 제외, 최대 5개. 쓸 만한 phrase가 하나도 없으면 None."""
+    if not isinstance(value, dict):
+        return None
+    phrases: List[Dict[str, str]] = []
+    raw = value.get("phrases")
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        phrase = _capped(item.get("phrase"), MAX_FRIEND_PHRASE)
+        if not phrase:
+            continue
+        phrases.append({"phrase": phrase, "note": _capped(item.get("note"), MAX_FRIEND_NOTE)})
+        if len(phrases) >= MAX_FRIEND_PHRASES:
+            break
+    if not phrases:
+        return None
+    return {
+        "opening": _capped(value.get("opening"), MAX_FRIEND_OPENING),
+        "phrases": phrases,
+        "next_time": _capped(value.get("next_time"), MAX_FRIEND_NEXT),
+    }
+
+
 def normalize_tutor_json(raw: Any) -> Dict[str, Any]:
     """모델 출력을 고정 계약 모양으로 정리한다(누락 키 기본값, 개수 제한)."""
     data = extract_json(raw)
@@ -261,6 +302,7 @@ def normalize_tutor_json(raw: Any) -> Dict[str, Any]:
         "pragmatics": _rows(data, "pragmatics", ["pattern", "note"], MAX_PRAGMATICS),
         "thinking_gaps": normalize_thinking_gaps(data.get("thinking_gaps")),
         "topic_keywords": normalize_topic_keywords(data.get("topic_keywords")),
+        "friend_message": normalize_friend_message(data.get("friend_message")),
         "retry": {
             "goal": _clean_str(retry_raw.get("goal")),
             "target_phrases": phrases,
@@ -588,6 +630,7 @@ def normalize_teachback_json(raw: Any, *, max_unanswered: int = MAX_UNANSWERED) 
     result.pop("clip_query", None)  # teach-back 계약은 그대로 둔다
     result.pop("thinking_gaps", None)
     result.pop("topic_keywords", None)
+    result.pop("friend_message", None)
     result["unanswered"] = _unanswered_rows(data, max_unanswered)
     return result
 
@@ -757,10 +800,25 @@ if __name__ == "__main__":
     assert normalize_clip_query("coworkers small talk, weekend!") == "coworkers small talk weekend"
     assert normalize_clip_query("Seoul") == "" and normalize_clip_query("a " * 11) == ""
     _out = analyze_transcript("Me: I am agree", generate_text=lambda _prompt: _fake)
-    assert set(_out) == {"corrections", "good", "vocab", "pragmatics", "retry", "clip_query", "thinking_gaps", "topic_keywords"}, _out
+    assert set(_out) == {"corrections", "good", "vocab", "pragmatics", "retry", "clip_query", "thinking_gaps", "topic_keywords", "friend_message"}, _out
     assert _out["clip_query"] == "" and _out["thinking_gaps"] == [] and _out["topic_keywords"] == [], _out
     assert normalize_topic_keywords([" Cutting-Board! ", "talk", "Small Talk", "kitchen", "kitchen", "x" * 31, 5, "a1"]) == ["cutting board", "kitchen", "a"]
     assert "topic_keywords" not in normalize_teachback_json({"topic_keywords": ["kitchen"]})
+    assert _out["friend_message"] is None and normalize_friend_message({"opening": "Hi", "phrases": []}) is None
+    _fm = normalize_friend_message(
+        {
+            "opening": " Fun chat today! ",
+            "phrases": [{"phrase": "p" * 100, "note": "n" * 200}, {"phrase": "", "note": "x"}, "junk"]
+            + [{"phrase": f"phrase {i}", "note": ""} for i in range(8)],
+            "next_time": "Next time, try telling me about your week.",
+        }
+    )
+    assert _fm and _fm["opening"] == "Fun chat today!" and len(_fm["phrases"]) == MAX_FRIEND_PHRASES, _fm
+    assert len(_fm["phrases"][0]["phrase"]) == MAX_FRIEND_PHRASE and len(_fm["phrases"][0]["note"]) == MAX_FRIEND_NOTE, _fm
+    assert "friend_message" not in normalize_teachback_json({"friend_message": _fm})
+    assert partner_name_of("# Call\n- partner: priya\n- duration: 1m") == "Priya"
+    assert partner_name_of("# Call\n- mission: x") == DEFAULT_PARTNER_NAME == partner_name_of("- partner: nobody\n")
+    assert "Priya, the call partner" in build_prompt("- partner: priya\n**Me:** hi")
     _gaps = normalize_thinking_gaps(
         [
             {"korean": " 정신없다 ", "english": "I'm swamped", "kind": "Framing", "note": "영어는 일에 잠긴 이미지로 말해요."},

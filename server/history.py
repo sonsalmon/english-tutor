@@ -6,6 +6,7 @@
 
 import json
 import logging
+import math
 import re
 from datetime import datetime, timedelta
 from itertools import islice
@@ -35,6 +36,55 @@ SMALLTALK_MISSION = "Small Talk"
 
 def _valid_stem(stem: Any) -> bool:
     return isinstance(stem, str) and STEM_RE.fullmatch(stem) is not None
+
+
+LATENCY_MAX_MS = 20000
+LATENCY_MAX_TURNS = 200
+
+
+def _latency_path(stem: str) -> Path:
+    return get_transcript_dir() / f"{stem}.latency.json"
+
+
+def _latency_ms(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= LATENCY_MAX_MS
+
+
+def read_latency(stem: str) -> Optional[Dict[str, Any]]:
+    """클라이언트가 잰 응답 속도 요약(중앙값·p90·턴 수·첫소리). 파일이 없거나 깨졌으면 None."""
+    path = _latency_path(stem)
+    if not path.is_file():
+        return None
+    data = _read_json(path)
+    turns = data.get("turns_ms") if data else None
+    first = data.get("first_audio_ms") if data else None
+    if not isinstance(turns, list) or not all(_latency_ms(t) for t in turns) or not (first is None or _latency_ms(first)):
+        return None
+    if not turns and first is None:
+        return None
+    ordered = sorted(turns)
+    n = len(ordered)
+    median = round((ordered[(n - 1) // 2] + ordered[n // 2]) / 2) if n else None
+    p90 = ordered[math.ceil(0.9 * n) - 1] if n else None
+    return {"median_ms": median, "p90_ms": p90, "turns": n, "first_audio_ms": first}
+
+
+def save_latency(stem: str, body: Dict[str, Any]) -> None:
+    """응답 속도를 <stem>.latency.json으로 저장. 형식이 틀리면 ValueError, 통화가 없으면 FileNotFoundError."""
+    if not _valid_stem(stem):
+        raise ValueError("허용되지 않은 통화 번호입니다")
+    turns = body.get("turns_ms")
+    first = body.get("first_audio_ms")
+    if not isinstance(turns, list) or len(turns) > LATENCY_MAX_TURNS or not all(_latency_ms(t) for t in turns):
+        raise ValueError("turns_ms는 0~20000 정수 200개 이하여야 합니다")
+    if not (first is None or _latency_ms(first)):
+        raise ValueError("first_audio_ms는 0~20000 정수여야 합니다")
+    if not (get_transcript_dir() / f"{stem}.md").is_file():
+        raise FileNotFoundError("해당 통화 기록이 없습니다")
+    path = _latency_path(stem)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps({"turns_ms": turns, "first_audio_ms": first}), encoding="utf-8")
+    tmp.replace(path)
 
 
 def _parse_call(path: Path) -> Optional[Dict[str, Any]]:
@@ -85,6 +135,7 @@ def _parse_call(path: Path) -> Optional[Dict[str, Any]]:
         "has_tutoring": tutoring,
         "kind": "teachback" if teachback else "smalltalk" if mission == SMALLTALK_MISSION else "call",
         "cost": combine_cost(live_cost, None),
+        "latency": read_latency(stem),
     }
 
 

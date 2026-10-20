@@ -395,6 +395,21 @@ async def call_detail_endpoint(stem: str):
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@app.post("/api/calls/{stem}/latency")
+async def call_latency_endpoint(stem: str, raw: Request):
+    """클라이언트가 잰 응답 속도(turns_ms, first_audio_ms)를 통화 기록 옆에 저장한다. 형식이 틀리면 400, 통화가 없으면 404."""
+    from server.history import save_latency
+
+    body = await _json_object(raw)
+    try:
+        await asyncio.to_thread(save_latency, stem, body)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"status": "ok"}
+
+
 def _partner_or_400(partner_id: str) -> None:
     if not partner_memory.valid_partner(partner_id):
         raise HTTPException(status_code=400, detail="알 수 없는 친구입니다.")

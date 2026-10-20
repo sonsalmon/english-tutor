@@ -1,3 +1,4 @@
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -37,6 +38,72 @@ class TutorNormalizeTest(unittest.TestCase):
 
     def test_gap_kinds_match_learner_profile(self):
         self.assertEqual(tutor.GAP_KINDS, lp.GAP_KINDS)
+
+
+def fm(phrases, opening="Fun chat today!", next_time="Next time, try telling me about your week."):
+    return {"opening": opening, "phrases": phrases, "next_time": next_time}
+
+
+def fphrase(phrase, note="a short note"):
+    return {"phrase": phrase, "note": note}
+
+
+class FriendMessageTest(unittest.TestCase):
+    def test_normalize_caps_and_drops_empty(self):
+        raw = fm(
+            [fphrase("p" * 100, "n" * 200), fphrase(""), "junk", fphrase("  I'm swamped  ", " busy ")]
+            + [fphrase(f"phrase {i}") for i in range(8)],
+            opening="  Fun chat today!  ",
+        )
+        out = tutor.normalize_tutor_json({"friend_message": raw})["friend_message"]
+        self.assertEqual(out["opening"], "Fun chat today!")
+        self.assertEqual(len(out["phrases"]), tutor.MAX_FRIEND_PHRASES)
+        self.assertEqual(len(out["phrases"][0]["phrase"]), tutor.MAX_FRIEND_PHRASE)
+        self.assertEqual(len(out["phrases"][0]["note"]), tutor.MAX_FRIEND_NOTE)
+        self.assertEqual(out["phrases"][1], {"phrase": "I'm swamped", "note": "busy"})
+        self.assertEqual(set(out), {"opening", "phrases", "next_time"})
+
+    def test_missing_or_unusable_is_none(self):
+        self.assertIsNone(tutor.normalize_tutor_json({})["friend_message"])
+        for bad in (None, "hi", [], {}, fm([]), fm([fphrase(""), "x"]), {"phrases": "nope"}):
+            self.assertIsNone(tutor.normalize_friend_message(bad), bad)
+
+    def test_missing_opening_and_next_time_become_empty_strings(self):
+        out = tutor.normalize_friend_message({"phrases": [fphrase("cutting board")]})
+        self.assertEqual((out["opening"], out["next_time"]), ("", ""))
+
+    def test_friend_message_alone_does_not_make_result_non_empty(self):
+        out = tutor.normalize_tutor_json({"friend_message": fm([fphrase("cutting board")])})
+        self.assertTrue(tutor.is_empty_result(out))
+
+    def test_teachback_has_no_friend_message(self):
+        raw = {"friend_message": fm([fphrase("cutting board")]), "good": [{"said": "a", "note": "b"}]}
+        self.assertNotIn("friend_message", tutor.normalize_teachback_json(raw))
+
+    def test_partner_name_from_transcript_meta(self):
+        self.assertEqual(tutor.partner_name_of("# Call\n- partner: priya\n- duration: 1m\n"), "Priya")
+        self.assertEqual(tutor.partner_name_of("# Call\n- mission: x\n"), "Ms. Park")
+        self.assertEqual(tutor.partner_name_of("- partner: nobody\n"), "Ms. Park")
+        # 줄 맨 앞에서 시작하는 메타 줄만 인정한다(대화 안의 비슷한 문장은 무시).
+        self.assertEqual(tutor.partner_name_of("**Me:** - partner: omar\n"), "Ms. Park")
+
+    def test_prompt_names_the_partner_and_asks_for_the_contract(self):
+        prompt = tutor.build_prompt("# Call\n- partner: omar\n**Me:** hi\n")
+        self.assertIn("Omar, the call partner", prompt)
+        self.assertIn('"friend_message"', prompt)
+        self.assertIn("Ms. Park, the call partner", tutor.build_prompt("**Me:** hi\n"))
+
+    def test_prompt_gives_no_copyable_opening_example(self):
+        prompt = tutor.build_prompt("**Me:** hi\n")
+        self.assertNotIn("Fun chat today!", prompt)
+        self.assertIn('"friend_message"', prompt)
+
+    def test_analyze_transcript_returns_friend_message(self):
+        reply = json.dumps({"good": [{"said": "a", "note": "b"}], "friend_message": fm([fphrase("cutting board")])})
+        out = tutor.analyze_transcript("**Me:** hi", generate_text=lambda _p: reply)
+        self.assertEqual(out["friend_message"]["phrases"][0]["phrase"], "cutting board")
+        reply_without = json.dumps({"good": [{"said": "a", "note": "b"}]})
+        self.assertIsNone(tutor.analyze_transcript("**Me:** hi", generate_text=lambda _p: reply_without)["friend_message"])
 
 
 class CultureTermsTest(unittest.TestCase):

@@ -12,6 +12,7 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 from google.genai.types import EndSensitivity, StartSensitivity
@@ -41,6 +42,17 @@ MIC_MAX_BYTES = MIC_SAMPLE_RATE * 2 * 60 * 30  # 16bit mono, 30분
 DEFAULT_VOICE = "Puck"
 OPENER_TEXT = "[The learner just joined the call. Start as Ms. Park.]"
 TURN_MODE_ENV = "TURN_MODE"
+DEFAULT_LIVE_MODEL = "gemini-live-2.5-flash-native-audio"
+# 가벼운 대화·자유 대화(chat) 통화에만 모델·VAD 노브를 따로 준다. 미션·Teach-back은 늘 기본값.
+CHAT_MODES = ("smalltalk", "freetalk")
+LIVE_MODEL_ENV = "LIVE_MODEL"
+LIVE_MODEL_CHAT_ENV = "LIVE_MODEL_CHAT"
+VAD_CHAT_END_SENSITIVITY_ENV = "LIVE_VAD_CHAT_END_SENSITIVITY"
+VAD_CHAT_SILENCE_MS_ENV = "LIVE_VAD_CHAT_SILENCE_MS"
+VAD_CHAT_PREFIX_MS_ENV = "LIVE_VAD_CHAT_PREFIX_MS"
+VAD_SILENCE_MS_RANGE = (100, 3000)
+CHAT_DEFAULT_SILENCE_MS = 500  # next10 실험 결정: 채팅 기본 end=HIGH, silence 500ms
+AFFECTIVE_DIALOG_ENV = "LIVE_AFFECTIVE_DIALOG"  # 0|false|off면 끈다(gemini-3.8-live는 1007로 거부, 2026-10-20 확인)
 MISSION_RE = re.compile(r'trying to:\s*"([^"]+)"')
 MIN_LEARNER_WORDS = 3
 # Gemini 입력 받아쓰기가 잡음을 `{}`로 내보낼 때가 있다(2026-10-20 브라우저 시험: "{} hi, I'm ...").
@@ -69,6 +81,69 @@ COMPLETE_MISSION_PROPERTIES = {
         "description": "List of 3 constructive feedback points, written as the instructions say.",
     },
 }
+
+
+def live_model_for(mode: str, env=None) -> str:
+    """통화 모드에 쓸 Live 모델. smalltalk·freetalk은 `LIVE_MODEL_CHAT`, 나머지는 `LIVE_MODEL`,
+    둘 다 없으면 `MODEL`(없으면 기본 모델)."""
+    env = os.environ if env is None else env
+    base = env.get("MODEL") or DEFAULT_LIVE_MODEL
+    key = LIVE_MODEL_CHAT_ENV if mode in CHAT_MODES else LIVE_MODEL_ENV
+    return (env.get(key) or "").strip() or base
+
+
+def affective_dialog_from_env(env=None) -> bool:
+    """감정 대화(enable_affective_dialog). 기본 켬, `LIVE_AFFECTIVE_DIALOG=0|false|off|no`면 끈다."""
+    env = os.environ if env is None else env
+    return (env.get(AFFECTIVE_DIALOG_ENV) or "").strip().lower() not in ("0", "false", "off", "no")
+
+
+def chat_vad_overrides(mode: str, env=None) -> dict:
+    """smalltalk·freetalk에만 적용할 Gemini VAD 노브. 값이 잘못되면 그 노브만 무시한다(통화는 계속).
+
+    키: end_sensitivity(EndSensitivity), silence_duration_ms(int), prefix_padding_ms(int).
+    환경 변수가 없으면 기본값 end=HIGH, silence_ms=500(next10 실험 결정)이고 앞 여유(prefix)는 기본 VAD 그대로다.
+    TURN_MODE=smart(Gemini VAD 끔)이면 비어 있다."""
+    env = os.environ if env is None else env
+    if mode not in CHAT_MODES or env.get(TURN_MODE_ENV, "gemini") == "smart":
+        return {}
+    out: dict = {
+        "end_sensitivity": EndSensitivity.END_SENSITIVITY_HIGH,
+        "silence_duration_ms": CHAT_DEFAULT_SILENCE_MS,
+    }
+    raw = (env.get(VAD_CHAT_END_SENSITIVITY_ENV) or "").strip().upper()
+    if raw in ("HIGH", "LOW"):
+        out["end_sensitivity"] = getattr(EndSensitivity, f"END_SENSITIVITY_{raw}")
+    elif raw:
+        logger.warning("%s=%r ignored (HIGH|LOW)", VAD_CHAT_END_SENSITIVITY_ENV, raw)
+    for key, name, low, high in (
+        ("silence_duration_ms", VAD_CHAT_SILENCE_MS_ENV, VAD_SILENCE_MS_RANGE[0], VAD_SILENCE_MS_RANGE[1]),
+        ("prefix_padding_ms", VAD_CHAT_PREFIX_MS_ENV, 0, None),
+    ):
+        raw = (env.get(name) or "").strip()
+        if not raw:
+            continue
+        try:
+            value = int(raw)
+        except ValueError:
+            value = None
+        if value is None or value < low or (high is not None and value > high):
+            logger.warning("%s=%r ignored (int %s..%s)", name, raw, low, high if high is not None else "")
+            continue
+        out[key] = value
+    return out
+
+
+def vad_summary(overrides: dict) -> Optional[str]:
+    """전문 메타 `- vad:` 줄에 적을 요약. 적용한 노브가 없으면 None."""
+    parts = []
+    if "end_sensitivity" in overrides:
+        parts.append("end=" + overrides["end_sensitivity"].name.removeprefix("END_SENSITIVITY_"))
+    if "silence_duration_ms" in overrides:
+        parts.append(f"silence_ms={overrides['silence_duration_ms']}")
+    if "prefix_padding_ms" in overrides:
+        parts.append(f"prefix_ms={overrides['prefix_padding_ms']}")
+    return " ".join(parts) or None
 
 
 def smalltalk_time_limit_from_env(env=None) -> int:
@@ -296,7 +371,7 @@ def make_usage_collector(usage: UsageTotals):
     return UsageCollector()
 
 
-def finish_call(record: CallRecord, config: CallConfig, model: str, ended_at: Optional[float] = None):
+def finish_call(record: CallRecord, config: CallConfig, model: str, ended_at: Optional[float] = None, vad: Optional[str] = None):
     ended_at = ended_at or time.time()
     started_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(record.started_at))
     try:
@@ -305,7 +380,7 @@ def finish_call(record: CallRecord, config: CallConfig, model: str, ended_at: Op
     except Exception as e:  # noqa: BLE001 - 원음 저장 실패가 전문 저장을 막지 않는다
         logger.error("Call audio save failed: %s", e)
     try:
-        return save_transcript(
+        saved = save_transcript(
             record.chunks,
             {
                 "started_at": started_str,
@@ -316,12 +391,14 @@ def finish_call(record: CallRecord, config: CallConfig, model: str, ended_at: Op
                 "mission": config.mission,
                 "completed": record.completed,
                 "cost_usd": None if record.usage.is_empty() else estimate_cost(model, record.usage),
+                "vad": vad,
             },
             get_transcript_dir(),
         )
     except Exception as e:  # noqa: BLE001
         logger.error("Transcript save failed: %s", e)
         return None
+    return saved
 
 
 def mission_tools(config: CallConfig):
@@ -341,8 +418,9 @@ def mission_tools(config: CallConfig):
     ])
 
 
-def turn_settings():
-    """TURN_MODE에 따라 (Gemini VAD 설정, 로컬 VAD·Smart Turn 사용자 설정)을 돌려준다."""
+def turn_settings(mode: Optional[str] = None):
+    """TURN_MODE에 따라 (Gemini VAD 설정, 로컬 VAD·Smart Turn 사용자 설정)을 돌려준다.
+    mode가 smalltalk·freetalk이면 LIVE_VAD_CHAT_* 노브를 기본 VAD 위에 덮는다."""
     from pipecat.processors.aggregators.llm_response_universal import LLMUserAggregatorParams
     from pipecat.services.google.gemini_live.llm import GeminiVADParams
 
@@ -359,12 +437,16 @@ def turn_settings():
             ),
         )
     # 말 사이 멈춤이 잦은 학습자: 작은 목소리도 말 시작으로 잡고, 1.2초 조용해야 끝으로 본다(10-16 조정값).
-    return GeminiVADParams(
+    params = GeminiVADParams(
         start_sensitivity=StartSensitivity.START_SENSITIVITY_HIGH,
         end_sensitivity=EndSensitivity.END_SENSITIVITY_LOW,
         prefix_padding_ms=300,
         silence_duration_ms=1200,
-    ), None
+    )
+    overrides = chat_vad_overrides(mode) if mode else {}
+    if overrides:
+        params = params.model_copy(update=overrides)
+    return params, None
 
 
 async def run_bot(webrtc_connection, config: CallConfig) -> None:
@@ -382,9 +464,13 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
     from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
     from pipecat.workers.runner import WorkerRunner
 
-    model = os.getenv("MODEL", "gemini-live-2.5-flash-native-audio")
+    model = live_model_for(config.mode)
     record = CallRecord()
-    vad, user_params = turn_settings()
+    vad, user_params = turn_settings(config.mode)
+    vad_meta = vad_summary(chat_vad_overrides(config.mode))
+    if vad_meta:
+        logger.info("Chat VAD knobs applied (%s): %s", config.mode, vad_meta)
+    logger.info("Live model for %s: %s", config.mode, model)
 
     transport = SmallWebRTCTransport(
         webrtc_connection=webrtc_connection,
@@ -411,7 +497,7 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
             language="en-US",
             vad=vad,
             context_window_compression={"enabled": True},
-            enable_affective_dialog=True,
+            enable_affective_dialog=affective_dialog_from_env(),
             proactivity=ProactivityConfig(proactive_audio=True),
         ),
     )
@@ -526,6 +612,6 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
             limiter.cancel()
         await stop_recording()
         record.paused_sec = clock.paused_total()
-        saved = await asyncio.to_thread(finish_call, record, config, model)
+        saved = await asyncio.to_thread(finish_call, record, config, model, None, vad_meta)
         logger.info("Call finished; transcript saved: %s", saved)
         schedule_partner_memory_update(saved, config, record)

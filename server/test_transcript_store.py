@@ -36,6 +36,18 @@ class CostTest(unittest.TestCase):
                 self.assertFalse([l for l in head([("Me", "hi")], **extra) if l.startswith("- cost_usd")])
 
 
+class VadLineTest(unittest.TestCase):
+    def test_vad_line_sits_right_below_model(self):
+        lines = head([("Me", "hi")], vad="end=HIGH silence_ms=500")
+
+        self.assertEqual(lines[lines.index("- model: m") + 1], "- vad: end=HIGH silence_ms=500")
+
+    def test_missing_or_empty_vad_leaves_no_line(self):
+        for extra in ({}, {"vad": None}, {"vad": "  "}):
+            with self.subTest(extra=extra):
+                self.assertFalse([l for l in head([("Me", "hi")], **extra) if l.startswith("- vad")])
+
+
 class CoachTest(unittest.TestCase):
     def coach(self, chunks):
         line = [l for l in head(chunks) if l.startswith("- coach:")][0]

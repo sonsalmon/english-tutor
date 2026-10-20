@@ -12,6 +12,8 @@ from server.call_bot import CallConfig, CallRecord, finish_call, mission_title, 
 
 INSTRUCTION = 'You are Ms. Park.\nThe user ... trying to: "Day 1 Team Intro" (intro)'
 
+CHAT_DEFAULT_VAD = {"end_sensitivity": call_bot.EndSensitivity.END_SENSITIVITY_HIGH, "silence_duration_ms": 500}
+
 
 class ParseCallConfigTest(unittest.TestCase):
     def test_valid_mission(self):
@@ -183,6 +185,100 @@ class CallRecordTest(unittest.TestCase):
             record.add_mic(b"\x02" * 8)
 
         self.assertEqual(bytes(record.mic_pcm), b"\x01" * 8 + b"\x02" * 2)
+
+
+class LiveKnobsTest(unittest.TestCase):
+    def test_model_defaults_to_model_env_or_builtin(self):
+        self.assertEqual(call_bot.live_model_for("smalltalk", {}), call_bot.DEFAULT_LIVE_MODEL)
+        self.assertEqual(call_bot.live_model_for("mission", {"MODEL": "m-base"}), "m-base")
+        self.assertEqual(call_bot.live_model_for("freetalk", {"MODEL": "m-base"}), "m-base")
+
+    def test_chat_model_only_for_smalltalk_and_freetalk(self):
+        env = {"MODEL": "m-base", "LIVE_MODEL_CHAT": "chat-m", "LIVE_MODEL": "other-m"}
+        self.assertEqual(call_bot.live_model_for("smalltalk", env), "chat-m")
+        self.assertEqual(call_bot.live_model_for("freetalk", env), "chat-m")
+        self.assertEqual(call_bot.live_model_for("mission", env), "other-m")
+        self.assertEqual(call_bot.live_model_for("teachback", env), "other-m")
+
+    def test_live_model_alone_does_not_touch_chat(self):
+        env = {"MODEL": "m-base", "LIVE_MODEL": "other-m"}
+        self.assertEqual(call_bot.live_model_for("smalltalk", env), "m-base")
+        self.assertEqual(call_bot.live_model_for("mission", env), "other-m")
+
+    def test_vad_overrides_parse_and_only_for_chat_modes(self):
+        env = {"LIVE_VAD_CHAT_END_SENSITIVITY": "high", "LIVE_VAD_CHAT_SILENCE_MS": "800", "LIVE_VAD_CHAT_PREFIX_MS": "150"}
+        got = call_bot.chat_vad_overrides("smalltalk", env)
+        self.assertEqual(got, {
+            "end_sensitivity": call_bot.EndSensitivity.END_SENSITIVITY_HIGH,
+            "silence_duration_ms": 800,
+            "prefix_padding_ms": 150,
+        })
+        self.assertEqual(call_bot.chat_vad_overrides("freetalk", env), got)
+        self.assertEqual(call_bot.chat_vad_overrides("mission", env), {})
+        self.assertEqual(call_bot.chat_vad_overrides("teachback", env), {})
+        self.assertEqual(call_bot.chat_vad_overrides("smalltalk", {}), CHAT_DEFAULT_VAD)
+
+    def test_invalid_vad_values_are_ignored_per_knob(self):
+        env = {"LIVE_VAD_CHAT_END_SENSITIVITY": "MID", "LIVE_VAD_CHAT_SILENCE_MS": "50", "LIVE_VAD_CHAT_PREFIX_MS": "abc"}
+        self.assertEqual(call_bot.chat_vad_overrides("smalltalk", env), CHAT_DEFAULT_VAD)
+        env = {"LIVE_VAD_CHAT_SILENCE_MS": "3001", "LIVE_VAD_CHAT_PREFIX_MS": "-1", "LIVE_VAD_CHAT_END_SENSITIVITY": "LOW"}
+        self.assertEqual(call_bot.chat_vad_overrides("smalltalk", env), {**CHAT_DEFAULT_VAD, "end_sensitivity": call_bot.EndSensitivity.END_SENSITIVITY_LOW})
+        self.assertEqual(call_bot.chat_vad_overrides("smalltalk", {"LIVE_VAD_CHAT_SILENCE_MS": "100"}), {**CHAT_DEFAULT_VAD, "silence_duration_ms": 100})
+        self.assertEqual(call_bot.chat_vad_overrides("smalltalk", {"LIVE_VAD_CHAT_SILENCE_MS": "3000"}), {**CHAT_DEFAULT_VAD, "silence_duration_ms": 3000})
+
+    def test_chat_modes_default_to_high_end_and_500ms_without_env(self):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("LIVE_VAD_CHAT_") and k != "TURN_MODE"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            chat, _ = call_bot.turn_settings("smalltalk")
+            free, _ = call_bot.turn_settings("freetalk")
+            mission, _ = call_bot.turn_settings("mission")
+            teachback, _ = call_bot.turn_settings("teachback")
+        for params in (chat, free):
+            self.assertEqual((params.silence_duration_ms, params.end_sensitivity, params.prefix_padding_ms), (500, call_bot.EndSensitivity.END_SENSITIVITY_HIGH, 300))
+        for params in (mission, teachback):
+            self.assertEqual((params.silence_duration_ms, params.end_sensitivity), (1200, call_bot.EndSensitivity.END_SENSITIVITY_LOW))
+        self.assertEqual(call_bot.vad_summary(call_bot.chat_vad_overrides("smalltalk", {})), "end=HIGH silence_ms=500")
+
+    def test_smart_turn_mode_skips_gemini_vad_knobs(self):
+        env = {"TURN_MODE": "smart", "LIVE_VAD_CHAT_SILENCE_MS": "800"}
+        self.assertEqual(call_bot.chat_vad_overrides("smalltalk", env), {})
+
+    def test_turn_settings_applies_overrides_to_chat_only(self):
+        env = {"LIVE_VAD_CHAT_END_SENSITIVITY": "HIGH", "LIVE_VAD_CHAT_SILENCE_MS": "700"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            os.environ.pop("TURN_MODE", None)
+            chat, _ = call_bot.turn_settings("smalltalk")
+            mission, _ = call_bot.turn_settings("mission")
+            teachback, _ = call_bot.turn_settings("teachback")
+            plain, _ = call_bot.turn_settings()
+
+        self.assertEqual((chat.silence_duration_ms, chat.end_sensitivity), (700, call_bot.EndSensitivity.END_SENSITIVITY_HIGH))
+        self.assertEqual(chat.prefix_padding_ms, 300)  # 설정 안 한 노브는 기존 값
+        for params in (mission, teachback, plain):
+            self.assertEqual((params.silence_duration_ms, params.end_sensitivity), (1200, call_bot.EndSensitivity.END_SENSITIVITY_LOW))
+
+    def test_affective_dialog_defaults_on_and_can_be_turned_off(self):
+        self.assertTrue(call_bot.affective_dialog_from_env({}))
+        self.assertTrue(call_bot.affective_dialog_from_env({"LIVE_AFFECTIVE_DIALOG": "1"}))
+        for off in ("0", "false", "OFF", "no"):
+            self.assertFalse(call_bot.affective_dialog_from_env({"LIVE_AFFECTIVE_DIALOG": off}))
+
+    def test_vad_summary(self):
+        self.assertIsNone(call_bot.vad_summary({}))
+        got = call_bot.vad_summary({"end_sensitivity": call_bot.EndSensitivity.END_SENSITIVITY_HIGH, "silence_duration_ms": 800})
+        self.assertEqual(got, "end=HIGH silence_ms=800")
+
+    def test_vad_line_lands_in_saved_transcript_below_model(self):
+        record = CallRecord(started_at=1_792_450_000.0, chunks=[("Me", "Hi"), ("Partner", "Hello")])
+        config = CallConfig(system_instruction=INSTRUCTION, mode="smalltalk")
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(call_bot, "get_transcript_dir", return_value=Path(tmp)):
+            path = finish_call(record, config, "gemini-3.8-live", ended_at=1_792_450_030.0, vad="end=HIGH silence_ms=800")
+            lines = path.read_text(encoding="utf-8").split("\n")
+            no_vad = finish_call(CallRecord(started_at=1_792_450_100.0, chunks=[("Me", "Hi")]), config, "m", ended_at=1_792_450_130.0)
+
+            idx = lines.index("- model: gemini-3.8-live")
+            self.assertEqual(lines[idx + 1], "- vad: end=HIGH silence_ms=800")
+            self.assertNotIn("- vad:", no_vad.read_text(encoding="utf-8"))
 
 
 class FinishCallTest(unittest.TestCase):

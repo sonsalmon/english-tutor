@@ -62,6 +62,7 @@ class HistoryTest(HistoryDirs):
                 "has_tutoring": False,
                 "kind": "call",
                 "cost": {"live": None, "tutoring": None, "total": None},
+                "latency": None,
             },
         )
 
@@ -259,6 +260,46 @@ class CallsHttpTest(HistoryDirs):
         self.assertEqual(listing["2026-10-20-090000"], {"live": 0.02, "tutoring": 0.001, "total": 0.021})
         self.assertEqual(listing["2026-10-19-090000"], {"live": None, "tutoring": None, "total": None})
         self.assertEqual(detail["call"]["cost"], {"live": 0.02, "tutoring": 0.001, "total": 0.021})
+
+    def test_latency_post_stores_file_and_shows_in_list_and_detail(self):
+        stem = "2026-10-20-090000"
+        self.add_call(stem, "2026-10-20 09:00")
+
+        res = self.client.post(f"/api/calls/{stem}/latency", json={"turns_ms": [900, 1600, 700, 1000], "first_audio_ms": 2100})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(json.loads((self.sessions / f"{stem}.latency.json").read_text()), {"turns_ms": [900, 1600, 700, 1000], "first_audio_ms": 2100})
+        expected = {"median_ms": 950, "p90_ms": 1600, "turns": 4, "first_audio_ms": 2100}
+        self.assertEqual(self.client.get("/api/calls").json()["calls"][0]["latency"], expected)
+        self.assertEqual(self.client.get(f"/api/calls/{stem}").json()["call"]["latency"], expected)
+
+    def test_latency_post_rejects_bad_bodies_and_unknown_calls(self):
+        stem = "2026-10-20-090000"
+        self.add_call(stem, "2026-10-20 09:00")
+        url = f"/api/calls/{stem}/latency"
+        bad = [
+            {"turns_ms": [-1]},
+            {"turns_ms": [20001]},
+            {"turns_ms": [1.5]},
+            {"turns_ms": [True]},
+            {"turns_ms": [1] * 201},
+            {"turns_ms": "x"},
+            {},
+            {"turns_ms": [1], "first_audio_ms": 20001},
+        ]
+        for body in bad:
+            self.assertEqual(self.client.post(url, json=body).status_code, 400, body)
+        self.assertEqual(self.client.post("/api/calls/zz/latency", json={"turns_ms": []}).status_code, 400)
+        self.assertEqual(self.client.post("/api/calls/2026-01-01-000000/latency", json={"turns_ms": [1]}).status_code, 404)
+        self.assertFalse((self.sessions / f"{stem}.latency.json").exists())
+        self.assertIsNone(self.client.get(f"/api/calls/{stem}").json()["call"]["latency"])
+
+    def test_latency_with_only_first_audio_and_empty_turns(self):
+        stem = "2026-10-20-090000"
+        self.add_call(stem, "2026-10-20 09:00")
+        self.client.post(f"/api/calls/{stem}/latency", json={"turns_ms": [], "first_audio_ms": 1800})
+
+        self.assertEqual(history.read_latency(stem), {"median_ms": None, "p90_ms": None, "turns": 0, "first_audio_ms": 1800})
 
     def test_bad_stem_is_400_and_unknown_stem_is_404_not_the_spa_page(self):
         self.assertEqual(self.client.get("/api/calls/not-a-stem").status_code, 400)

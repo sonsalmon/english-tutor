@@ -178,6 +178,7 @@ def format_transcript(chunks: Iterable[Chunk], meta: dict) -> str:
     mission = meta.get("mission") or "unknown"
     model = meta.get("model") or "unknown"
     voice = str(meta.get("voice") or "").strip()
+    vad = " ".join(str(meta.get("vad") or "").split())
     partner = str(meta.get("partner") or "").strip()
 
     try:
@@ -198,6 +199,7 @@ def format_transcript(chunks: Iterable[Chunk], meta: dict) -> str:
         f"# Call {started_display}",
         f"- mission: {mission}",
         f"- model: {model}",
+        *([f"- vad: {vad}"] if vad else []),
         *([f"- voice: {voice}"] if voice else []),
         *([f"- partner: {partner}"] if partner in PARTNER_IDS else []),
         f"- duration: {minutes}m {seconds}s",
