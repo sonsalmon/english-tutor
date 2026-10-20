@@ -70,7 +70,7 @@ export function Call({ setup, brief, timeLimit, onFinished }: {
   const dial = () => {
     setStartedAt(serverNow());
     setNow(Date.now());
-    void call.start(buildInstruction(setup, setup.kind === 'teachback' ? '' : brief), callMode(setup));
+    void call.start(buildInstruction(setup, brief), callMode(setup));
   };
 
   const remaining = call.liveAt ? Math.min(timeLimit, timeLimit - (now - call.liveAt) / 1000) : timeLimit;
