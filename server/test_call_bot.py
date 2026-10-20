@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -333,6 +334,33 @@ class OfferEndpointTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(tasks.tasks), 1)
         config = tasks.tasks[0].args[1]
         self.assertEqual((config.mode, config.mission), ("freetalk", "Day 1 Team Intro"))
+
+
+class PartnerConfigTest(unittest.TestCase):
+    def parse(self, **extra):
+        return parse_call_config({"system_instruction": INSTRUCTION, "mode": "smalltalk", **extra})
+
+    def test_six_ids_are_kept(self):
+        for pid in ("priya", "omar", "lukas", "carmen", "jake", "chloe"):
+            self.assertEqual(self.parse(partner=pid).partner, pid)
+
+    def test_other_values_mean_ms_park(self):
+        for value in (None, "park", "Priya", "x", 3, ["priya"]):
+            self.assertIsNone(self.parse(partner=value).partner)
+        self.assertIsNone(self.parse().partner)
+
+    def test_teachback_never_has_a_partner(self):
+        config = parse_call_config({"system_instruction": INSTRUCTION, "mode": "teachback", "partner": "omar"})
+
+        self.assertIsNone(config.partner)
+
+    def test_partner_reaches_the_saved_transcript(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"TRANSCRIPT_DIR": tmp, "AUDIO_DIR": tmp}):
+            record = CallRecord()
+            record.add_user("hello there my friend")
+            path = finish_call(record, self.parse(partner="jake"), "m")
+
+            self.assertIn("- partner: jake\n", path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

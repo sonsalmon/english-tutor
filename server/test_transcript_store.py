@@ -1,4 +1,8 @@
+import sys
 import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from transcript_store import format_transcript
 
@@ -72,6 +76,17 @@ class OrderTest(unittest.TestCase):
         )
         self.assertEqual(lines[6], "")
         self.assertEqual(lines[7], "**Me:** hi")
+
+
+class PartnerTest(unittest.TestCase):
+    def test_partner_line_follows_voice(self):
+        lines = head([("Me", "hi")], voice="Kore", partner="priya")
+
+        self.assertEqual(lines[3:5], ["- voice: Kore", "- partner: priya"])
+
+    def test_unknown_or_missing_partner_adds_no_line(self):
+        for extra in ({}, {"partner": None}, {"partner": "park"}, {"partner": "../x"}):
+            self.assertFalse(any(l.startswith("- partner") for l in head([("Me", "hi")], **extra)))
 
 
 if __name__ == "__main__":

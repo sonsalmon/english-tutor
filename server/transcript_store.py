@@ -28,6 +28,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
 
+from server.partner_memory import PARTNER_IDS
+
 logger = logging.getLogger(__name__)
 
 Chunk = Tuple[str, str]
@@ -176,6 +178,7 @@ def format_transcript(chunks: Iterable[Chunk], meta: dict) -> str:
     mission = meta.get("mission") or "unknown"
     model = meta.get("model") or "unknown"
     voice = str(meta.get("voice") or "").strip()
+    partner = str(meta.get("partner") or "").strip()
 
     try:
         duration_sec = int(meta.get("duration_sec") or 0)
@@ -196,6 +199,7 @@ def format_transcript(chunks: Iterable[Chunk], meta: dict) -> str:
         f"- mission: {mission}",
         f"- model: {model}",
         *([f"- voice: {voice}"] if voice else []),
+        *([f"- partner: {partner}"] if partner in PARTNER_IDS else []),
         f"- duration: {minutes}m {seconds}s",
         f"- completed: {completed}",
         f"- coach: {coach_count}",

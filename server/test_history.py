@@ -58,6 +58,7 @@ class HistoryTest(HistoryDirs):
                 "duration_sec": 150,
                 "completed": False,
                 "voice": None,
+                "partner": None,
                 "has_tutoring": False,
                 "kind": "call",
                 "cost": {"live": None, "tutoring": None, "total": None},
@@ -262,6 +263,28 @@ class CallsHttpTest(HistoryDirs):
     def test_bad_stem_is_400_and_unknown_stem_is_404_not_the_spa_page(self):
         self.assertEqual(self.client.get("/api/calls/not-a-stem").status_code, 400)
         self.assertEqual(self.client.get("/api/calls/2026-01-01-000000").status_code, 404)
+
+
+class PartnerHistoryTest(HistoryDirs):
+    def write(self, stem, extra_line):
+        text = transcript("2026-10-20 09:00").replace("- model: test-model\n", "- model: test-model\n" + extra_line)
+        (self.sessions / f"{stem}.md").write_text(text, encoding="utf-8")
+
+    def test_list_and_detail_carry_partner_or_null(self):
+        self.write("2026-10-20-090000", "- voice: Kore\n- partner: priya\n")
+        self.write("2026-10-20-100000", "- voice: Puck\n")
+        self.write("2026-10-20-110000", "- partner: park\n")
+
+        by_stem = {c["stem"]: c["partner"] for c in history.list_calls()}
+        self.assertEqual(by_stem, {"2026-10-20-090000": "priya", "2026-10-20-100000": None, "2026-10-20-110000": None})
+        self.assertEqual(history.load_call("2026-10-20-090000")["call"]["partner"], "priya")
+
+    def test_partner_of_and_turns(self):
+        self.write("2026-10-20-090000", "- partner: omar\n")
+        path = self.sessions / "2026-10-20-090000.md"
+
+        self.assertEqual(history.partner_of(path), "omar")
+        self.assertEqual(history.transcript_turns(path), [("me", "Hello")])
 
 
 if __name__ == "__main__":

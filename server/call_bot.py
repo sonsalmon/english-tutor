@@ -18,6 +18,7 @@ from google.genai.types import EndSensitivity, StartSensitivity
 
 from server.config_utils import get_project_id
 from server.lesson import session_time_limit_from_env
+from server.partner_memory import PARTNER_IDS
 from server.pricing import UsageTotals, estimate_cost
 from server.transcript_store import (
     get_transcript_dir,
@@ -142,6 +143,7 @@ class CallConfig:
     system_instruction: str
     mode: str
     voice: str = DEFAULT_VOICE
+    partner: Optional[str] = None
 
     @property
     def mission(self) -> Optional[str]:
@@ -179,7 +181,10 @@ def parse_call_config(data: Any) -> CallConfig:
     voice = data.get("voice") or DEFAULT_VOICE
     if not isinstance(voice, str) or not voice.isalpha():
         raise ValueError("voice 이름이 올바르지 않습니다.")
-    return CallConfig(system_instruction=instruction, mode=mode, voice=voice)
+    partner = data.get("partner")
+    if partner not in PARTNER_IDS or mode == "teachback":
+        partner = None
+    return CallConfig(system_instruction=instruction, mode=mode, voice=voice, partner=partner)
 
 
 @dataclass
@@ -257,6 +262,7 @@ def finish_call(record: CallRecord, config: CallConfig, model: str, ended_at: Op
                 "duration_sec": max(0, int(ended_at - record.started_at - record.paused_sec)),
                 "model": model,
                 "voice": config.voice,
+                "partner": config.partner,
                 "mission": config.mission,
                 "completed": record.completed,
                 "cost_usd": None if record.usage.is_empty() else estimate_cost(model, record.usage),

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from server.call_bot import NOISE_MARK_RE
+from server.partner_memory import PARTNER_IDS
 from server.pricing import combine_cost
 from server.transcript_store import get_teachback_dir, get_transcript_dir, get_tutoring_dir
 
@@ -25,8 +26,9 @@ _MISSION_RE = re.compile(r"- mission: (.*)")
 _COMPLETED_RE = re.compile(r"- completed: (yes|no)\s*", re.ASCII)
 _COST_RE = re.compile(r"- cost_usd: (\d+(?:\.\d+)?)\s*", re.ASCII)
 _VOICE_RE = re.compile(r"- voice: (\S+)\s*")
+_PARTNER_RE = re.compile(r"- partner: (\S+)\s*")
 _TURN_RE = re.compile(r"\*\*(Me|Partner):\*\*(?: (.*))?")
-_HEADER_LINES = 10
+_HEADER_LINES = 11
 # 클라이언트가 가벼운 대화 통화의 지시문에 넣는 미션 이름. 전문 머리글의 mission이 이 값이면 kind는 smalltalk.
 SMALLTALK_MISSION = "Small Talk"
 
@@ -52,7 +54,7 @@ def _parse_call(path: Path) -> Optional[Dict[str, Any]]:
     except ValueError:
         return None
 
-    duration = mission = completed = live_cost = voice = None
+    duration = mission = completed = live_cost = voice = partner = None
     for line in head[1:]:
         if duration is None and (m := _DURATION_RE.fullmatch(line)):
             duration = int(m.group(1)) * 60 + int(m.group(2))
@@ -64,6 +66,8 @@ def _parse_call(path: Path) -> Optional[Dict[str, Any]]:
             live_cost = float(m.group(1))
         elif voice is None and (m := _VOICE_RE.fullmatch(line)):
             voice = m.group(1)
+        elif partner is None and (m := _PARTNER_RE.fullmatch(line)):
+            partner = m.group(1) if m.group(1) in PARTNER_IDS else None
     if duration is None:
         return None
 
@@ -77,10 +81,22 @@ def _parse_call(path: Path) -> Optional[Dict[str, Any]]:
         "duration_sec": duration,
         "completed": bool(completed),
         "voice": voice,
+        "partner": partner,
         "has_tutoring": tutoring,
         "kind": "teachback" if teachback else "smalltalk" if mission == SMALLTALK_MISSION else "call",
         "cost": combine_cost(live_cost, None),
     }
+
+
+def partner_of(path: Path) -> Optional[str]:
+    """전문 머리글의 친구 id(없으면 None)."""
+    call = _parse_call(Path(path))
+    return call["partner"] if call else None
+
+
+def transcript_turns(path: Path) -> List[tuple]:
+    """전문 본문을 (speaker, text) 턴 목록으로. speaker는 me/partner."""
+    return [(t["speaker"], t["text"]) for t in _read_transcript(Path(path))]
 
 
 def live_cost_of(path: Path) -> Optional[float]:
