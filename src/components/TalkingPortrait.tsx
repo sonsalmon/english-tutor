@@ -3,25 +3,25 @@ import { Portrait } from './ui';
 
 /*
  * Mouth geometry, measured on public/ms-park.webp (512x512).
- * The overlay box covers x 220..298, y 232..280 of the image, so it scales with the portrait size:
- * left 42.97%, top 45.31%, width 15.23%, height 9.38%. Path coordinates stay in image pixels.
- * Mouth corners (228,242) and (290,242); closed smile line y=244 at x=259; teeth bottom y=253; lower lip bottom y=262.
+ * The overlay box covers x 214..294, y 196..256 of the image, so it scales with the portrait size:
+ * left 41.80%, top 38.28%, width 15.63%, height 11.72%. Path coordinates stay in image pixels.
+ * Mouth corners (221,213) and (288,213); closed smile line y=221 at x=254; teeth bottom y=228; lower lip bottom y=232.
  */
-const BOX = { x: 220, y: 232, w: 78, h: 48 };
+const BOX = { x: 214, y: 196, w: 80, h: 60 };
 const PCT = {
   left: `${(BOX.x / 512) * 100}%`,
   top: `${(BOX.y / 512) * 100}%`,
   width: `${(BOX.w / 512) * 100}%`,
   height: `${(BOX.h / 512) * 100}%`,
 };
-const LEFT = 228;
-const RIGHT = 290;
-const CORNER_Y = 242;
+const LEFT = 221;
+const RIGHT = 288;
+const CORNER_Y = 213;
 const MID_X = (LEFT + RIGHT) / 2;
-const UPPER_MID_Y = 244;
-const TEETH_BOTTOM_Y = 253;
-const LIP_BOTTOM_Y = 262;
-const MAX_DROP = 17;
+const UPPER_MID_Y = 221;
+const TEETH_BOTTOM_Y = 228;
+const LIP_BOTTOM_Y = 232;
+const MAX_DROP = 8;
 
 // Colors sampled from the illustration.
 const LIP = '#DD8870';
