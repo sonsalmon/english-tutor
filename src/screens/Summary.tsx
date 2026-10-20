@@ -2,6 +2,8 @@ import { Check, LoaderCircle, Phone, RotateCcw } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { ClipList } from '../components/ClipList';
 import { CostLine, TutoringBlocks } from '../components/TutoringBlocks';
+import { CultureNotes } from '../components/CultureNotes';
+import { ThinkingGaps } from '../components/ThinkingGaps';
 import { ReplayButton, TranscriptView } from '../components/TranscriptView';
 import { WordText } from '../components/WordText';
 import { CallButton, QuietButton, Screen } from '../components/ui';
@@ -76,6 +78,7 @@ function CallExtras({ stem }: { stem: string }) {
 
   return (
     <>
+      <CultureNotes stem={stem} />
       {detail && <TranscriptView turns={detail.transcript} verbatim={detail.verbatim} voice={detail.call.voice} />}
       <ClipList stem={stem} />
       <ReplayButton stem={stem} />
@@ -187,6 +190,7 @@ export function Summary({ call, onRetry }: { call: FinishedCall; onRetry: (retry
       {tutoring && (
         <ReadingWords words={call.practiceWords} used={tutoring.practice_used ?? []} saved={tutoring.readgloss?.saved ?? 0} />
       )}
+      {tutoring && <ThinkingGaps gaps={tutoring.thinking_gaps} />}
       {stem && <CallExtras stem={stem} />}
 
       <div className="mt-auto space-y-3 pt-10 lg:flex lg:space-y-0 lg:gap-3">

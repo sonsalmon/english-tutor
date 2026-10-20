@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { List, RowLink, Screen, TopBar, useWide } from '../components/ui';
 import { ClipList } from '../components/ClipList';
+import { CultureNotes } from '../components/CultureNotes';
+import { ThinkingGaps } from '../components/ThinkingGaps';
 import { CostLine, TutoringBlocks } from '../components/TutoringBlocks';
 import { ReplayButton, TranscriptView } from '../components/TranscriptView';
 import { WordText } from '../components/WordText';
@@ -166,10 +168,14 @@ function CallDetailBody({ stem }: { stem: string }) {
             <CostLine cost={data.call.cost ?? data.tutoring?.cost} className="mt-1" />
           </header>
           {data.tutoring ? (
-            <TutoringBlocks tutoring={data.tutoring} isTeachback={data.call.kind === 'teachback'} />
+            <>
+              <TutoringBlocks tutoring={data.tutoring} isTeachback={data.call.kind === 'teachback'} />
+              <ThinkingGaps gaps={data.tutoring.thinking_gaps} />
+            </>
           ) : (
             <p className="mt-8 leading-relaxed text-ink-soft">이 통화는 저장된 요약이 없어요.</p>
           )}
+          <CultureNotes stem={stem} />
           <TranscriptView turns={data.transcript} verbatim={data.verbatim} voice={data.call.voice} />
           <ClipList stem={stem} />
           <ReplayButton stem={stem} />

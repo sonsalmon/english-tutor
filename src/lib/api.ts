@@ -20,6 +20,8 @@ export type Lesson = {
 };
 // 예상 비용(USD). 모르는 쪽은 null, total은 아는 쪽의 합이다.
 export type Cost = { live: number | null; tutoring: number | null; total: number | null };
+// 한국어 표현과 영어 표현의 생각 방식 차이. word=단어를 몰랐음, framing=말하는 틀이 다름.
+export type ThinkingGap = { korean: string; english: string; kind: 'word' | 'framing'; note: string };
 export type Tutoring = {
   corrections: { said: string; better: string; why: string }[];
   good: { said: string; note: string }[];
@@ -30,6 +32,7 @@ export type Tutoring = {
   practice_used?: string[];
   readgloss?: { saved: number } | null;
   cost?: Cost | null;
+  thinking_gaps?: ThinkingGap[];
   // 서버가 이 분석에 쓴 통화 기록의 stem. 옛 응답에는 없다.
   stem?: string | null;
 };
@@ -62,6 +65,11 @@ export type Clip = {
 };
 export type ClipStatus = 'ok' | 'no_key' | 'no_query' | 'error';
 export type ClipResult = { query: string; clips: Clip[]; status: ClipStatus };
+
+export type CultureBlend = { id: string; question: string; korea: string[]; us: string[] };
+export type CultureBank = { country: 'US' | 'KR'; topic: string | null; text: string };
+export type CultureStatus = 'ok' | 'no_db' | 'no_terms';
+export type CultureResult = { status: CultureStatus; blend: CultureBlend[]; bank: CultureBank[]; attribution: string };
 
 export function formatUsd(n: number): string {
   return `$${n.toFixed(3)}`;
@@ -187,6 +195,9 @@ function toTutoring(data: Record<string, unknown>): Tutoring {
     practice_used: list(data.practice_used),
     readgloss: (data.readgloss as Tutoring['readgloss']) ?? null,
     cost: (data.cost as Cost | null | undefined) ?? null,
+    thinking_gaps: list(data.thinking_gaps).filter(
+      (g): g is ThinkingGap => !!g && (g.kind === 'word' || g.kind === 'framing') && typeof g.korean === 'string' && typeof g.english === 'string',
+    ),
     stem: typeof data.stem === 'string' && data.stem ? data.stem : null,
   };
 }
@@ -263,5 +274,19 @@ export async function getCallClips(stem: string, signal?: AbortSignal): Promise<
     query: typeof data?.query === 'string' ? data.query : '',
     clips: Array.isArray(data?.clips) ? data.clips : [],
     status,
+  };
+}
+
+// 문화 DB가 없거나 검색어가 없으면 서버가 200으로 status만 다르게 준다. 화면은 ok일 때만 보여 준다.
+export async function getCallCulture(stem: string, signal?: AbortSignal): Promise<CultureResult> {
+  const res = await fetch(`/api/calls/${encodeURIComponent(stem)}/culture`, { signal });
+  if (!res.ok) throw new Error(await errorMessage(res, '한국·미국 차이를 불러오지 못했어요.'));
+  const data = await res.json();
+  const status: CultureStatus = data?.status === 'ok' ? 'ok' : data?.status === 'no_terms' ? 'no_terms' : 'no_db';
+  return {
+    status,
+    blend: Array.isArray(data?.blend) ? data.blend : [],
+    bank: Array.isArray(data?.bank) ? data.bank : [],
+    attribution: typeof data?.attribution === 'string' ? data.attribution : '',
   };
 }
