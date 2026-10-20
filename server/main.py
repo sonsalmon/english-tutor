@@ -36,6 +36,7 @@ from server.lesson import (
     LessonError,
     get_lesson,
     lesson_text,
+    session_time_limit_from_env,
 )
 from server.learner_profile import ProfileError, load_profile, profile_brief, update_profile
 from server.tutor import (
@@ -87,8 +88,14 @@ if os.path.exists("dist/audio-processors"):
     app.mount("/audio-processors", StaticFiles(directory="dist/audio-processors"), name="audio-processors")
 @app.get("/api/status")
 async def get_status():
-    """혼자 쓰는 로컬 앱이라 배포용 설정(reCAPTCHA·Redis)이 없다. 화면 경고를 띄우지 않는다."""
-    return {"mode": "local", "missing": []}
+    """화면이 통화 제한 시간(초)을 미리 알고 남은 시간을 보여 주는 데 쓴다."""
+    return {
+        "mode": "local",
+        "time_limits": {
+            "call": session_time_limit_from_env(None),
+            "teachback": session_time_limit_from_env("teachback"),
+        },
+    }
 
 @app.get("/api/learner-profile")
 async def learner_profile_endpoint():
@@ -98,7 +105,14 @@ async def learner_profile_endpoint():
     except ProfileError as e:
         logger.error(f"Learner profile unreadable: {e}")
         card = None
-    return {"brief": profile_brief(card), "updated": card["updated"] if card else None}
+    return {
+        "brief": profile_brief(card),
+        "updated": card["updated"] if card else None,
+        "weak_points": [
+            {"pattern": p["pattern"], "example": p["example"]} for p in (card["weak_points"][:3] if card else [])
+        ],
+        "next_goal": card["next_goal"] if card else "",
+    }
 
 
 # 백그라운드 카드 갱신 작업. 참조를 안 잡으면 끝나기 전에 수거될 수 있다.
@@ -241,8 +255,17 @@ async def tutor_endpoint(request: Request):
     return JSONResponse(data)
 
 @app.post("/api/offer")
-async def offer(request: SmallWebRTCRequest, background_tasks: BackgroundTasks):
-    """브라우저의 WebRTC offer를 받아 answer를 돌려주고, 새 연결이면 통화 봇을 띄운다."""
+async def offer(raw: Request, background_tasks: BackgroundTasks):
+    """브라우저의 WebRTC offer를 받아 answer를 돌려주고, 새 연결이면 통화 봇을 띄운다.
+
+    브라우저 SDK는 통화 설정을 `requestData`(camelCase)로 보낸다. FastAPI 자동 해석은 이 이름을
+    못 읽으므로 본문을 직접 읽어 Pipecat의 `from_dict`(두 이름 모두 허용)로 만든다.
+    """
+    try:
+        body = await raw.json()
+        request = SmallWebRTCRequest.from_dict(body)
+    except Exception:
+        raise HTTPException(status_code=400, detail="WebRTC offer 형식이 아닙니다.")
     try:
         config = parse_call_config(request.request_data) if not request.pc_id else None
     except ValueError as e:

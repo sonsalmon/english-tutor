@@ -57,6 +57,21 @@ class CallRecordTest(unittest.TestCase):
 
         self.assertEqual(record.chunks, [("Me", "I started my day.")])
 
+    def test_gemini_noise_mark_is_removed_from_learner_turn(self):
+        record = CallRecord()
+        record.add_user("{} hi, I'm S park")
+        record.add_user("{ }")
+
+        self.assertEqual(record.chunks, [("Me", "hi, I'm S park")])
+
+    def test_learner_must_say_three_words_before_mission_can_end(self):
+        record = CallRecord(chunks=[("Partner", "Hello there, how are you today?"), ("Me", "Hi")])
+        self.assertFalse(record.learner_has_spoken())
+
+        record.add_user("I am fine")
+
+        self.assertTrue(record.learner_has_spoken())
+
     def test_mic_audio_is_capped(self):
         record = CallRecord()
         with mock.patch.object(call_bot, "MIC_MAX_BYTES", 10):
@@ -93,20 +108,48 @@ class FinishCallTest(unittest.TestCase):
         save_md.assert_called_once()
 
 
+class FakeRequest:
+    def __init__(self, body):
+        self._body = body
+
+    async def json(self):
+        return self._body
+
+
 class OfferEndpointTest(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_config_is_rejected_before_connecting(self):
         from fastapi import BackgroundTasks, HTTPException
-        from pipecat.transports.smallwebrtc.request_handler import SmallWebRTCRequest
 
         from server import main
 
-        request = SmallWebRTCRequest(sdp="v=0", type="offer", request_data={"mode": "mission"})
         with mock.patch.object(main._webrtc, "handle_web_request") as handle:
             with self.assertRaises(HTTPException) as ctx:
-                await main.offer(request, BackgroundTasks())
+                await main.offer(FakeRequest({"sdp": "v=0", "type": "offer", "requestData": {"mode": "mission"}}), BackgroundTasks())
 
         self.assertEqual(ctx.exception.status_code, 400)
         handle.assert_not_called()
+
+    async def test_browser_camel_case_request_data_starts_the_bot(self):
+        from fastapi import BackgroundTasks
+
+        from server import main
+
+        tasks = BackgroundTasks()
+
+        async def fake_handle(request, webrtc_connection_callback):
+            await webrtc_connection_callback("connection")
+            return {"sdp": "answer", "type": "answer", "pc_id": "pc-1"}
+
+        with mock.patch.object(main._webrtc, "handle_web_request", side_effect=fake_handle):
+            answer = await main.offer(
+                FakeRequest({"sdp": "v=0", "type": "offer", "requestData": {"system_instruction": INSTRUCTION, "mode": "freetalk"}}),
+                tasks,
+            )
+
+        self.assertEqual(answer["pc_id"], "pc-1")
+        self.assertEqual(len(tasks.tasks), 1)
+        config = tasks.tasks[0].args[1]
+        self.assertEqual((config.mode, config.mission), ("freetalk", "Day 1 Team Intro"))
 
 
 if __name__ == "__main__":

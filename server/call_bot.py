@@ -35,6 +35,13 @@ DEFAULT_VOICE = "Puck"
 OPENER_TEXT = "[The learner just joined the call. Start as Ms. Park.]"
 TURN_MODE_ENV = "TURN_MODE"
 MISSION_RE = re.compile(r'trying to:\s*"([^"]+)"')
+MIN_LEARNER_WORDS = 3
+# Gemini 입력 받아쓰기가 잡음을 `{}`로 내보낼 때가 있다(2026-10-20 브라우저 시험: "{} hi, I'm ...").
+NOISE_MARK_RE = re.compile(r"\{\s*\}")
+NOT_YET_RESULT = {
+    "status": "ignored",
+    "reason": "The learner has not practiced yet in this call. Do not end the mission. Keep the conversation going.",
+}
 
 COMPLETE_MISSION_DESCRIPTION = (
     "Call this tool when the user has successfully completed the mission objective. "
@@ -108,12 +115,17 @@ class CallRecord:
     completed: bool = False
 
     def add_user(self, text: str) -> None:
-        if text and text.strip():
-            self.chunks.append(("Me", text.strip()))
+        clean = " ".join(NOISE_MARK_RE.sub(" ", text or "").split())
+        if clean:
+            self.chunks.append(("Me", clean))
 
     def add_partner(self, text: str) -> None:
         if text and text.strip():
             self.chunks.append(("Partner", text.strip()))
+
+    def learner_has_spoken(self) -> bool:
+        # 학습자가 실제로 말하기 전에 모델이 미션을 끝내면 학습자 카드 예문을 이번 발화처럼 인용한 적이 있다(2026-10-20 브라우저 시험).
+        return sum(len(text.split()) for speaker, text in self.chunks if speaker == "Me") >= MIN_LEARNER_WORDS
 
     def add_mic(self, pcm: bytes) -> None:
         room = MIC_MAX_BYTES - len(self.mic_pcm)
@@ -250,6 +262,10 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
     await runner.add_workers(worker)
 
     async def complete_mission(params: FunctionCallParams):
+        if not record.learner_has_spoken():
+            logger.info("complete_mission ignored: the learner has not spoken yet")
+            await params.result_callback(NOT_YET_RESULT)
+            return
         record.completed = True
         await worker.queue_frames([RTVIServerMessageFrame(data={"type": "mission_complete", "args": params.arguments})])
         await params.result_callback({"status": "recorded"})
