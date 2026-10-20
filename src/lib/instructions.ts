@@ -166,7 +166,9 @@ export function freeTalkInstruction(topic: string, brief: string, retry?: Retry 
 <<<
 ${clean}
 >>>`
-    : `The learner did not give a topic. Ask what they would like to talk about.`;
+    : brief
+      ? `The learner did not give a topic. Choose ONE everyday or workplace topic that naturally makes the learner practice the weak point you name in the opening, and start with a question about it.`
+      : `The learner did not give a topic. Ask what they would like to talk about.`;
   return `${personaPrefix(brief)}
 
 FREE TALK MODE (no role-play)

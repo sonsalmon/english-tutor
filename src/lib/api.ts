@@ -21,6 +21,14 @@ export type Tutoring = {
 
 const EMPTY_PROFILE: LearnerProfile = { brief: '', updated: null, weak_points: [], next_goal: '' };
 
+// 폰 시계가 Mac과 다르면 튜터링이 "이번 통화 전문"을 못 찾는다(서버는 파일 시각과 started_at을 비교).
+// 서버 응답의 Date 헤더로 차이를 재서 통화 시각을 서버 시계 기준으로 맞춘다.
+let clockOffsetMs = 0;
+
+export function serverNow(): number {
+  return Date.now() + clockOffsetMs;
+}
+
 async function errorMessage(res: Response, fallback: string): Promise<string> {
   try {
     const body = await res.json();
@@ -43,7 +51,10 @@ export async function getLearnerProfile(): Promise<LearnerProfile> {
 
 export async function getTimeLimits(): Promise<TimeLimits> {
   try {
+    const sentAt = Date.now();
     const res = await fetch('/api/status');
+    const serverDate = Date.parse(res.headers.get('date') || '');
+    if (!Number.isNaN(serverDate)) clockOffsetMs = serverDate - (sentAt + Date.now()) / 2;
     const data = await res.json();
     return { call: Number(data?.time_limits?.call) || 600, teachback: Number(data?.time_limits?.teachback) || 900 };
   } catch {

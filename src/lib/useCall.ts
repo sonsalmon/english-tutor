@@ -32,6 +32,8 @@ export function useCall() {
   const clientRef = useRef<PipecatClient | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const reasonRef = useRef<EndReason | null>(null);
+  const liveRef = useRef(false);
+  const [liveAt, setLiveAt] = useState<number | null>(null);
   const lineId = useRef(0);
 
   const addChunk = useCallback((who: Speaker, chunk: string) => {
@@ -46,16 +48,29 @@ export function useCall() {
     });
   }, []);
 
-  const finish = useCallback((reason: EndReason) => {
-    if (!reasonRef.current) reasonRef.current = reason;
-    setEndReason(reasonRef.current);
-    setStatus('ended');
-    setBotSpeaking(false);
+  const release = useCallback(() => {
     const client = clientRef.current;
     clientRef.current = null;
     if (client) void client.disconnect();
     if (audioRef.current) audioRef.current.srcObject = null;
+    setBotSpeaking(false);
   }, []);
+
+  const finish = useCallback(
+    (reason: EndReason) => {
+      release();
+      if (!liveRef.current) {
+        // Ms. Park이 준비되기 전에 끊긴 연결은 통화가 아니다. 요약 대신 다시 걸기를 보여 준다.
+        setStatus('error');
+        setError('연결이 끊겼어요. 다시 걸어 주세요.');
+        return;
+      }
+      if (!reasonRef.current) reasonRef.current = reason;
+      setEndReason(reasonRef.current);
+      setStatus('ended');
+    },
+    [release],
+  );
 
   const start = useCallback(
     async (systemInstruction: string, mode: CallMode) => {
@@ -64,7 +79,9 @@ export function useCall() {
       setLines([]);
       setResult(null);
       setEndReason(null);
+      setLiveAt(null);
       reasonRef.current = null;
+      liveRef.current = false;
 
       if (!audioRef.current) {
         audioRef.current = new Audio();
@@ -78,7 +95,11 @@ export function useCall() {
         enableMic: true,
         enableCam: false,
         callbacks: {
-          onBotReady: () => setStatus('live'),
+          onBotReady: () => {
+            liveRef.current = true;
+            setLiveAt(Date.now());
+            setStatus('live');
+          },
           onTrackStarted: (track, participant) => {
             if (track.kind === 'audio' && participant && !participant.local && audioRef.current) {
               audioRef.current.srcObject = new MediaStream([track]);
@@ -124,12 +145,12 @@ export function useCall() {
           },
         });
       } catch (e) {
-        clientRef.current = null;
+        release();
         setStatus('error');
         setError(e instanceof Error ? e.message : '연결하지 못했어요.');
       }
     },
-    [addChunk, finish],
+    [addChunk, finish, release],
   );
 
   const hangUp = useCallback(() => finish('hangup'), [finish]);
@@ -151,5 +172,5 @@ export function useCall() {
     [],
   );
 
-  return { status, lines, botSpeaking, botLevel, userLevel, micOn, error, result, endReason, start, hangUp, toggleMic };
+  return { status, lines, botSpeaking, botLevel, userLevel, micOn, error, result, endReason, liveAt, start, hangUp, toggleMic };
 }

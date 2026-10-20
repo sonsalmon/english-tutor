@@ -1,6 +1,7 @@
 import { Captions, CaptionsOff, Mic, MicOff, Phone, PhoneOff } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Portrait, QuietButton } from '../components/ui';
+import { serverNow } from '../lib/api';
 import { go } from '../lib/router';
 import { buildInstruction, callMode, callTitle, type CallSetup, type FinishedCall } from '../lib/setup';
 import { useCall } from '../lib/useCall';
@@ -58,7 +59,7 @@ export function Call({ setup, brief, timeLimit, onFinished }: {
   useEffect(() => {
     if (call.status === 'ended' && startedAt && !reported.current) {
       reported.current = true;
-      onFinished({ setup, startedAt, endedAt: Date.now(), result: call.result, endReason: call.endReason });
+      onFinished({ setup, startedAt, endedAt: serverNow(), result: call.result, endReason: call.endReason });
     }
   }, [call.status, call.result, call.endReason, onFinished, setup, startedAt]);
 
@@ -67,12 +68,12 @@ export function Call({ setup, brief, timeLimit, onFinished }: {
   }, [call.lines]);
 
   const dial = () => {
-    setStartedAt(Date.now());
+    setStartedAt(serverNow());
     setNow(Date.now());
     void call.start(buildInstruction(setup, setup.kind === 'teachback' ? '' : brief), callMode(setup));
   };
 
-  const remaining = startedAt ? timeLimit - (now - startedAt) / 1000 : timeLimit;
+  const remaining = call.liveAt ? Math.min(timeLimit, timeLimit - (now - call.liveAt) / 1000) : timeLimit;
   const status =
     call.status === 'ready'
       ? '준비되면 통화 버튼을 누르세요'
@@ -91,7 +92,8 @@ export function Call({ setup, brief, timeLimit, onFinished }: {
       <header className="flex min-h-11 items-center justify-between gap-3">
         <p className="min-w-0 truncate font-semibold">{title}</p>
         {call.status === 'live' && (
-          <p className={`shrink-0 tabular-nums ${remaining < 60 ? 'font-semibold text-end-press' : 'text-ink-soft'}`} aria-label={`남은 시간 ${clock(remaining)}`}>
+          <p role="timer" className={`shrink-0 tabular-nums ${remaining < 60 ? 'font-semibold text-end-press' : 'text-ink-soft'}`}>
+            <span className="sr-only">남은 시간 </span>
             {clock(remaining)}
           </p>
         )}
