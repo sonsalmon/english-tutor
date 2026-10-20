@@ -354,6 +354,20 @@ class PartnerConfigTest(unittest.TestCase):
 
         self.assertIsNone(config.partner)
 
+    def test_only_smalltalk_and_freetalk_keep_a_partner(self):
+        for mode, expected in (("smalltalk", "omar"), ("freetalk", "omar"), ("mission", None), ("teachback", None)):
+            with self.subTest(mode=mode):
+                config = parse_call_config({"system_instruction": INSTRUCTION, "mode": mode, "partner": "omar"})
+                self.assertEqual(config.partner, expected)
+
+    def test_opener_text_uses_the_partner_name(self):
+        names = {"priya": "Priya", "omar": "Omar", "lukas": "Lukas", "carmen": "Carmen", "jake": "Jake", "chloe": "Chloe"}
+        for pid, name in names.items():
+            self.assertEqual(call_bot.opener_text(pid), f"[The learner just joined the call. Start as {name}.]")
+        for value in (None, "park"):
+            self.assertEqual(call_bot.opener_text(value), call_bot.OPENER_TEXT)
+        self.assertIn("Ms. Park", call_bot.OPENER_TEXT)
+
     def test_partner_reaches_the_saved_transcript(self):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"TRANSCRIPT_DIR": tmp, "AUDIO_DIR": tmp}):
             record = CallRecord()
@@ -361,6 +375,61 @@ class PartnerConfigTest(unittest.TestCase):
             path = finish_call(record, self.parse(partner="jake"), "m")
 
             self.assertIn("- partner: jake\n", path.read_text(encoding="utf-8"))
+
+
+class PartnerMemorySchedulingTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        call_bot._PARTNER_UPDATED.clear()
+        patcher = mock.patch.object(call_bot, "update_partner_memory_sync", return_value=True)
+        self.update = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def config(self, mode="smalltalk", partner="priya"):
+        return parse_call_config({"system_instruction": INSTRUCTION, "mode": mode, "partner": partner})
+
+    def record(self, *chunks):
+        return CallRecord(chunks=list(chunks))
+
+    async def run_task(self, task):
+        if task is not None:
+            await task
+
+    async def test_partner_call_schedules_exactly_one_update_with_its_turns(self):
+        record = self.record(("Me", "I like jazz"), ("Partner", "Nice!"))
+        saved = Path("/tmp/2026-10-20-100000.md")
+
+        first = call_bot.schedule_partner_memory_update(saved, self.config(), record)
+        second = call_bot.schedule_partner_memory_update(saved, self.config(), record)
+        await self.run_task(first)
+
+        self.assertIsNone(second)
+        self.update.assert_called_once_with("priya", [("Me", "I like jazz"), ("Partner", "Nice!")])
+
+    async def test_no_update_for_ms_park_mission_or_no_learner_line(self):
+        saved = Path("/tmp/a.md")
+        talk = self.record(("Me", "hello"))
+        cases = (
+            (saved, self.config(partner=None), talk),
+            (saved, self.config(mode="mission"), talk),
+            (saved, self.config(), self.record(("Partner", "hi"))),
+            (saved, self.config(), self.record(("Me", "  "))),
+            (None, self.config(), talk),
+        )
+        for case in cases:
+            self.assertIsNone(call_bot.schedule_partner_memory_update(*case))
+        self.update.assert_not_called()
+
+    async def test_failed_update_can_be_retried(self):
+        record = self.record(("Me", "I like jazz"))
+        saved = Path("/tmp/b.md")
+        self.update.return_value = False
+        await self.run_task(call_bot.schedule_partner_memory_update(saved, self.config(), record))
+        self.update.return_value = True
+        await self.run_task(call_bot.schedule_partner_memory_update(saved, self.config(), record))
+        third = call_bot.schedule_partner_memory_update(saved, self.config(), record)
+
+        self.assertEqual(self.update.call_count, 2)
+        self.assertIsNone(third)
 
 
 if __name__ == "__main__":

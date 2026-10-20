@@ -160,14 +160,23 @@ export async function clearPartnerMemory(id: string): Promise<void> {
   if (!res.ok) throw new Error(await errorMessage(res, '기억을 지우지 못했어요.'));
 }
 
-// 기억 한 줄을 지우고 남은 기억을 돌려준다.
-export async function forgetPartnerMemoryItem(id: string, kind: PartnerMemoryKind, index: number): Promise<PartnerMemory> {
+// 화면에 보이던 항목과 서버의 항목이 달라졌을 때(서버가 409) 던진다. 화면은 기억을 다시 불러온다.
+export class MemoryChangedError extends Error {
+  constructor(message = '기억이 바뀌었어요.') {
+    super(message);
+    this.name = 'MemoryChangedError';
+  }
+}
+
+// 기억 한 줄을 지우고 남은 기억을 돌려준다. text는 화면이 보던 항목의 문장이라, 서버가 그 자리의 문장과 다르면 409로 거절한다.
+export async function forgetPartnerMemoryItem(id: string, kind: PartnerMemoryKind, index: number, text: string): Promise<PartnerMemory> {
   let res: Response;
   try {
-    res = await fetch(`/api/partners/${encodeURIComponent(id)}/memory/${kind}/${index}`, { method: 'DELETE' });
+    res = await fetch(`/api/partners/${encodeURIComponent(id)}/memory/${kind}/${index}?text=${encodeURIComponent(text)}`, { method: 'DELETE' });
   } catch {
     throw new Error('기억을 지우지 못했어요.');
   }
+  if (res.status === 409) throw new MemoryChangedError();
   if (!res.ok) throw new Error(await errorMessage(res, '기억을 지우지 못했어요.'));
   const data = await res.json();
   return {

@@ -736,16 +736,13 @@ class PartnerMemoryWiringTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         main._TUTOR_CACHE.clear()
         main._PROFILE_UPDATED.clear()
-        main._PARTNER_UPDATED.clear()
         main._READGLOSS_PUSHED.clear()
         patches = {
             "push": mock.patch.object(main, "push_tutoring", return_value=0),
             "resolve": mock.patch.object(main, "_wait_and_resolve_transcript", return_value=TRANSCRIPT),
             "run": mock.patch.object(main, "run_tutoring", side_effect=lambda path: (dict(TUTORING), True)),
             "profile": mock.patch.object(main, "_schedule_profile_update"),
-            "partner_of": mock.patch.object(main, "partner_of", return_value="priya"),
-            "turns": mock.patch.object(main, "transcript_turns", return_value=[("me", "I like jazz")]),
-            "update": mock.patch.object(main, "_update_partner_memory_sync", return_value=True),
+            "update": mock.patch.object(main.partner_memory, "update", return_value=True),
         }
         self.mocks = {name: p.start() for name, p in patches.items()}
         for p in patches.values():
@@ -755,21 +752,13 @@ class PartnerMemoryWiringTest(unittest.IsolatedAsyncioTestCase):
         while main._background_tasks:
             await asyncio.gather(*list(main._background_tasks))
 
-    async def test_partner_call_schedules_one_update_from_its_transcript(self):
-        await main.tutor_endpoint(FakeRequest({}))
-        await self.drain()
-        main._TUTOR_CACHE.clear()
-        await main.tutor_endpoint(FakeRequest({}))
-        await self.drain()
-
-        self.mocks["update"].assert_called_once_with("priya", [("me", "I like jazz")])
-
-    async def test_ms_park_call_schedules_nothing(self):
-        self.mocks["partner_of"].return_value = None
+    async def test_tutor_endpoint_schedules_no_partner_update(self):
+        # 기억 갱신은 통화가 끝날 때(call_bot.finish_call 뒤) 걸리고 /api/tutor는 걸지 않는다.
         await main.tutor_endpoint(FakeRequest({}))
         await self.drain()
 
         self.mocks["update"].assert_not_called()
+        self.assertFalse(hasattr(main, "_schedule_partner_memory_update"))
 
     async def test_teachback_schedules_nothing(self):
         result = {"corrections": [], "thinking_gaps": []}

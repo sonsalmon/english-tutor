@@ -58,6 +58,34 @@ class NormalizeTest(unittest.TestCase):
         self.assertEqual(out["partner"], "priya")
         self.assertEqual(out["updated"], "2026-10-20T21:00:00+0900")
 
+    def test_contact_details_are_dropped(self):
+        data = {
+            "facts": [
+                {"text": "Email is a.b+c@example.com"},
+                {"text": "Phone 010-1234-5678"},
+                {"text": "Number +82 10 1234 5678"},
+                {"text": "Blog at https://example.com/me"},
+                {"text": "Site www.foo.org"},
+                {"text": "Likes jazz since 2019"},
+                {"text": "Has 3 cats and 12 plants"},
+            ],
+            "threads": [
+                {"text": "Call 555 123 4567", "ko": "전화"},
+                {"text": "Mail me", "ko": "x@y.com"},
+                {"text": "The concert on Saturday", "ko": "토요일 공연"},
+            ],
+        }
+
+        out = pm.normalize(data, "priya", NOW)
+
+        self.assertEqual([f["text"] for f in out["facts"]], ["Likes jazz since 2019", "Has 3 cats and 12 plants"])
+        self.assertEqual([t["text"] for t in out["threads"]], ["The concert on Saturday"])
+
+    def test_memory_path_rejects_traversal(self):
+        for bad in ("../x", "priya/../omar", "park", "", "priya/"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                pm.memory_path(bad)
+
     def test_duplicates_dropped_and_non_dict_rejected(self):
         out = pm.normalize({"facts": [{"text": "Likes jazz"}, {"text": "likes JAZZ"}]}, "omar", NOW)
 
@@ -114,12 +142,52 @@ class UpdateTest(MemoryDirCase):
         self.assertFalse((self.dir / "park.json").exists())
         self.assertEqual(self.history(), [])
 
-    def test_corrupt_old_file_is_not_overwritten(self):
+    def test_corrupt_old_file_is_backed_up_and_replaced(self):
+        self.dir.mkdir(parents=True)
+        (self.dir / "omar.json").write_text("{broken", encoding="utf-8")
+        seen = []
+
+        self.assertTrue(pm.update("omar", TURNS, lambda p: seen.append(p) or json.dumps(good()), NOW))
+
+        self.assertEqual(pm.load_memory("omar")["facts"][0]["text"], "Started learning the saxophone")
+        backups = self.history()
+        self.assertEqual([b.read_text(encoding="utf-8") for b in backups], ["{broken"])
+        self.assertIn('"facts": []', seen[0])
+
+    def test_corrupt_file_stays_when_model_fails(self):
         self.dir.mkdir(parents=True)
         (self.dir / "omar.json").write_text("{broken", encoding="utf-8")
 
-        self.assertFalse(pm.update("omar", TURNS, lambda p: json.dumps(good()), NOW))
+        self.assertFalse(pm.update("omar", TURNS, lambda p: "not json", NOW))
         self.assertEqual((self.dir / "omar.json").read_text(encoding="utf-8"), "{broken")
+
+    def test_concurrent_updates_for_one_friend_do_not_overwrite_each_other(self):
+        import threading
+
+        inside = threading.Event()
+        release = threading.Event()
+        prompts = []
+
+        def slow(prompt):
+            prompts.append(prompt)
+            inside.set()
+            release.wait(5)
+            return json.dumps(good())
+
+        first = threading.Thread(target=pm.update, args=("priya", TURNS, slow, NOW))
+        first.start()
+        self.assertTrue(inside.wait(5))
+        second = threading.Thread(target=pm.update, args=("priya", TURNS, lambda p: prompts.append(p) or json.dumps(good()), NOW))
+        second.start()
+        second.join(0.3)
+        self.assertTrue(second.is_alive())  # 첫 갱신이 끝날 때까지 모델 호출도 못 한다
+        self.assertEqual(len(prompts), 1)
+        release.set()
+        first.join(5)
+        second.join(5)
+
+        self.assertEqual(len(prompts), 2)
+        self.assertIn("Started learning the saxophone", prompts[1])  # 두 번째는 첫 결과를 읽고 시작했다
 
     def test_no_temp_files_left(self):
         pm.update("chloe", TURNS, lambda p: json.dumps(good()), NOW)
@@ -188,6 +256,18 @@ class EndpointTest(MemoryDirCase):
         res = self.client.delete("/api/partners/priya/memory/facts/0")
         self.assertEqual((res.status_code, res.json()["status"], res.json()["memory"]["facts"]), (200, "ok", []))
         self.assertEqual(self.client.delete("/api/partners/omar/memory/facts/0").status_code, 404)
+
+    def test_delete_item_with_text_check(self):
+        pm.update("priya", TURNS, lambda p: json.dumps(good()), NOW)
+        url = "/api/partners/priya/memory/facts/0"
+
+        res = self.client.delete(url, params={"text": "Something else"})
+        self.assertEqual((res.status_code, res.json()), (409, {"detail": "기억이 바뀌었어요. 다시 불러와 주세요."}))
+        self.assertEqual(len(pm.load_memory("priya")["facts"]), 1)
+        self.assertEqual(self.history(), [])
+
+        res = self.client.delete(url, params={"text": "Started learning the saxophone"})
+        self.assertEqual((res.status_code, res.json()["memory"]["facts"]), (200, []))
 
     def test_corrupt_file_is_500_not_empty(self):
         self.dir.mkdir(parents=True)

@@ -8,7 +8,7 @@ import { QuietButton, useWide } from '../components/ui';
 import { WordText } from '../components/WordText';
 import { getPartnerMemory, serverNow, type PartnerMemory } from '../lib/api';
 import { go } from '../lib/router';
-import { cleanInterests, type PracticeWord } from '../lib/instructions';
+import { cleanInterests, sanitizeTopic, type PracticeWord } from '../lib/instructions';
 import { isPark, loadPartnerId, partnerById, PARK_ID, savePartnerId } from '../lib/partners';
 import { buildInstruction, callMode, callTitle, practiceWordsFor, type CallSetup, type FinishedCall } from '../lib/setup';
 import { useCall } from '../lib/useCall';
@@ -57,25 +57,27 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, timeLi
   const wide = useWide();
   const [partnerId, setPartnerId] = useState(() => (baseSetup.kind === 'teachback' ? PARK_ID : baseSetup.partner ?? loadPartnerId()));
   const partner = partnerById(partnerId);
-  const wantsMemory = baseSetup.kind !== 'teachback' && !isPark(partner);
+  const wantsMemory = (baseSetup.kind === 'smalltalk' || baseSetup.kind === 'freetalk') && !isPark(partner);
   const [loaded, setLoaded] = useState<{ id: string; state: MemoryState }>({ id: partnerId, state: { status: 'loading' } });
   const memoryState: MemoryState = loaded.id === partnerId ? loaded.state : { status: 'loading' };
   const [chosenChip, setChosenChip] = useState({ partnerId, id: NO_CHIP });
   const chips = useMemo<TopicChip[]>(() => {
-    if (baseSetup.kind !== 'smalltalk') return [];
+    const wantsChips = baseSetup.kind === 'smalltalk' || (baseSetup.kind === 'freetalk' && !sanitizeTopic(baseSetup.topic));
+    if (!wantsChips) return [];
     const threads = wantsMemory && memoryState.status === 'ready' && memoryState.memory ? memoryState.memory.threads : [];
-    return [
+    const list: TopicChip[] = [
       { id: NO_CHIP, label: '그냥 시작' },
-      ...threads.map((t, i) => ({ id: `thread:${i}`, label: t.ko, value: t.text })),
-      ...cleanInterests(interests).map((text, i) => ({ id: `interest:${i}`, label: text, value: text })),
+      ...threads.map((t) => ({ id: `thread:${t.text}`, label: t.ko, value: t.text })),
+      ...cleanInterests(interests).map((text) => ({ id: `interest:${text}`, label: text, value: text })),
     ];
-  }, [baseSetup.kind, wantsMemory, memoryState, interests]);
+    return list.filter((c, i) => list.findIndex((o) => o.id === c.id) === i);
+  }, [baseSetup, wantsMemory, memoryState, interests]);
   const chip = chips.find((c) => c.id === (chosenChip.partnerId === partnerId ? chosenChip.id : NO_CHIP)) ?? chips[0];
   const chipValue = chip?.value;
   const setup = useMemo<CallSetup>(() => {
     if (baseSetup.kind === 'teachback') return baseSetup;
-    if (baseSetup.kind === 'smalltalk') return { ...baseSetup, partner: partnerId, chip: chipValue };
-    return { ...baseSetup, partner: partnerId };
+    if (baseSetup.kind === 'mission') return { ...baseSetup, partner: partnerId };
+    return { ...baseSetup, partner: partnerId, chip: chipValue };
   }, [baseSetup, partnerId, chipValue]);
   const choosePartner = (id: string) => {
     setPartnerId(id);
@@ -178,14 +180,7 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, timeLi
     if (dialing.current) return;
     dialing.current = true;
     try {
-      let memory: PartnerMemory | null = null;
-      if (wantsMemory) {
-        try {
-          memory = await getPartnerMemory(partnerId, AbortSignal.timeout(4000));
-        } catch {
-          memory = null;
-        }
-      }
+      const memory = wantsMemory && memoryState.status === 'ready' ? memoryState.memory : null;
       setStartedAt(serverNow());
       setNow(Date.now());
       await call.start(

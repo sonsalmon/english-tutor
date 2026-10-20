@@ -41,11 +41,27 @@ KO_MAX = 30
 
 KST = timezone(timedelta(hours=9))
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}", re.ASCII)
-_LOCK = threading.Lock()
+# update()가 load -> 모델 호출 -> write 전체를 잡고 그 안에서 write_memory도 잡으므로 재진입 락이다.
+_LOCK = threading.RLock()
+
+# 연락처로 보이는 항목은 코드로 버린다: 이메일, 전화번호(숫자 7개 이상, 구분 기호 허용), URL.
+_CONTACT_RES = (
+    re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"),
+    re.compile(r"\+?\d(?:[\s().\-]*\d){6,}"),
+    re.compile(r"(?:https?://|www\.)\S+|\b[\w-]+\.(?:com|net|org|io|kr|co|app|dev)\b", re.IGNORECASE),
+)
+
+
+def _has_contact(*values: str) -> bool:
+    return any(rx.search(v) for v in values for rx in _CONTACT_RES)
 
 
 class MemoryError_(ValueError):
     """기억 파일을 읽을 수 없을 때."""
+
+
+class MemoryChanged(Exception):
+    """지우려는 항목의 글이 저장된 글과 다를 때(화면이 오래된 목록을 보고 있다)."""
 
 
 def get_memory_dir() -> Path:
@@ -95,7 +111,7 @@ def normalize(data: Any, partner_id: str, now: datetime) -> Dict[str, Any]:
         if not isinstance(item, dict):
             continue
         text = _clean(item.get("text"))
-        if not text or len(text) > FACT_MAX or text.lower() in seen:
+        if not text or len(text) > FACT_MAX or text.lower() in seen or _has_contact(text):
             continue
         seen.add(text.lower())
         facts.append({"text": text, "last_seen": _date(item.get("last_seen"), today)})
@@ -106,7 +122,7 @@ def normalize(data: Any, partner_id: str, now: datetime) -> Dict[str, Any]:
             continue
         text = _clean(item.get("text"))
         ko = _clean(item.get("ko"))
-        if not text or len(text) > THREAD_MAX or not ko or len(ko) > KO_MAX or text.lower() in seen:
+        if not text or len(text) > THREAD_MAX or not ko or len(ko) > KO_MAX or text.lower() in seen or _has_contact(text, ko):
             continue
         seen.add(text.lower())
         threads.append({"text": text, "ko": ko, "last_seen": _date(item.get("last_seen"), today)})
@@ -197,8 +213,13 @@ def clear_memory(partner_id: str, now: Optional[datetime] = None) -> None:
         path.unlink()
 
 
-def forget_item(partner_id: str, kind: str, index: int, now: Optional[datetime] = None) -> Dict[str, Any]:
-    """항목 하나를 지운다. 범위를 벗어나거나 기억이 없으면 IndexError, 종류가 틀리면 ValueError."""
+def forget_item(
+    partner_id: str, kind: str, index: int, now: Optional[datetime] = None, text: Optional[str] = None
+) -> Dict[str, Any]:
+    """항목 하나를 지운다. 범위를 벗어나거나 기억이 없으면 IndexError, 종류가 틀리면 ValueError.
+
+    text가 주어졌는데 저장된 항목의 글과 다르면 MemoryChanged(아무것도 지우지 않는다).
+    """
     if kind not in KINDS:
         raise ValueError("kind는 facts 또는 threads여야 합니다")
     now = now or datetime.now(KST)
@@ -207,6 +228,8 @@ def forget_item(partner_id: str, kind: str, index: int, now: Optional[datetime] 
         memory = load_memory(partner_id)
         if memory is None or not 0 <= index < len(memory[kind]):
             raise IndexError("해당 항목이 없습니다")
+        if text is not None and memory[kind][index].get("text") != text:
+            raise MemoryChanged("기억이 바뀌었습니다")
         del memory[kind][index]
         memory["updated"] = _stamp(now)
         _backup(path, partner_id, now)
@@ -286,7 +309,9 @@ def update(
 ) -> bool:
     """이번 통화 전문으로 친구 기억을 갱신한다. 성공하면 True.
 
-    어떤 단계가 실패해도 파일은 그대로 두고 로그만 남기고 False.
+    어떤 단계가 실패해도 파일은 그대로 두고 로그만 남기고 False. 기존 파일이 깨졌으면 로그를 남기고 빈 기억에서
+    시작한다(깨진 파일은 쓰기 직전에 history/ 로 백업된다). load -> 모델 호출 -> write를 락 하나로 묶어
+    같은 친구의 두 갱신이 서로 덮어쓰지 못하게 한다.
     """
     if not valid_partner(partner_id):
         logger.error("친구 기억 갱신 실패: 알 수 없는 친구 %r", partner_id)
@@ -296,10 +321,15 @@ def update(
         if not any(str(s).lower() == "me" and isinstance(t, str) and t.strip() for s, t in transcript_turns):
             logger.info("친구 기억 갱신 건너뜀(%s): 학습자 발화 없음", partner_id)
             return False
-        old = load_memory(partner_id)
-        raw = generate_text(build_prompt(partner_id, old, transcript_turns, _today(now)))
-        new = normalize(parse_model_json(raw), partner_id, now)
-        write_memory(partner_id, new, now)
+        with _LOCK:
+            try:
+                old = load_memory(partner_id)
+            except MemoryError_ as e:
+                logger.error("친구 기억 파일이 깨져 빈 기억에서 다시 시작(%s, 원본은 history/ 로 백업): %s", partner_id, e)
+                old = None
+            raw = generate_text(build_prompt(partner_id, old, transcript_turns, _today(now)))
+            new = normalize(parse_model_json(raw), partner_id, now)
+            write_memory(partner_id, new, now)
     except Exception as e:  # noqa: BLE001 - 기억 갱신은 부가 기능, 파일은 그대로
         logger.error("친구 기억 갱신 실패(%s, 파일은 그대로): %s", partner_id, e)
         return False

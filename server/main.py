@@ -35,7 +35,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
 from server import clipdb, culturedb, pron, tts, youtube
 from server.call_bot import parse_call_config, run_bot, smalltalk_time_limit_from_env
 from server import partner_memory
-from server.history import list_calls, live_cost_of, load_call, partner_of, transcript_turns, totals as call_totals
+from server.history import list_calls, live_cost_of, load_call, totals as call_totals
 from server.pricing import combine_cost
 from server.readgloss import (
     LEMMA_RE,
@@ -172,29 +172,6 @@ def _schedule_profile_update(tutoring: dict) -> None:
     task.add_done_callback(_background_tasks.discard)
 
 
-def _update_partner_memory_sync(partner_id: str, turns: list) -> bool:
-    return partner_memory.update(partner_id, turns, generate_text=make_generate_text())
-
-
-def _schedule_partner_memory_update(path: Path) -> None:
-    """파트너 통화면 이 통화 전문만으로 친구 기억 갱신을 뒤에서 돌린다."""
-    partner_id = partner_of(path)
-    if partner_id is None:
-        return
-
-    async def _run():
-        try:
-            turns = await asyncio.to_thread(transcript_turns, path)
-            if await asyncio.to_thread(_update_partner_memory_sync, partner_id, turns):
-                logger.info("Partner memory updated: %s", partner_id)
-        except Exception as e:
-            logger.error(f"Partner memory update failed: {e}")
-
-    task = asyncio.create_task(_run())
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
-
-
 def _wait_and_resolve_transcript(filename=None, started_at=None):
     """분석할 전사 파일을 정한다.
 
@@ -225,8 +202,6 @@ _TUTOR_CACHE_TTL_SEC = 10.0
 
 # 이미 학습자 카드 갱신을 걸어 둔 통화 전문 파일명.
 _PROFILE_UPDATED: "set[str]" = set()
-# 이미 친구 기억 갱신을 걸어 둔 통화 전문 파일명.
-_PARTNER_UPDATED: "set[str]" = set()
 # 이미 readgloss 단어장에 넣은 통화 전문 파일명.
 _READGLOSS_PUSHED: "set[str]" = set()
 
@@ -343,9 +318,6 @@ async def tutor_endpoint(request: Request):
             _schedule_profile_update(
                 {k: v for k, v in data.items() if k not in ("saved", "stem", "practice_used", "readgloss", "cost", "cost_usd")}
             )
-        if path.name not in _PARTNER_UPDATED:
-            _PARTNER_UPDATED.add(path.name)
-            _schedule_partner_memory_update(path)
     except LessonError as e:
         logger.error(f"Lesson fetch failed: {e}")
         return fail(e.status_code, str(e))
@@ -447,12 +419,14 @@ async def partner_memory_clear(partner_id: str):
 
 
 @app.delete("/api/partners/{partner_id}/memory/{kind}/{index}")
-async def partner_memory_forget(partner_id: str, kind: str, index: int):
+async def partner_memory_forget(partner_id: str, kind: str, index: int, text: Optional[str] = None):
     _partner_or_400(partner_id)
     if kind not in partner_memory.KINDS:
         raise HTTPException(status_code=400, detail="kind는 facts 또는 threads여야 합니다.")
     try:
-        memory = await asyncio.to_thread(partner_memory.forget_item, partner_id, kind, index)
+        memory = await asyncio.to_thread(partner_memory.forget_item, partner_id, kind, index, None, text)
+    except partner_memory.MemoryChanged:
+        raise HTTPException(status_code=409, detail="기억이 바뀌었어요. 다시 불러와 주세요.")
     except IndexError:
         raise HTTPException(status_code=404, detail="해당 항목이 없습니다.")
     except partner_memory.MemoryError_ as e:

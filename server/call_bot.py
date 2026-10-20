@@ -18,7 +18,8 @@ from google.genai.types import EndSensitivity, StartSensitivity
 
 from server.config_utils import get_project_id
 from server.lesson import session_time_limit_from_env
-from server.partner_memory import PARTNER_IDS
+from server import partner_memory
+from server.partner_memory import PARTNER_IDS, PARTNER_NAMES
 from server.pricing import UsageTotals, estimate_cost
 from server.transcript_store import (
     get_transcript_dir,
@@ -161,6 +162,54 @@ class CallConfig:
         return session_time_limit_from_env("teachback" if self.mode == "teachback" else None)
 
 
+PARTNER_MEMORY_MODES = ("smalltalk", "freetalk")
+
+
+def opener_text(partner: Optional[str]) -> str:
+    """통화 시작 때 모델에 보내는 첫 사용자 메시지. 친구 통화면 그 친구 이름으로 시작하게 한다."""
+    name = PARTNER_NAMES.get(partner or "", "Ms. Park")
+    return f"[The learner just joined the call. Start as {name}.]"
+
+
+# 이미 친구 기억 갱신을 걸어 둔 통화 전문 파일명(통화당 한 번, 실패하면 다시 걸 수 있게 뺀다).
+_PARTNER_UPDATED: "set[str]" = set()
+_background_tasks: "set[asyncio.Task]" = set()
+
+
+def update_partner_memory_sync(partner_id: str, turns: List[Tuple[str, str]]) -> bool:
+    from server.tutor import make_generate_text
+
+    return partner_memory.update(partner_id, turns, generate_text=make_generate_text())
+
+
+def schedule_partner_memory_update(saved: Any, config: "CallConfig", record: "CallRecord") -> Optional[asyncio.Task]:
+    """저장된 통화가 친구 통화이고 학습자 발화가 있으면 이 통화의 턴만으로 기억 갱신을 뒤에서 돌린다. 걸지 않으면 None."""
+    if not config.partner or saved is None:
+        return None
+    turns = list(record.chunks)
+    if not any(speaker == "Me" and text.strip() for speaker, text in turns):
+        return None
+    key = getattr(saved, "name", str(saved))
+    if key in _PARTNER_UPDATED:
+        return None
+    _PARTNER_UPDATED.add(key)
+    partner_id = config.partner
+
+    async def _run():
+        try:
+            if await asyncio.to_thread(update_partner_memory_sync, partner_id, turns):
+                logger.info("Partner memory updated: %s", partner_id)
+                return
+        except Exception as e:  # noqa: BLE001
+            logger.error("Partner memory update failed: %s", e)
+        _PARTNER_UPDATED.discard(key)  # 실패: 나중에 다시 걸 수 있다
+
+    task = asyncio.create_task(_run())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
 def mission_title(instruction: str) -> Optional[str]:
     match = MISSION_RE.search(instruction or "")
     return match.group(1) if match else None
@@ -182,7 +231,8 @@ def parse_call_config(data: Any) -> CallConfig:
     if not isinstance(voice, str) or not voice.isalpha():
         raise ValueError("voice 이름이 올바르지 않습니다.")
     partner = data.get("partner")
-    if partner not in PARTNER_IDS or mode == "teachback":
+    # 기억은 수다·자유 대화만 쓴다: 미션 역할극 발화는 학습자의 실제 사실이 아니다.
+    if partner not in PARTNER_IDS or mode not in PARTNER_MEMORY_MODES:
         partner = None
     return CallConfig(system_instruction=instruction, mode=mode, voice=voice, partner=partner)
 
@@ -400,7 +450,7 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
 
     @user_aggregator.event_handler("on_user_turn_message_added")
     async def on_user_message(aggregator, message):
-        if message.content != OPENER_TEXT:
+        if message.content not in (OPENER_TEXT, opener_text(config.partner)):
             record.add_user(message.content)
 
     @assistant_aggregator.event_handler("on_assistant_turn_stopped")
@@ -461,7 +511,7 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
         recording = True
         limiter = asyncio.create_task(end_at_time_limit())
         if config.opener:
-            context.add_message({"role": "user", "content": OPENER_TEXT})
+            context.add_message({"role": "user", "content": opener_text(config.partner)})
             await worker.queue_frames([LLMRunFrame()])
 
     @transport.event_handler("on_client_disconnected")
@@ -478,3 +528,4 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
         record.paused_sec = clock.paused_total()
         saved = await asyncio.to_thread(finish_call, record, config, model)
         logger.info("Call finished; transcript saved: %s", saved)
+        schedule_partner_memory_update(saved, config, record)
