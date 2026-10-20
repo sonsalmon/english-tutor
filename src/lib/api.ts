@@ -9,7 +9,7 @@ export type LearnerProfile = {
   practice_words: PracticeWord[];
   load_failed?: boolean;
 };
-export type TimeLimits = { call: number; teachback: number };
+export type TimeLimits = { call: number; teachback: number; smalltalk: number };
 export type Lesson = {
   date: string;
   dates: string[];
@@ -35,10 +35,20 @@ export type CallSummary = {
   duration_sec: number;
   completed: boolean;
   has_tutoring: boolean;
-  kind: 'teachback' | 'call';
+  kind: 'teachback' | 'smalltalk' | 'call';
 };
 export type CallTotals = { calls: number; minutes: number; days: number; week: number };
 export type CallDetail = { call: CallSummary; tutoring: Tutoring | null };
+
+export type WordInfo = { word: string; lemma: string; gloss: string; senses: string[]; pos?: string };
+
+// readgloss가 꺼져 있을 때(503)만 던지는 오류. 화면이 다른 실패와 구분해 안내 문구를 보여 준다.
+export class ReadglossOffError extends Error {
+  constructor(message = 'readgloss가 꺼져 있어 뜻을 찾지 못했어요.') {
+    super(message);
+    this.name = 'ReadglossOffError';
+  }
+}
 
 const EMPTY_PROFILE: LearnerProfile = { brief: '', updated: null, weak_points: [], next_goal: '', practice_words: [] };
 
@@ -50,7 +60,7 @@ export function serverNow(): number {
   return Date.now() + clockOffsetMs;
 }
 
-async function errorMessage(res: Response, fallback: string): Promise<string> {
+async function errorMessage(res: Response, fallback?: string): Promise<string | undefined> {
   try {
     const body = await res.json();
     if (body?.detail) return String(body.detail);
@@ -77,10 +87,48 @@ export async function getTimeLimits(): Promise<TimeLimits> {
     const serverDate = Date.parse(res.headers.get('date') || '');
     if (!Number.isNaN(serverDate)) clockOffsetMs = serverDate - (sentAt + Date.now()) / 2;
     const data = await res.json();
-    return { call: Number(data?.time_limits?.call) || 600, teachback: Number(data?.time_limits?.teachback) || 900 };
+    return {
+      call: Number(data?.time_limits?.call) || 600,
+      teachback: Number(data?.time_limits?.teachback) || 900,
+      smalltalk: Number(data?.time_limits?.smalltalk) || 300,
+    };
   } catch {
-    return { call: 600, teachback: 900 };
+    return { call: 600, teachback: 900, smalltalk: 300 };
   }
+}
+
+async function postWord(path: string, body: unknown, fallback: string, signal?: AbortSignal): Promise<Response> {
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') throw e;
+    throw new Error(fallback);
+  }
+  if (res.status === 503) throw new ReadglossOffError(await errorMessage(res, undefined));
+  if (!res.ok) throw new Error(await errorMessage(res, fallback));
+  return res;
+}
+
+export async function lookupWord(word: string, signal?: AbortSignal): Promise<WordInfo> {
+  const res = await postWord('/api/word', { word }, '뜻을 찾지 못했어요.', signal);
+  const data = await res.json();
+  return {
+    word: String(data?.word ?? word),
+    lemma: String(data?.lemma ?? word),
+    gloss: String(data?.gloss ?? ''),
+    senses: Array.isArray(data?.senses) ? data.senses.map(String) : [],
+    pos: data?.pos ? String(data.pos) : undefined,
+  };
+}
+
+export async function saveWord(body: { word: string; lemma: string; gloss: string; sentence: string }): Promise<void> {
+  await postWord('/api/word/save', body, '단어를 저장하지 못했어요.');
 }
 
 export async function getLesson(date?: string, signal?: AbortSignal): Promise<Lesson> {

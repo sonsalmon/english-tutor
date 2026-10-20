@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { List, RowLink, Screen, TopBar } from '../components/ui';
+import { List, RowLink, Screen, TopBar, useWide } from '../components/ui';
 import { TutoringBlocks } from '../components/TutoringBlocks';
 import { getCall, getCalls, type CallDetail, type CallSummary, type CallTotals } from '../lib/api';
 import { go } from '../lib/router';
@@ -65,11 +65,39 @@ function SummaryChip() {
   return <span className="shrink-0 rounded-full bg-paper px-2.5 py-1 text-xs font-semibold">요약 있음</span>;
 }
 
-function CallList() {
-  const { data, error } = useLoaded((signal) => getCalls(50, signal), 'list');
+type Filter = 'all' | 'study' | 'smalltalk';
+const FILTERS: { id: Filter; label: string }[] = [
+  { id: 'all', label: '전체' },
+  { id: 'study', label: '공부' },
+  { id: 'smalltalk', label: '스몰토크' },
+];
+
+function FilterRow({ value, onChange }: { value: Filter; onChange: (f: Filter) => void }) {
   return (
-    <Screen>
-      <TopBar title="통화 기록" onBack={() => go('home')} />
+    <div role="group" aria-label="통화 종류" className="mt-6 flex gap-2">
+      {FILTERS.map((f) => (
+        <button
+          key={f.id}
+          type="button"
+          aria-pressed={value === f.id}
+          onClick={() => onChange(f.id)}
+          className={`min-h-11 rounded-full border px-4 font-semibold ${
+            value === f.id ? 'border-ink bg-ink text-white' : 'border-line bg-surface text-ink'
+          }`}
+        >
+          {f.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function CallListBody({ activeStem }: { activeStem: string | null }) {
+  const { data, error } = useLoaded((signal) => getCalls(50, signal), 'list');
+  const [filter, setFilter] = useState<Filter>('all');
+  const shown = data ? data.calls.filter((c) => (filter === 'all' ? true : filter === 'smalltalk' ? c.kind === 'smalltalk' : c.kind !== 'smalltalk')) : [];
+  return (
+    <>
       {error ? (
         <p className="text-ink-soft" role="alert">{error}</p>
       ) : !data ? (
@@ -78,17 +106,19 @@ function CallList() {
         <>
           <Totals totals={data.totals} />
           {data.totals.calls > 0 && <WeekLine week={data.totals.week} />}
-          <div className="mt-6">
-            {data.calls.length === 0 ? (
-              <p className="leading-relaxed text-ink-soft">아직 저장된 통화가 없어요. 첫 통화가 끝나면 여기에 쌓여요.</p>
+          <FilterRow value={filter} onChange={setFilter} />
+          <div className="mt-4">
+            {shown.length === 0 ? (
+              <p className="leading-relaxed text-ink-soft">{data.calls.length === 0 ? '아직 저장된 통화가 없어요. 첫 통화가 끝나면 여기에 쌓여요.' : '이 종류의 통화는 아직 없어요.'}</p>
             ) : (
               <List>
-                {data.calls.map((call: CallSummary) => (
+                {shown.map((call: CallSummary) => (
                   <RowLink
                     key={call.stem}
                     title={call.mission}
                     desc={`${formatWhen(call.started_at)}, ${formatDuration(call.duration_sec)}`}
                     trailing={call.has_tutoring ? <SummaryChip /> : undefined}
+                    active={call.stem === activeStem}
                     onClick={() => go('history', false, call.stem)}
                   />
                 ))}
@@ -97,15 +127,14 @@ function CallList() {
           </div>
         </>
       )}
-    </Screen>
+    </>
   );
 }
 
-function CallDetailView({ stem }: { stem: string }) {
+function CallDetailBody({ stem }: { stem: string }) {
   const { data, error } = useLoaded<CallDetail>((signal) => getCall(stem, signal), stem);
   return (
-    <Screen>
-      <TopBar title="통화 기록" onBack={() => go('history')} />
+    <>
       {error ? (
         <p className="text-ink-soft" role="alert">{error}</p>
       ) : !data ? (
@@ -126,10 +155,35 @@ function CallDetailView({ stem }: { stem: string }) {
           )}
         </>
       )}
-    </Screen>
+    </>
   );
 }
 
 export function CallHistory({ stem }: { stem: string | null }) {
-  return stem ? <CallDetailView stem={stem} /> : <CallList />;
+  const wide = useWide();
+  if (wide) {
+    return (
+      <Screen wide>
+        <TopBar title="통화 기록" onBack={() => go('home')} />
+        <div className="grid grid-cols-[320px_minmax(0,1fr)] items-start gap-10">
+          <div>
+            <CallListBody activeStem={stem} />
+          </div>
+          <div className="min-w-0">
+            {stem ? (
+              <CallDetailBody stem={stem} />
+            ) : (
+              <p className="leading-relaxed text-ink-soft">왼쪽에서 통화를 고르면 요약이 여기에 나와요.</p>
+            )}
+          </div>
+        </div>
+      </Screen>
+    );
+  }
+  return (
+    <Screen>
+      <TopBar title="통화 기록" onBack={() => go(stem ? 'history' : 'home')} />
+      {stem ? <CallDetailBody stem={stem} /> : <CallListBody activeStem={null} />}
+    </Screen>
+  );
 }

@@ -91,7 +91,7 @@ export function Summary({ call, onRetry }: { call: FinishedCall; onRetry: (retry
 
   return (
     <Screen>
-      <header className="flex h-11 items-center">
+      <header className="flex h-11 items-center lg:hidden">
         <span className="text-sm font-semibold text-ink-soft">통화 요약</span>
       </header>
       <h1 className="mt-2 text-[28px] font-bold leading-tight">통화가 끝났어요</h1>
@@ -146,7 +146,7 @@ export function Summary({ call, onRetry }: { call: FinishedCall; onRetry: (retry
         <ReadingWords words={call.practiceWords} used={tutoring.practice_used ?? []} saved={tutoring.readgloss?.saved ?? 0} />
       )}
 
-      <div className="mt-auto space-y-3 pt-10">
+      <div className="mt-auto space-y-3 pt-10 lg:flex lg:space-y-0 lg:gap-3">
         {canRetry && retry && (
           <CallButton onClick={() => onRetry(retry)}>
             <Phone size={22} aria-hidden />

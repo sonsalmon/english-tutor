@@ -1,4 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
+import { AppShell } from './components/AppShell';
 import { getCalls, getLearnerProfile, getTimeLimits, type CallTotals, type LearnerProfile, type TimeLimits } from './lib/api';
 import type { Retry } from './lib/instructions';
 import { go, useRoute, useRouteParam } from './lib/router';
@@ -17,7 +18,7 @@ export function App() {
   const param = useRouteParam();
   const [profile, setProfile] = useState<LearnerProfile | null>(null);
   const [totals, setTotals] = useState<CallTotals | null>(null);
-  const [limits, setLimits] = useState<TimeLimits>({ call: 600, teachback: 900 });
+  const [limits, setLimits] = useState<TimeLimits>({ call: 600, teachback: 900, smalltalk: 300 });
   const [setup, setSetup] = useState<CallSetup | null>(null);
   const [callKey, setCallKey] = useState(0);
   const [finished, setFinished] = useState<FinishedCall | null>(null);
@@ -42,8 +43,23 @@ export function App() {
   }, [route]);
 
   useEffect(() => {
+    // 사이드바의 스몰토크는 화면 없이 바로 통화를 시작한다. 뒤로 가기가 다시 시작하지 않도록 이 주소는 바꿔 치운다.
+    if (route === 'smalltalk') {
+      setSetup({ kind: 'smalltalk' });
+      setCallKey((k) => k + 1);
+      go('call', true);
+    }
+  }, [route]);
+
+  useEffect(() => {
     if ((route === 'call' && !setup) || (route === 'summary' && !finished)) go('home', true);
   }, [route, setup, finished]);
+
+  const startSmallTalk = useCallback(() => {
+    setSetup({ kind: 'smalltalk' });
+    setCallKey((k) => k + 1);
+    go('call');
+  }, []);
 
   const retryProfile = useCallback(() => {
     setProfile(null);
@@ -68,37 +84,41 @@ export function App() {
     [finished, startCall],
   );
 
-  switch (route) {
-    case 'missions':
-      return <Missions onPick={(mission) => startCall({ kind: 'mission', mission })} />;
-    case 'topic':
-      return <Topic onStart={(topic) => startCall({ kind: 'freetalk', topic })} />;
-    case 'teachback':
-      return (
-        <TeachbackPrep
-          onStart={(lesson, seniorMode) =>
-            startCall({ kind: 'teachback', lessonDate: lesson.date, dayTitle: lesson.day_title, sections: lesson.sections, seniorMode })
-          }
-        />
-      );
-    case 'call':
-      return setup ? (
-        <Suspense fallback={null}>
-          <Call
-            key={callKey}
-            setup={setup}
-            brief={profile?.brief ?? ''}
-            practiceWords={profile?.practice_words ?? []}
-            timeLimit={setup.kind === 'teachback' ? limits.teachback : limits.call}
-            onFinished={onFinished}
+  const renderScreen = () => {
+    switch (route) {
+      case 'missions':
+        return <Missions onPick={(mission) => startCall({ kind: 'mission', mission })} />;
+      case 'topic':
+        return <Topic onStart={(topic) => startCall({ kind: 'freetalk', topic })} />;
+      case 'teachback':
+        return (
+          <TeachbackPrep
+            onStart={(lesson, seniorMode) =>
+              startCall({ kind: 'teachback', lessonDate: lesson.date, dayTitle: lesson.day_title, sections: lesson.sections, seniorMode })
+            }
           />
-        </Suspense>
-      ) : null;
-    case 'summary':
-      return finished ? <Summary call={finished} onRetry={retry} /> : null;
-    case 'history':
-      return <CallHistory stem={param} />;
-    default:
-      return <Home profile={profile} totals={totals} onQuickCall={() => startCall({ kind: 'freetalk', topic: '' })} onRetryProfile={retryProfile} />;
-  }
+        );
+      case 'call':
+        return setup ? (
+          <Suspense fallback={null}>
+            <Call
+              key={callKey}
+              setup={setup}
+              brief={profile?.brief ?? ''}
+              practiceWords={profile?.practice_words ?? []}
+              timeLimit={setup.kind === 'teachback' ? limits.teachback : setup.kind === 'smalltalk' ? limits.smalltalk : limits.call}
+              onFinished={onFinished}
+            />
+          </Suspense>
+        ) : null;
+      case 'summary':
+        return finished ? <Summary call={finished} onRetry={retry} /> : null;
+      case 'history':
+        return <CallHistory stem={param} />;
+      default:
+        return <Home profile={profile} totals={totals} onQuickCall={() => startCall({ kind: 'freetalk', topic: '' })} onSmallTalk={startSmallTalk} onRetryProfile={retryProfile} />;
+    }
+  };
+
+  return <AppShell route={route}>{renderScreen()}</AppShell>;
 }

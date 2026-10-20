@@ -1,6 +1,7 @@
 import { Volume2 } from 'lucide-react';
 import { useRef, useState, type ReactNode } from 'react';
 import type { Tutoring } from '../lib/api';
+import { WordText } from './WordText';
 import { YouGlishSheet } from './YouGlishSheet';
 
 const CAUSES: Record<string, string> = {
@@ -54,10 +55,14 @@ export function TutoringBlocks({ tutoring, isTeachback }: { tutoring: Tutoring; 
         <Block title="고쳐 말하기">
           {tutoring.corrections.map((c, i) => (
             <div key={i} className="p-4">
-              <p className="text-ink-soft line-through decoration-ink-soft/50">{c.said}</p>
+              <p className="text-ink-soft line-through decoration-ink-soft/50">
+                <WordText text={c.said} />
+              </p>
               <div className="mt-1 flex items-start justify-between gap-3">
                 <p className="min-w-0 text-lg font-semibold">
-                  <span className="mark">{c.better}</span>
+                  <span className="mark">
+                    <WordText text={c.better} />
+                  </span>
                 </p>
                 <PronounceButton phrase={c.better} />
               </div>
@@ -71,7 +76,9 @@ export function TutoringBlocks({ tutoring, isTeachback }: { tutoring: Tutoring; 
           {tutoring.good.map((g, i) => (
             <div key={i} className="p-4">
               <div className="flex items-start justify-between gap-3">
-                <p className="min-w-0 font-semibold">{g.said}</p>
+                <p className="min-w-0 font-semibold">
+                  <WordText text={g.said} />
+                </p>
                 <PronounceButton phrase={g.said} />
               </div>
               {g.note && <p className="mt-1 text-sm leading-relaxed text-ink-soft">{g.note}</p>}
@@ -85,12 +92,18 @@ export function TutoringBlocks({ tutoring, isTeachback }: { tutoring: Tutoring; 
             <div key={i} className="p-4">
               <div className="flex items-start justify-between gap-3">
                 <p className="min-w-0">
-                  <span className="font-semibold">{v.word}</span>
+                  <span className="font-semibold">
+                    <WordText text={v.word} />
+                  </span>
                   {v.meaning_ko && <span className="ml-2 text-ink-soft">{v.meaning_ko}</span>}
                 </p>
                 <PronounceButton phrase={v.word} />
               </div>
-              {v.example && <p className="mt-1 text-sm text-ink-soft">{v.example}</p>}
+              {v.example && (
+                <p className="mt-1 text-sm text-ink-soft">
+                  <WordText text={v.example} />
+                </p>
+              )}
             </div>
           ))}
         </Block>
@@ -99,7 +112,9 @@ export function TutoringBlocks({ tutoring, isTeachback }: { tutoring: Tutoring; 
         <Block title="미국식으로 말하기">
           {tutoring.pragmatics.map((p, i) => (
             <div key={i} className="p-4">
-              <p className="font-semibold">{p.pattern}</p>
+              <p className="font-semibold">
+                <WordText text={p.pattern} />
+              </p>
               {p.note && <p className="mt-1 text-sm leading-relaxed text-ink-soft">{p.note}</p>}
             </div>
           ))}
@@ -119,9 +134,15 @@ export function TutoringBlocks({ tutoring, isTeachback }: { tutoring: Tutoring; 
       {retry?.goal && (
         <section className="mt-8 rounded-2xl bg-ink p-5 text-white">
           <h2 className="text-sm font-semibold text-white/70">다음 통화 목표</h2>
-          <p className="mt-2 leading-relaxed">{retry.goal}</p>
+          <p className="mt-2 leading-relaxed">
+            <WordText text={retry.goal} />
+          </p>
           {!!retry.target_phrases?.length && (
-            <p className="mt-3 text-sm text-white/80">{retry.target_phrases.map((p) => `“${p}”`).join('  ')}</p>
+            <p className="mt-3 text-sm text-white/80">{retry.target_phrases.map((p, i) => (
+                <span key={i} className="mr-3 inline-block">
+                  “<WordText text={p} />”
+                </span>
+              ))}</p>
           )}
         </section>
       )}

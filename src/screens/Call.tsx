@@ -1,7 +1,8 @@
-import { Captions, CaptionsOff, Mic, MicOff, Phone, PhoneOff, Volume2 } from 'lucide-react';
+import { Captions, CaptionsOff, Mic, MicOff, Pause, Phone, PhoneOff, Play, Volume2 } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { TalkingPortrait } from '../components/TalkingPortrait';
 import { QuietButton } from '../components/ui';
+import { WordText } from '../components/WordText';
 import { serverNow } from '../lib/api';
 import { go } from '../lib/router';
 import type { PracticeWord } from '../lib/instructions';
@@ -126,7 +127,13 @@ export function Call({ setup, brief, practiceWords, timeLimit, onFinished }: {
     void call.start(buildInstruction(setup, brief, practiceWordsFor(setup, practiceWords)), callMode(setup));
   };
 
-  const remaining = call.liveAt ? Math.min(timeLimit, timeLimit - (now - call.liveAt) / 1000) : timeLimit;
+  // 남은 시간 = 제한 - (지금 - 시작 - 멈춰 있던 시간 합계). 일시정지 중에는 '지금'을 멈춘 시각으로 고정한다.
+  const clockNow = call.pausedAt ?? now;
+  const remaining = call.liveAt ? Math.min(timeLimit, timeLimit - (clockNow - call.liveAt - call.pausedTotal) / 1000) : timeLimit;
+  const resumeCall = () => {
+    call.resume();
+    setNow(Date.now());
+  };
   const status =
     call.status === 'ready'
       ? '준비되면 통화 버튼을 누르세요'
@@ -134,25 +141,28 @@ export function Call({ setup, brief, practiceWords, timeLimit, onFinished }: {
         ? '연결하는 중이에요'
         : call.status === 'error'
           ? call.error || '연결하지 못했어요'
-          : !call.micOn
+          : call.paused
+            ? '일시정지 중이에요. 다시 시작을 누르면 이어서 해요.'
+            : !call.micOn
             ? '마이크가 꺼져 있어요'
             : call.botSpeaking
               ? setup.kind === 'teachback' ? '학생이 말하는 중' : 'Ms. Park이 말하는 중'
               : '듣고 있어요';
 
   return (
-    <main className="mx-auto flex h-dvh w-full max-w-[480px] flex-col px-5 pt-[calc(12px+env(safe-area-inset-top))] pb-[calc(20px+env(safe-area-inset-bottom))]">
-      <header className="flex min-h-11 items-center justify-between gap-3">
+    <main className="mx-auto flex h-dvh w-full max-w-[480px] flex-col px-5 pt-[calc(12px+env(safe-area-inset-top))] pb-[calc(20px+env(safe-area-inset-bottom))] lg:grid lg:max-w-[1120px] lg:grid-cols-[360px_minmax(0,1fr)] lg:grid-rows-[auto_minmax(0,1fr)_auto] lg:gap-x-12 lg:px-10 lg:pt-10 lg:pb-10">
+      <header className="flex min-h-11 items-center justify-between gap-3 lg:col-start-1 lg:row-start-1">
         <p className="min-w-0 truncate font-semibold">{title}</p>
         {call.status === 'live' && (
-          <p role="timer" className={`shrink-0 tabular-nums ${remaining < 60 ? 'font-semibold text-end-press' : 'text-ink-soft'}`}>
+          <p role="timer" className={`flex shrink-0 items-center gap-1.5 tabular-nums ${call.paused ? 'text-ink' : remaining < 60 ? 'font-semibold text-end-press' : 'text-ink-soft'}`}>
             <span className="sr-only">남은 시간 </span>
+            {call.paused && <Pause size={16} aria-hidden />}
             {clock(remaining)}
           </p>
         )}
       </header>
 
-      <section className="flex flex-col items-center pt-6 text-center">
+      <section className="flex flex-col items-center pt-6 text-center lg:col-start-1 lg:row-start-2 lg:self-center lg:pt-0">
         <TalkingPortrait size={call.status === 'live' ? 168 : 200} level={call.botLevel} active={call.botSpeaking} />
         <h1 className="mt-4 text-2xl font-bold">Ms. Park</h1>
         <p className={`mt-1 min-h-6 ${call.status === 'error' ? 'text-end-press' : 'text-ink-soft'}`} role="status">
@@ -168,13 +178,22 @@ export function Call({ setup, brief, practiceWords, timeLimit, onFinished }: {
         )}
       </section>
 
-      <section className="mt-4 min-h-0 flex-1 overflow-y-auto" aria-label="실시간 자막" aria-live="polite">
+      <section
+        className="mt-4 min-h-0 flex-1 overflow-y-auto lg:col-start-2 lg:row-span-3 lg:row-start-1 lg:mt-0 lg:flex-none lg:rounded-2xl lg:border lg:border-line lg:bg-surface lg:p-8"
+        aria-label="실시간 자막"
+        aria-live="polite"
+      >
+        {(!captions || call.lines.length === 0) && (
+          <p className="hidden text-ink-soft lg:block">
+            {!captions ? '자막이 꺼져 있어요.' : call.status === 'live' ? '대화가 시작되면 자막이 여기에 나와요.' : '통화를 시작하면 대화가 여기에 나와요.'}
+          </p>
+        )}
         {captions && call.lines.length > 0 && (
-          <div className="space-y-3 rounded-2xl bg-surface p-4">
+          <div className="space-y-3 rounded-2xl bg-surface p-4 lg:space-y-4 lg:rounded-none lg:bg-transparent lg:p-0 lg:text-lg lg:leading-relaxed">
             {call.lines.map((line) => (
               <p key={line.id} className={line.who === 'me' ? 'text-right text-ink' : 'text-ink'}>
                 <span className="mr-1.5 text-xs font-semibold text-ink-soft">{line.who === 'me' ? '나' : 'Ms. Park'}</span>
-                {line.text}
+                <WordText text={line.text} />
               </p>
             ))}
             <div ref={captionsEnd} />
@@ -182,7 +201,7 @@ export function Call({ setup, brief, practiceWords, timeLimit, onFinished }: {
         )}
       </section>
 
-      <footer className="pt-4">
+      <footer className="pt-4 lg:col-start-1 lg:row-start-3">
         {call.status === 'ready' || call.status === 'error' ? (
           <div className="flex flex-col items-center gap-4">
             <RoundButton label={call.status === 'error' ? '다시 걸기' : '통화'} tone="call" onClick={dial}>
@@ -191,14 +210,19 @@ export function Call({ setup, brief, practiceWords, timeLimit, onFinished }: {
             <QuietButton onClick={() => go('home')}>홈으로</QuietButton>
           </div>
         ) : (
-          <div className="flex items-end justify-center gap-8">
+          <div className="flex items-end justify-center gap-5">
             <RoundButton label={captions ? '자막 끄기' : '자막 켜기'} tone={captions ? 'on' : 'plain'} onClick={() => setCaptions((v) => !v)}>
               {captions ? <Captions size={24} aria-hidden /> : <CaptionsOff size={24} aria-hidden />}
             </RoundButton>
+            {call.status === 'live' && (
+              <RoundButton label={call.paused ? '다시 시작' : '일시정지'} tone={call.paused ? 'on' : 'plain'} onClick={call.paused ? resumeCall : call.pause}>
+                {call.paused ? <Play size={24} aria-hidden /> : <Pause size={24} aria-hidden />}
+              </RoundButton>
+            )}
             <RoundButton label="끊기" tone="end" onClick={call.hangUp}>
               <PhoneOff size={30} aria-hidden />
             </RoundButton>
-            <RoundButton label={call.micOn ? '음소거' : '음소거 해제'} tone={call.micOn ? 'plain' : 'on'} onClick={call.toggleMic}>
+            <RoundButton label={call.micOn ? '음소거' : '음소거 해제'} tone={call.micOn ? 'plain' : 'on'} onClick={call.paused ? () => undefined : call.toggleMic}>
               {call.micOn ? <Mic size={24} aria-hidden /> : <MicOff size={24} aria-hidden />}
             </RoundButton>
           </div>

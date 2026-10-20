@@ -1,5 +1,7 @@
 import missionsData from '../data/missions.json';
-import { List, RowLink, Screen, TopBar } from '../components/ui';
+import { List, Screen, TopBar } from '../components/ui';
+import { WordText } from '../components/WordText';
+import { ChevronRight } from 'lucide-react';
 import type { Mission } from '../lib/instructions';
 import { go } from '../lib/router';
 
@@ -22,15 +24,21 @@ export function Missions({ onPick }: { onPick: (mission: Mission) => void }) {
         {MISSIONS.map((m) => {
           const level = LEVELS[m.difficulty] ?? LEVELS.Medium;
           return (
-            <RowLink
-              key={m.id}
-              title={m.title}
-              desc={m.desc.replace(/^Your goal:\s*/i, '')}
-              onClick={() => onPick(m)}
-              trailing={
+            <div key={m.id} className="relative hover:bg-paper">
+              <button type="button" onClick={() => onPick(m)} aria-label={`${m.title} 시작`} className="absolute inset-0 w-full" />
+              <div className="pointer-events-none relative flex items-center gap-4 px-4 py-4">
+                <span className="min-w-0 flex-1">
+                  <span className="block font-semibold">
+                    <WordText text={m.title} />
+                  </span>
+                  <span className="mt-0.5 block text-sm text-ink-soft">
+                    <WordText text={m.desc.replace(/^Your goal:\s*/i, '')} />
+                  </span>
+                </span>
                 <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${level.className}`}>{level.label}</span>
-              }
-            />
+                <ChevronRight size={20} className="shrink-0 text-ink-soft" aria-hidden />
+              </div>
+            </div>
           );
         })}
       </List>

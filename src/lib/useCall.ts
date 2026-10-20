@@ -2,7 +2,7 @@ import { PipecatClient } from '@pipecat-ai/client-js';
 import { SmallWebRTCTransport } from '@pipecat-ai/small-webrtc-transport';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-export type CallMode = 'mission' | 'freetalk' | 'teachback';
+export type CallMode = 'mission' | 'freetalk' | 'teachback' | 'smalltalk';
 export type CallStatus = 'ready' | 'connecting' | 'live' | 'ended' | 'error';
 export type Speaker = 'me' | 'park';
 export type CaptionLine = { id: number; who: Speaker; text: string };
@@ -29,6 +29,11 @@ export function useCall() {
   const [result, setResult] = useState<MissionResult | null>(null);
   const [endReason, setEndReason] = useState<EndReason | null>(null);
   const [audioBlocked, setAudioBlocked] = useState(false);
+  // 일시정지: 멈춘 시각(null이면 진행 중)과 지금까지 멈춰 있던 시간 합계(ms). 남은 시간 계산에 쓴다.
+  const [pausedAt, setPausedAt] = useState<number | null>(null);
+  const [pausedTotal, setPausedTotal] = useState(0);
+  const pausedAtRef = useRef<number | null>(null);
+  const micBeforePauseRef = useRef(true);
 
   const clientRef = useRef<PipecatClient | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -53,7 +58,12 @@ export function useCall() {
     const client = clientRef.current;
     clientRef.current = null;
     if (client) void client.disconnect();
-    if (audioRef.current) audioRef.current.srcObject = null;
+    if (audioRef.current) {
+      audioRef.current.srcObject = null;
+      audioRef.current.muted = false;
+    }
+    pausedAtRef.current = null;
+    setPausedAt(null);
     setBotSpeaking(false);
   }, []);
 
@@ -81,6 +91,9 @@ export function useCall() {
       setResult(null);
       setEndReason(null);
       setLiveAt(null);
+      setPausedAt(null);
+      setPausedTotal(0);
+      pausedAtRef.current = null;
       setAudioBlocked(false);
       reasonRef.current = null;
       liveRef.current = false;
@@ -171,9 +184,32 @@ export function useCall() {
     );
   }, []);
 
+  const pause = useCallback(() => {
+    const client = clientRef.current;
+    if (!client || !liveRef.current || pausedAtRef.current !== null) return;
+    micBeforePauseRef.current = client.isMicEnabled;
+    client.enableMic(false);
+    if (audioRef.current) audioRef.current.muted = true;
+    pausedAtRef.current = Date.now();
+    setPausedAt(pausedAtRef.current);
+    client.sendClientMessage('pause');
+  }, []);
+
+  const resume = useCallback(() => {
+    const client = clientRef.current;
+    const since = pausedAtRef.current;
+    if (!client || since === null) return;
+    client.enableMic(micBeforePauseRef.current);
+    if (audioRef.current) audioRef.current.muted = false;
+    pausedAtRef.current = null;
+    setPausedTotal((total) => total + (Date.now() - since));
+    setPausedAt(null);
+    client.sendClientMessage('resume');
+  }, []);
+
   const toggleMic = useCallback(() => {
     const client = clientRef.current;
-    if (!client) return;
+    if (!client || pausedAtRef.current !== null) return;
     const next = !client.isMicEnabled;
     client.enableMic(next);
     setMicOn(next);
@@ -188,5 +224,5 @@ export function useCall() {
     [],
   );
 
-  return { status, lines, botSpeaking, botLevel, userLevel, micOn, error, result, endReason, liveAt, audioBlocked, start, hangUp, toggleMic, resumeAudio };
+  return { status, lines, botSpeaking, botLevel, userLevel, micOn, error, result, endReason, liveAt, audioBlocked, paused: pausedAt !== null, pausedAt, pausedTotal, start, hangUp, pause, resume, toggleMic, resumeAudio };
 }
