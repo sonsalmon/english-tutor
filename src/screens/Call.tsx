@@ -1,4 +1,4 @@
-import { Captions, CaptionsOff, Mic, MicOff, Phone, PhoneOff } from 'lucide-react';
+import { Captions, CaptionsOff, Mic, MicOff, Phone, PhoneOff, Volume2 } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { TalkingPortrait } from '../components/TalkingPortrait';
 import { QuietButton } from '../components/ui';
@@ -158,6 +158,14 @@ export function Call({ setup, brief, practiceWords, timeLimit, onFinished }: {
         <p className={`mt-1 min-h-6 ${call.status === 'error' ? 'text-end-press' : 'text-ink-soft'}`} role="status">
           {status}
         </p>
+        {call.status === 'live' && call.audioBlocked && (
+          <div className="mt-3 w-full max-w-xs">
+            <QuietButton onClick={call.resumeAudio}>
+              <Volume2 size={20} aria-hidden />
+              소리가 안 나오면 눌러 주세요
+            </QuietButton>
+          </div>
+        )}
       </section>
 
       <section className="mt-4 min-h-0 flex-1 overflow-y-auto" aria-label="실시간 자막" aria-live="polite">

@@ -28,6 +28,7 @@ export function useCall() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<MissionResult | null>(null);
   const [endReason, setEndReason] = useState<EndReason | null>(null);
+  const [audioBlocked, setAudioBlocked] = useState(false);
 
   const clientRef = useRef<PipecatClient | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -80,6 +81,7 @@ export function useCall() {
       setResult(null);
       setEndReason(null);
       setLiveAt(null);
+      setAudioBlocked(false);
       reasonRef.current = null;
       liveRef.current = false;
 
@@ -101,9 +103,13 @@ export function useCall() {
             setStatus('live');
           },
           onTrackStarted: (track, participant) => {
-            if (track.kind === 'audio' && participant && !participant.local && audioRef.current) {
+            // SmallWebRTCTransport는 원격(Ms. Park) 트랙에 participant를 넘기지 않는다. local이 아니면 원격으로 본다.
+            if (track.kind === 'audio' && !participant?.local && audioRef.current) {
               audioRef.current.srcObject = new MediaStream([track]);
-              void audioRef.current.play().catch(() => undefined);
+              audioRef.current.play().then(
+                () => setAudioBlocked(false),
+                () => setAudioBlocked(true),
+              );
             }
           },
           onBotStartedSpeaking: () => setBotSpeaking(true),
@@ -155,6 +161,16 @@ export function useCall() {
 
   const hangUp = useCallback(() => finish('hangup'), [finish]);
 
+  // 브라우저가 자동 재생을 막았을 때 사용자가 누른 버튼에서 다시 재생한다.
+  const resumeAudio = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.play().then(
+      () => setAudioBlocked(false),
+      () => setAudioBlocked(true),
+    );
+  }, []);
+
   const toggleMic = useCallback(() => {
     const client = clientRef.current;
     if (!client) return;
@@ -172,5 +188,5 @@ export function useCall() {
     [],
   );
 
-  return { status, lines, botSpeaking, botLevel, userLevel, micOn, error, result, endReason, liveAt, start, hangUp, toggleMic };
+  return { status, lines, botSpeaking, botLevel, userLevel, micOn, error, result, endReason, liveAt, audioBlocked, start, hangUp, toggleMic, resumeAudio };
 }
