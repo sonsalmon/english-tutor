@@ -337,20 +337,18 @@ class ViewMissions extends HTMLElement {
     if (savedLang) {
       toSelect.value = savedLang;
     } else {
-      // Default practice to French if first time to avoid English/English default
+      // 이 앱은 한국어 화자의 영어 연습 전용이다. 저장된 값이 없으면 English로 연습한다.
       const options = Array.from(toSelect.options);
-      const frenchOption = options.find(o => o.text.includes('French'));
-      if (frenchOption) toSelect.value = frenchOption.text;
+      const englishOption = options.find(o => o.text.includes('English'));
+      if (englishOption) toSelect.value = englishOption.text;
     }
 
-    // Default From language to English if not set
     if (savedFromLang) {
       fromSelect.value = savedFromLang;
     } else {
-      // Try to find English
       const options = Array.from(fromSelect.options);
-      const englishOption = options.find(o => o.text.includes('English'));
-      if (englishOption) fromSelect.value = englishOption.text;
+      const koreanOption = options.find(o => o.text.includes('Korean'));
+      if (koreanOption) fromSelect.value = koreanOption.text;
     }
 
 

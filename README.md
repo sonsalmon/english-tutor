@@ -21,7 +21,7 @@
 
 ## 검사
 
-- 단위 시험: `cd server && ../.venv/bin/python -m unittest test_learner_profile test_gemini_live test_transcript_store`
+- 단위 시험: `cd server && ../.venv/bin/python -m unittest test_main_wiring test_learner_profile test_gemini_live test_transcript_store`
 - 오프라인 검사: `.venv/bin/python scripts/tutor_offline_check.py`, `.venv/bin/python scripts/teachback_offline_check.py`
 - Vertex 연결 시험(소리 1턴, 몇 센트): `.venv/bin/python scripts/live_smoke.py`
 - 화면 빌드: `npm run build`

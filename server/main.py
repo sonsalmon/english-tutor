@@ -168,6 +168,9 @@ def _wait_and_resolve_transcript(filename=None, started_at=None):
 _TUTOR_CACHE: Dict[str, "tuple[float, dict]"] = {}
 _TUTOR_CACHE_TTL_SEC = 10.0
 
+# 이미 학습자 카드 갱신을 걸어 둔 통화 전문 파일명.
+_PROFILE_UPDATED: "set[str]" = set()
+
 
 @app.get("/api/lesson")
 async def lesson_endpoint(request: Request, date: Optional[str] = None):
@@ -230,7 +233,10 @@ async def tutor_endpoint(request: Request):
         data, saved = await asyncio.to_thread(run_tutoring, path)
         data["saved"] = saved
         _TUTOR_CACHE[path.name] = (time.time(), data)
-        _schedule_profile_update({k: v for k, v in data.items() if k != "saved"})
+        # 같은 통화를 다시 분석해도 카드는 한 번만 갱신한다(misses·count 중복 방지).
+        if path.name not in _PROFILE_UPDATED:
+            _PROFILE_UPDATED.add(path.name)
+            _schedule_profile_update({k: v for k, v in data.items() if k != "saved"})
     except LessonError as e:
         logger.error(f"Lesson fetch failed: {e}")
         raise HTTPException(status_code=e.status_code, detail=str(e))
@@ -482,4 +488,4 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = None):
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8931))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="127.0.0.1", port=port)
