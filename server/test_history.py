@@ -12,10 +12,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from server import history
 
 
-def transcript(started, mission="Ordering coffee", duration="2m 30s", completed="yes"):
+def transcript(started, mission="Ordering coffee", duration="2m 30s", completed="yes", cost=None):
+    cost_line = f"- cost_usd: {cost}\n" if cost is not None else ""
     return (
         f"# Call {started}\n- mission: {mission}\n- model: test-model\n"
-        f"- duration: {duration}\n- completed: {completed}\n- coach: 0\n\n**Me:** Hello\n"
+        f"- duration: {duration}\n- completed: {completed}\n- coach: 0\n{cost_line}\n**Me:** Hello\n"
     )
 
 
@@ -58,8 +59,39 @@ class HistoryTest(HistoryDirs):
                 "completed": False,
                 "has_tutoring": False,
                 "kind": "call",
+                "cost": {"live": None, "tutoring": None, "total": None},
             },
         )
+
+    def test_cost_comes_from_header_and_tutoring_json(self):
+        self.add_call("2026-10-20-090000", "2026-10-20 09:00", cost="0.0123")
+        self.add_call("2026-10-20-100000", "2026-10-20 10:00", cost="0.0100")
+        self.add_call("2026-10-20-110000", "2026-10-20 11:00")
+        self.add_call("2026-10-20-120000", "2026-10-20 12:00")
+        (self.tutoring / "2026-10-20-100000.json").write_text('{"cost_usd": 0.002}', encoding="utf-8")
+        (self.tutoring / "2026-10-20-110000.json").write_text('{"cost_usd": 0.003}', encoding="utf-8")
+        (self.tutoring / "2026-10-20-120000.json").write_text('{"corrections": []}', encoding="utf-8")
+
+        by_stem = {c["stem"]: c["cost"] for c in history.list_calls()}
+
+        self.assertEqual(by_stem["2026-10-20-090000"], {"live": 0.0123, "tutoring": None, "total": 0.0123})
+        self.assertEqual(by_stem["2026-10-20-100000"], {"live": 0.01, "tutoring": 0.002, "total": 0.012})
+        self.assertEqual(by_stem["2026-10-20-110000"], {"live": None, "tutoring": 0.003, "total": 0.003})
+        self.assertEqual(by_stem["2026-10-20-120000"], {"live": None, "tutoring": None, "total": None})
+
+    def test_load_call_has_the_same_cost_object(self):
+        self.add_call("2026-10-20-100000", "2026-10-20 10:00", cost="0.0100")
+        (self.tutoring / "2026-10-20-100000.json").write_text('{"cost_usd": 0.002}', encoding="utf-8")
+
+        loaded = history.load_call("2026-10-20-100000")
+
+        self.assertEqual(loaded["call"]["cost"], {"live": 0.01, "tutoring": 0.002, "total": 0.012})
+
+    def test_live_cost_of_reads_header_and_missing_file_is_none(self):
+        self.add_call("2026-10-20-090000", "2026-10-20 09:00", cost="0.0123")
+
+        self.assertEqual(history.live_cost_of(self.sessions / "2026-10-20-090000.md"), 0.0123)
+        self.assertIsNone(history.live_cost_of(self.sessions / "2026-10-20-999999.md"))
 
     def test_list_is_newest_first_and_limited(self):
         self.add_call("2026-10-18-080000", "2026-10-18 08:00")
@@ -176,6 +208,18 @@ class CallsHttpTest(HistoryDirs):
             limits = self.client.get("/api/status").json()["time_limits"]
 
         self.assertEqual(limits, {"call": 180, "teachback": 900, "smalltalk": 300})
+
+    def test_cost_over_http_in_list_and_detail(self):
+        self.add_call("2026-10-20-090000", "2026-10-20 09:00", cost="0.0200")
+        (self.tutoring / "2026-10-20-090000.json").write_text('{"cost_usd": 0.001}', encoding="utf-8")
+        self.add_call("2026-10-19-090000", "2026-10-19 09:00")
+
+        listing = {c["stem"]: c["cost"] for c in self.client.get("/api/calls").json()["calls"]}
+        detail = self.client.get("/api/calls/2026-10-20-090000").json()
+
+        self.assertEqual(listing["2026-10-20-090000"], {"live": 0.02, "tutoring": 0.001, "total": 0.021})
+        self.assertEqual(listing["2026-10-19-090000"], {"live": None, "tutoring": None, "total": None})
+        self.assertEqual(detail["call"]["cost"], {"live": 0.02, "tutoring": 0.001, "total": 0.021})
 
     def test_bad_stem_is_400_and_unknown_stem_is_404_not_the_spa_page(self):
         self.assertEqual(self.client.get("/api/calls/not-a-stem").status_code, 400)

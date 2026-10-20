@@ -31,15 +31,20 @@ from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCRequestHandler,
 )
 
+from server import pron
 from server.call_bot import parse_call_config, run_bot, smalltalk_time_limit_from_env
-from server.history import list_calls, load_call, totals as call_totals
+from server.history import list_calls, live_cost_of, load_call, totals as call_totals
+from server.pricing import combine_cost
 from server.readgloss import (
     LEMMA_RE,
     WORD_RE,
     lookup_word,
+    normalize_phrase,
     practice_words,
     push_tutoring,
+    save_phrase,
     save_word,
+    stored_phrase_keys,
     words_used,
 )
 from server.transcript_store import get_tutoring_dir
@@ -113,9 +118,12 @@ async def learner_profile_endpoint():
         logger.error(f"Learner profile unreadable: {e}")
         card = None
         broken = True
+    pron_result = await asyncio.to_thread(pron.latest_result)
     return {
         "load_failed": broken,
-        "brief": profile_brief(card),
+        "brief": "\n".join(part for part in (profile_brief(card), pron.pron_brief(pron_result)) if part),
+        "pron": pron.weak_summary(pron_result),
+        "interests": list(card["interests"]) if card else [],
         "updated": card["updated"] if card else None,
         "weak_points": [
             {"pattern": p["pattern"], "example": p["example"]} for p in (card["weak_points"][:3] if card else [])
@@ -268,12 +276,13 @@ async def tutor_endpoint(request: Request):
             )
             data["saved"] = saved
             data["readgloss"] = await _push_to_readgloss(path, data)
+            data["cost"] = combine_cost(await asyncio.to_thread(live_cost_of, path), data.get("cost_usd"))
             _TUTOR_CACHE[cache_key] = (time.time(), data)
             # 카드는 영어 교정만 반영한다. unanswered는 보안 지식 공백이라 제외.
             if path.name not in _PROFILE_UPDATED:
                 _PROFILE_UPDATED.add(path.name)
                 _schedule_profile_update(
-                    {k: v for k, v in data.items() if k not in ("saved", "lesson_date", "unanswered", "readgloss")}
+                    {k: v for k, v in data.items() if k not in ("saved", "lesson_date", "unanswered", "readgloss", "cost", "cost_usd")}
                 )
             return JSONResponse(data)
 
@@ -287,11 +296,14 @@ async def tutor_endpoint(request: Request):
             words_used(path.read_text(encoding="utf-8"), practice, _verbatim_text(path)) if practice else []
         )
         data["readgloss"] = await _push_to_readgloss(path, data)
+        data["cost"] = combine_cost(await asyncio.to_thread(live_cost_of, path), data.get("cost_usd"))
         _TUTOR_CACHE[path.name] = (time.time(), data)
         # 같은 통화를 다시 분석해도 카드는 한 번만 갱신한다(misses·count 중복 방지).
         if path.name not in _PROFILE_UPDATED:
             _PROFILE_UPDATED.add(path.name)
-            _schedule_profile_update({k: v for k, v in data.items() if k not in ("saved", "practice_used", "readgloss")})
+            _schedule_profile_update(
+                {k: v for k, v in data.items() if k not in ("saved", "practice_used", "readgloss", "cost", "cost_usd")}
+            )
     except LessonError as e:
         logger.error(f"Lesson fetch failed: {e}")
         raise HTTPException(status_code=e.status_code, detail=str(e))
@@ -424,6 +436,91 @@ async def word_save_endpoint(raw: Request):
     if not saved:
         raise HTTPException(status_code=503, detail=READGLOSS_SAVE_OFF_DETAIL)
     return {"saved": True}
+
+
+READGLOSS_PHRASE_OFF_DETAIL = "readgloss가 꺼져 있어 저장하지 못했어요."
+READGLOSS_STATUS_OFF_DETAIL = "readgloss가 꺼져 있어 저장 여부를 확인하지 못했어요."
+MAX_TRANSLATION_CHARS = 300
+MAX_STATUS_TEXTS = 40
+
+
+@app.post("/api/phrase/save")
+async def phrase_save_endpoint(raw: Request):
+    """문장 하나를 readgloss 구 카드로 저장한다. 다리가 꺼져 있으면 503."""
+    body = await _json_object(raw)
+    text = body.get("text")
+    text = " ".join(text.split()) if isinstance(text, str) else ""
+    translation = body.get("translation", "")
+    if not 2 <= len(text) <= MAX_SENTENCE_CHARS or not any(ch.isalpha() for ch in text):
+        raise HTTPException(status_code=400, detail="문장은 글자가 있는 2자 이상 1000자 이하여야 해요.")
+    if not isinstance(translation, str) or len(translation) > MAX_TRANSLATION_CHARS:
+        raise HTTPException(status_code=400, detail="번역은 문자열 300자 이하여야 해요.")
+    if not await asyncio.to_thread(save_phrase, text, translation.strip()):
+        raise HTTPException(status_code=503, detail=READGLOSS_PHRASE_OFF_DETAIL)
+    return {"saved": True}
+
+
+@app.post("/api/phrase/status")
+async def phrase_status_endpoint(raw: Request):
+    """문장들이 이미 readgloss에 저장돼 있는지(공백·대소문자를 무시하고) 순서대로 답한다. 다리가 꺼져 있으면 503."""
+    texts = (await _json_object(raw)).get("texts")
+    if not isinstance(texts, list) or len(texts) > MAX_STATUS_TEXTS or not all(isinstance(t, str) for t in texts):
+        raise HTTPException(status_code=400, detail="texts는 문자열 40개 이하의 배열이어야 해요.")
+    keys = await asyncio.to_thread(stored_phrase_keys)
+    if keys is None:
+        raise HTTPException(status_code=503, detail=READGLOSS_STATUS_OFF_DETAIL)
+    return {"saved": [normalize_phrase(t) in keys for t in texts]}
+
+
+WAV_CONTENT_TYPES = ("audio/wav", "audio/x-wav", "audio/wave")
+PRON_FAILED_DETAIL = "발음을 받아쓰지 못했어요. 잠시 후 다시 해 주세요."
+
+
+@app.get("/api/pron/test")
+async def pron_test_endpoint():
+    """발음 시험 문항(섞인 순서, id와 문장만). 정답(target·other)은 보내지 않는다."""
+    return pron.build_test()
+
+
+@app.post("/api/pron/transcribe")
+async def pron_transcribe_endpoint(raw: Request):
+    """문장 하나를 읽은 WAV(2MB 이하)를 정답을 모른 채 받아쓴다. 모델 실패는 502."""
+    content_type = raw.headers.get("content-type", "").split(";")[0].strip().lower()
+    if content_type not in WAV_CONTENT_TYPES:
+        raise HTTPException(status_code=415, detail="WAV 오디오로 보내야 해요.")
+    too_big = HTTPException(status_code=413, detail="오디오가 2MB를 넘어요.")
+    declared = raw.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > pron.MAX_WAV_BYTES:
+        raise too_big
+    data = bytearray()
+    async for chunk in raw.stream():
+        data.extend(chunk)
+        if len(data) > pron.MAX_WAV_BYTES:
+            raise too_big
+    if len(data) < 44 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        raise HTTPException(status_code=400, detail="WAV 파일이 아니에요.")
+    try:
+        text = await asyncio.to_thread(pron.transcribe_wav, bytes(data))
+    except Exception as e:
+        logger.error(f"Pronunciation transcription failed: {e}")
+        raise HTTPException(status_code=502, detail=PRON_FAILED_DETAIL)
+    return {"text": text}
+
+
+@app.post("/api/pron/finish")
+async def pron_finish_endpoint(raw: Request):
+    """받아쓴 답을 판정·집계해 PRON_DIR에 저장하고 결과를 돌려준다."""
+    try:
+        answers = pron.validate_answers(await _json_object(raw))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return await asyncio.to_thread(pron.finish, answers)
+
+
+@app.get("/api/pron/latest")
+async def pron_latest_endpoint():
+    """가장 최근 시험 결과 그대로. 없으면 {"result": null}."""
+    return await asyncio.to_thread(pron.latest_result) or {"result": None}
 
 
 @app.get("/{full_path:path}")

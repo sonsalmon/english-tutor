@@ -197,8 +197,12 @@ def format_transcript(chunks: Iterable[Chunk], meta: dict) -> str:
         f"- duration: {minutes}m {seconds}s",
         f"- completed: {completed}",
         f"- coach: {coach_count}",
-        "",
     ]
+    try:
+        lines.append(f"- cost_usd: {float(meta['cost_usd']):.4f}")
+    except (KeyError, TypeError, ValueError):
+        pass
+    lines.append("")
 
     for speaker, text in turns:
         lines.append(f"**{speaker}:** {text}")

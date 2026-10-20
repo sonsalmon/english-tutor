@@ -222,6 +222,60 @@ class FinishCallTest(unittest.TestCase):
         save_md.assert_called_once()
 
 
+class UsageMetricsTest(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def metrics_frame(prompt, completion, input_audio, output_audio):
+        from pipecat.frames.frames import MetricsFrame
+        from pipecat.metrics.metrics import LLMTokenUsage, LLMUsageMetricsData, TTFBMetricsData
+
+        tokens = LLMTokenUsage(
+            prompt_tokens=prompt,
+            completion_tokens=completion,
+            total_tokens=prompt + completion,
+            input_audio_tokens=input_audio,
+            output_audio_tokens=output_audio,
+        )
+        return MetricsFrame(data=[TTFBMetricsData(processor="llm", value=0.4), LLMUsageMetricsData(processor="llm", value=tokens)])
+
+    def test_only_token_usage_is_summed_split_into_audio_and_text(self):
+        record = CallRecord()
+        for frame in (self.metrics_frame(1000, 200, 800, 150), self.metrics_frame(2000, 100, None, None)):
+            call_bot.add_usage_metrics(record.usage, frame.data)
+
+        self.assertEqual(
+            (record.usage.input_text, record.usage.input_audio, record.usage.output_text, record.usage.output_audio),
+            (200 + 2000, 800, 50 + 100, 150),
+        )
+
+    async def test_collector_sums_metrics_frames_and_passes_every_frame_on(self):
+        from pipecat.frames.frames import MetricsFrame
+        from pipecat.tests.utils import run_test
+
+        record = CallRecord()
+        down, _up = await run_test(
+            call_bot.make_usage_collector(record.usage),
+            frames_to_send=[self.metrics_frame(1000, 200, 800, 150), self.metrics_frame(500, 20, 400, 10)],
+        )
+
+        self.assertEqual([type(f) for f in down], [MetricsFrame, MetricsFrame])
+        self.assertEqual((record.usage.input_audio, record.usage.output_audio), (1200, 160))
+
+    def test_finish_call_puts_estimated_cost_in_meta_and_none_without_usage(self):
+        config = CallConfig(system_instruction=INSTRUCTION, mode="mission")
+        record = CallRecord(chunks=[("Me", "Hi")])
+        record.usage.add_tokens(1_000_000, 100_000, 1_000_000, 100_000)
+
+        with mock.patch.object(call_bot, "save_transcript", side_effect=lambda chunks, meta, d: meta), \
+                mock.patch.object(call_bot, "get_transcript_dir", return_value=Path("/tmp")):
+            meta = finish_call(record, config, "gemini-live-2.5-flash-native-audio")
+            no_usage = finish_call(CallRecord(chunks=[("Me", "Hi")]), config, "gemini-live-2.5-flash-native-audio")
+            unknown = finish_call(record, config, "some-other-model")
+
+        self.assertEqual(meta["cost_usd"], 4.2)
+        self.assertIsNone(no_usage["cost_usd"])
+        self.assertIsNone(unknown["cost_usd"])
+
+
 class FakeRequest:
     def __init__(self, body, content_type="application/json"):
         self._body = body

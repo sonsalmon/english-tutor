@@ -20,6 +20,18 @@ class CompletedTest(unittest.TestCase):
         self.assertIn("- completed: no", head([("Me", "hi")]))
 
 
+class CostTest(unittest.TestCase):
+    def test_header_line_has_four_decimals_after_coach(self):
+        lines = head([("Me", "hi")], cost_usd=0.01234)
+
+        self.assertEqual(lines[lines.index("- coach: 0") + 1], "- cost_usd: 0.0123")
+
+    def test_missing_or_unknown_cost_leaves_the_header_as_before(self):
+        for extra in ({}, {"cost_usd": None}, {"cost_usd": "abc"}):
+            with self.subTest(extra=extra):
+                self.assertFalse([l for l in head([("Me", "hi")], **extra) if l.startswith("- cost_usd")])
+
+
 class CoachTest(unittest.TestCase):
     def coach(self, chunks):
         line = [l for l in head(chunks) if l.startswith("- coach:")][0]

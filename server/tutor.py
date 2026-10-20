@@ -25,6 +25,8 @@ import logging
 import os
 import re
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -32,6 +34,7 @@ from google import genai
 from google.genai import types
 
 from server.config_utils import get_project_id
+from server.pricing import UsageTotals
 from server.transcript_store import (
     get_audio_dir,
     get_teachback_dir,
@@ -198,10 +201,34 @@ def _make_client() -> genai.Client:
     return genai.Client(vertexai=True, project=project, location=location)
 
 
+def tutor_model() -> str:
+    return os.getenv(TUTOR_MODEL_ENV, DEFAULT_TUTOR_MODEL)
+
+
+_CALL_USAGE: ContextVar[Optional[UsageTotals]] = ContextVar("tutor_call_usage", default=None)
+
+
+@contextmanager
+def track_usage():
+    """블록 안에서 부른 Vertex 호출의 토큰 사용량을 UsageTotals 하나에 모은다(통화 하나의 분석 비용용)."""
+    usage = UsageTotals()
+    token = _CALL_USAGE.set(usage)
+    try:
+        yield usage
+    finally:
+        _CALL_USAGE.reset(token)
+
+
+def record_usage(response: Any) -> None:
+    usage = _CALL_USAGE.get()
+    if usage is not None:
+        usage.add_metadata(getattr(response, "usage_metadata", None))
+
+
 def make_generate_text(model_name: Optional[str] = None) -> Callable[[str], Any]:
     """JSON 응답을 요구하는 Vertex 텍스트 생성 함수를 만든다(analyze_*의 기본 구현과 같은 호출)."""
     client = _make_client()
-    chosen_model = model_name or os.getenv(TUTOR_MODEL_ENV, DEFAULT_TUTOR_MODEL)
+    chosen_model = model_name or tutor_model()
 
     def generate_text(prompt: str) -> Any:
         response = client.models.generate_content(
@@ -209,6 +236,7 @@ def make_generate_text(model_name: Optional[str] = None) -> Callable[[str], Any]
             contents=prompt,
             config=types.GenerateContentConfig(response_mime_type="application/json"),
         )
+        record_usage(response)
         return response.text
 
     return generate_text
@@ -249,6 +277,7 @@ def transcribe_verbatim(wav_path, *, model_name: Optional[str] = None) -> str:
         model=chosen_model,
         contents=[types.Part.from_bytes(data=data, mime_type="audio/wav"), VERBATIM_PROMPT],
     )
+    record_usage(response)
     return (response.text or "").strip()
 
 
@@ -299,16 +328,7 @@ def analyze_transcript(
     한 번 부르고, 파싱에 실패하면 한 번 더 시도한다.
     """
     if generate_text is None:
-        client = _make_client()
-        chosen_model = model_name or os.getenv(TUTOR_MODEL_ENV, DEFAULT_TUTOR_MODEL)
-
-        def generate_text(prompt: str) -> Any:  # noqa: F811 - 의도적 기본 구현
-            response = client.models.generate_content(
-                model=chosen_model,
-                contents=prompt,
-                config=types.GenerateContentConfig(response_mime_type="application/json"),
-            )
-            return response.text
+        generate_text = make_generate_text(model_name)
 
     prompt = with_verbatim(build_prompt(transcript), verbatim)
     last_error: Optional[Exception] = None
@@ -342,6 +362,13 @@ def save_tutoring(data: Dict[str, Any], transcript_path) -> Optional[Path]:
     return path
 
 
+def _add_cost(data: Dict[str, Any], usage: UsageTotals) -> None:
+    """이번 분석의 Vertex 사용량이 있으면 추정 비용(USD)을 결과에 넣는다. 가짜 호출이면 쓰지 않는다."""
+    cost = None if usage.is_empty() else usage.cost(tutor_model())
+    if cost is not None:
+        data["cost_usd"] = cost
+
+
 def run_tutoring(
     transcript_path,
     *,
@@ -355,8 +382,10 @@ def run_tutoring(
     """
     path = Path(transcript_path)
     text = path.read_text(encoding="utf-8")
-    verbatim = _verbatim_for(path, get_tutoring_dir(), transcribe)
-    data = analyze_transcript(text, generate_text=generate_text, verbatim=verbatim)
+    with track_usage() as usage:
+        verbatim = _verbatim_for(path, get_tutoring_dir(), transcribe)
+        data = analyze_transcript(text, generate_text=generate_text, verbatim=verbatim)
+    _add_cost(data, usage)
     saved = save_tutoring(data, path) is not None
     return data, saved
 
@@ -487,16 +516,7 @@ def analyze_teachback(
     모델을 부르고, 파싱 실패나 빈 결과면 한 번 재시도한다.
     """
     if generate_text is None:
-        client = _make_client()
-        chosen_model = model_name or os.getenv(TUTOR_MODEL_ENV, DEFAULT_TUTOR_MODEL)
-
-        def generate_text(prompt: str) -> Any:  # noqa: F811 - 의도적 기본 구현
-            response = client.models.generate_content(
-                model=chosen_model,
-                contents=prompt,
-                config=types.GenerateContentConfig(response_mime_type="application/json"),
-            )
-            return response.text
+        generate_text = make_generate_text(model_name)
 
     prompt = with_verbatim(build_teachback_prompt(transcript, lesson_text), verbatim)
     last_error: Optional[Exception] = None
@@ -544,8 +564,10 @@ def run_teachback(
     """
     path = Path(transcript_path)
     text = path.read_text(encoding="utf-8")
-    verbatim = _verbatim_for(path, get_teachback_dir(), transcribe)
-    data = analyze_teachback(text, lesson_text, generate_text=generate_text, verbatim=verbatim)
+    with track_usage() as usage:
+        verbatim = _verbatim_for(path, get_teachback_dir(), transcribe)
+        data = analyze_teachback(text, lesson_text, generate_text=generate_text, verbatim=verbatim)
+    _add_cost(data, usage)
     data["lesson_date"] = lesson_date
     saved = save_teachback(data, path) is not None
     return data, saved

@@ -1,3 +1,4 @@
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -5,7 +6,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from server import main
+from server import main, pron
 
 TRANSCRIPT = Path("/nonexistent/2026-10-20-090000.md")
 TUTORING = {"corrections": [{"said": "I just start", "better": "I just started", "why": "x"}]}
@@ -53,6 +54,20 @@ class TutorEndpointWiringTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(self.mocks["run"].call_count, 2)
         self.mocks["schedule"].assert_called_once()
+
+    async def test_response_carries_cost_object_and_card_update_does_not(self):
+        self.mocks["run"].side_effect = lambda path: ({**TUTORING, "cost_usd": 0.002}, True)
+        with mock.patch.object(main, "live_cost_of", return_value=0.01):
+            res = await main.tutor_endpoint(FakeRequest({}))
+
+        self.assertEqual(json.loads(res.body)["cost"], {"live": 0.01, "tutoring": 0.002, "total": 0.012})
+        self.mocks["schedule"].assert_called_once_with(TUTORING)
+
+    async def test_cost_total_is_null_when_nothing_was_measured(self):
+        with mock.patch.object(main, "live_cost_of", return_value=None):
+            res = await main.tutor_endpoint(FakeRequest({}))
+
+        self.assertEqual(json.loads(res.body)["cost"], {"live": None, "tutoring": None, "total": None})
 
     async def _teachback(self):
         result = {"corrections": TUTORING["corrections"], "unanswered": ["x"], "lesson_date": "2026-10-13"}
@@ -139,7 +154,35 @@ class IceCandidateTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ctx.exception.status_code, 404)
 
 
-EMPTY_PROFILE = {"load_failed": False, "brief": "", "updated": None, "weak_points": [], "next_goal": "", "practice_words": []}
+EMPTY_PROFILE = {
+    "load_failed": False,
+    "brief": "",
+    "pron": None,
+    "interests": [],
+    "updated": None,
+    "weak_points": [],
+    "next_goal": "",
+    "practice_words": [],
+}
+
+PRON_RESULT = {
+    "date": "2026-10-20",
+    "created_at": "2026-10-20T09:00:00+09:00",
+    "contrasts": [
+        {
+            "contrast": "can_cant",
+            "label": "can / can't",
+            "total": 4,
+            "as_target": 1,
+            "as_other": 3,
+            "unclear": 0,
+            "misheard": [{"target": "can't", "heard_text": "I can go."}] * 3,
+            "tip": "x",
+        },
+        {"contrast": "l_r", "label": "l / r", "total": 4, "as_target": 4, "as_other": 0, "unclear": 0, "misheard": [], "tip": "x"},
+    ],
+    "cost_usd": None,
+}
 
 
 class LearnerProfileEndpointTest(unittest.IsolatedAsyncioTestCase):
@@ -147,6 +190,9 @@ class LearnerProfileEndpointTest(unittest.IsolatedAsyncioTestCase):
         patcher = mock.patch.object(main, "practice_words", return_value=[])
         self.practice = patcher.start()
         self.addCleanup(patcher.stop)
+        pron_patcher = mock.patch.object(pron, "latest_result", return_value=None)
+        self.pron_latest = pron_patcher.start()
+        self.addCleanup(pron_patcher.stop)
 
     async def test_slow_bridge_does_not_hold_the_home_screen(self):
         import threading
@@ -196,6 +242,114 @@ class LearnerProfileEndpointTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["weak_points"], [{"pattern": f"p{i}", "example": f"e{i}"} for i in range(3)])
         self.assertEqual(body["next_goal"], "Ask with do.")
         self.assertIn("p0", body["brief"])
+
+
+    async def test_interests_come_from_the_card(self):
+        card = {
+            "updated": "2026-10-20T09:00:00+09:00",
+            "level": {"cefr": "", "actfl": "", "source": ""},
+            "weak_points": [],
+            "fixed_points": [],
+            "phrases": [],
+            "pragmatics": [],
+            "interests": ["hiking", "security"],
+            "next_goal": "",
+        }
+        with mock.patch.object(main, "load_profile", return_value=card):
+            body = await main.learner_profile_endpoint()
+
+        self.assertEqual(body["interests"], ["hiking", "security"])
+
+    async def test_pron_result_adds_brief_lines_and_weak_summary(self):
+        self.pron_latest.return_value = PRON_RESULT
+        with mock.patch.object(main, "load_profile", return_value=None):
+            body = await main.learner_profile_endpoint()
+
+        self.assertTrue(body["brief"].startswith("Pronunciation check (reading test 2026-10-20)"))
+        self.assertEqual(
+            body["pron"],
+            {"date": "2026-10-20", "weak": [{"label": "can / can't", "as_other": 3, "unclear": 0, "total": 4}]},
+        )
+
+    async def test_pron_brief_follows_the_card_brief(self):
+        self.pron_latest.return_value = PRON_RESULT
+        card = {
+            "updated": "2026-10-20T09:00:00+09:00",
+            "level": {"cefr": "B1.2", "actfl": "", "source": ""},
+            "weak_points": [],
+            "fixed_points": [],
+            "phrases": [],
+            "pragmatics": [],
+            "interests": [],
+            "next_goal": "",
+        }
+        with mock.patch.object(main, "load_profile", return_value=card):
+            body = await main.learner_profile_endpoint()
+
+        self.assertTrue(body["brief"].startswith("Level: B1.2.\nPronunciation check"))
+
+
+class PhraseEndpointsTest(unittest.TestCase):
+    def setUp(self):
+        from fastapi.testclient import TestClient
+
+        self.client = TestClient(main.app)
+
+    def test_save_sends_normalized_text_and_answers_saved(self):
+        with mock.patch.object(main, "save_phrase", return_value=True) as save:
+            res = self.client.post("/api/phrase/save", json={"text": "  I can't   make it. ", "translation": " 못 가요. "})
+
+        self.assertEqual((res.status_code, res.json()), (200, {"saved": True}))
+        save.assert_called_once_with("I can't make it.", "못 가요.")
+
+    def test_save_translation_may_be_empty_or_missing(self):
+        with mock.patch.object(main, "save_phrase", return_value=True) as save:
+            self.assertEqual(self.client.post("/api/phrase/save", json={"text": "Circle back", "translation": ""}).status_code, 200)
+            self.assertEqual(self.client.post("/api/phrase/save", json={"text": "Circle back"}).status_code, 200)
+
+        self.assertEqual(save.call_count, 2)
+
+    def test_save_rejects_bad_fields_and_non_json(self):
+        bad = [
+            {"text": "a"},
+            {"text": " 12 34 "},
+            {"text": "x" * 1001},
+            {"text": 5},
+            {"translation": "x"},
+            {"text": "Circle back", "translation": "x" * 301},
+            {"text": "Circle back", "translation": 3},
+        ]
+        with mock.patch.object(main, "save_phrase", return_value=True) as save:
+            for body in bad:
+                with self.subTest(body=str(body)[:40]):
+                    self.assertEqual(self.client.post("/api/phrase/save", json=body).status_code, 400)
+            res = self.client.post("/api/phrase/save", content='{"text": "Circle back"}', headers={"content-type": "text/plain"})
+            self.assertEqual(res.status_code, 415)
+            self.assertEqual(self.client.post("/api/phrase/save", json={"text": "x" * 1000}).status_code, 200)
+            self.assertEqual(self.client.post("/api/phrase/save", json={"text": "ab"}).status_code, 200)
+
+        self.assertEqual(save.call_count, 2)
+
+    def test_save_is_503_with_korean_detail_when_bridge_is_off(self):
+        with mock.patch.object(main, "save_phrase", return_value=False):
+            res = self.client.post("/api/phrase/save", json={"text": "Circle back"})
+
+        self.assertEqual((res.status_code, res.json()), (503, {"detail": "readgloss가 꺼져 있어 저장하지 못했어요."}))
+
+    def test_status_compares_normalized_text_in_order(self):
+        with mock.patch.object(main, "stored_phrase_keys", return_value={"circle back later"}):
+            res = self.client.post("/api/phrase/status", json={"texts": ["Circle  BACK later", "Something else", ""]})
+
+        self.assertEqual((res.status_code, res.json()), (200, {"saved": [True, False, False]}))
+
+    def test_status_rejects_bad_lists_and_is_503_when_bridge_is_off(self):
+        with mock.patch.object(main, "stored_phrase_keys", return_value=None):
+            self.assertEqual(self.client.post("/api/phrase/status", json={"texts": ["a b"]}).status_code, 503)
+            for body in ({"texts": "x"}, {"texts": [1]}, {"texts": ["x"] * 41}, {}):
+                with self.subTest(body=str(body)[:30]):
+                    self.assertEqual(self.client.post("/api/phrase/status", json=body).status_code, 400)
+            res = self.client.post("/api/phrase/status", content="{}", headers={"content-type": "text/plain"})
+            self.assertEqual(res.status_code, 415)
 
 
 class WordEndpointsTest(unittest.TestCase):

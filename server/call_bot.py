@@ -18,6 +18,7 @@ from google.genai.types import EndSensitivity, StartSensitivity
 
 from server.config_utils import get_project_id
 from server.lesson import session_time_limit_from_env
+from server.pricing import UsageTotals, estimate_cost
 from server.transcript_store import (
     get_transcript_dir,
     save_call_audio,
@@ -188,6 +189,7 @@ class CallRecord:
     mic_pcm: bytearray = field(default_factory=bytearray)
     completed: bool = False
     paused_sec: float = 0.0
+    usage: UsageTotals = field(default_factory=UsageTotals)
 
     def add_user(self, text: str) -> None:
         clean = " ".join(NOISE_MARK_RE.sub(" ", text or "").split())
@@ -208,6 +210,37 @@ class CallRecord:
             self.mic_pcm.extend(pcm[:room])
 
 
+def add_usage_metrics(usage: UsageTotals, data: Any) -> None:
+    """Pipecat MetricsFrame.data 안의 LLM 토큰 사용량(LLMUsageMetricsData)만 통화 합계에 더한다.
+
+    Gemini Live는 턴마다 그 턴에 청구되는 전체 문맥 토큰을 보고하므로 더하기만 하면 된다.
+    """
+    for item in data or []:
+        tokens = getattr(item, "value", None)
+        if hasattr(tokens, "prompt_tokens") and hasattr(tokens, "completion_tokens"):
+            usage.add_tokens(
+                tokens.prompt_tokens,
+                tokens.completion_tokens,
+                getattr(tokens, "input_audio_tokens", None),
+                getattr(tokens, "output_audio_tokens", None),
+            )
+
+
+def make_usage_collector(usage: UsageTotals):
+    """LLM 서비스 뒤에 두는 처리기: 지나가는 MetricsFrame의 토큰 사용량을 usage에 더하고 프레임은 그대로 흘린다."""
+    from pipecat.frames.frames import Frame, MetricsFrame
+    from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+
+    class UsageCollector(FrameProcessor):
+        async def process_frame(self, frame: Frame, direction: FrameDirection):
+            await super().process_frame(frame, direction)
+            if isinstance(frame, MetricsFrame):
+                add_usage_metrics(usage, frame.data)
+            await self.push_frame(frame, direction)
+
+    return UsageCollector()
+
+
 def finish_call(record: CallRecord, config: CallConfig, model: str, ended_at: Optional[float] = None):
     ended_at = ended_at or time.time()
     started_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(record.started_at))
@@ -225,6 +258,7 @@ def finish_call(record: CallRecord, config: CallConfig, model: str, ended_at: Op
                 "model": model,
                 "mission": config.mission,
                 "completed": record.completed,
+                "cost_usd": None if record.usage.is_empty() else estimate_cost(model, record.usage),
             },
             get_transcript_dir(),
         )
@@ -336,11 +370,12 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
         transport.input(),
         user_aggregator,
         llm,
+        make_usage_collector(record.usage),
         transport.output(),
         audiobuffer,
         assistant_aggregator,
     ])
-    worker = PipelineWorker(pipeline, params=PipelineParams(enable_metrics=False))
+    worker = PipelineWorker(pipeline, params=PipelineParams(enable_metrics=True, enable_usage_metrics=True))
     runner = WorkerRunner(handle_sigint=False)
     await runner.add_workers(worker)
 

@@ -38,6 +38,7 @@ GLOSS_MAX = 40
 SENSES_MAX = 4
 SAVE_GLOSS_MAX = 200
 PUSH_LIMIT = 5
+PHRASE_TITLE = "English Tutor 카드"
 # readgloss bridge/lookup.mjs WORD_RE와 같은 규칙(원형 키).
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z'’-]{0,63}")
 LEMMA_RE = re.compile(r"[a-z][a-z'’-]{1,63}")
@@ -142,6 +143,28 @@ def save_word(lemma: str, word: str, gloss: str, sentence: str) -> bool:
     """단어 하나를 readgloss 단어장에 넣는다. 다리가 꺼져 있거나 거절하면 False."""
     body = {"op": "save", "lemma": lemma, "word": word, "gloss": gloss[:SAVE_GLOSS_MAX], "sentence": sentence, "url": ""}
     return _request("POST", "/words", body) is not None
+
+
+def normalize_phrase(text: Any) -> str:
+    """저장 여부를 비교하려고 공백을 하나로 모으고 소문자로 맞춘다."""
+    return " ".join(str(text or "").split()).lower()
+
+
+def save_phrase(text: str, translation: str) -> bool:
+    """문장 하나를 readgloss 구 카드(expression)로 넣는다. 다리가 꺼져 있거나 거절하면 False."""
+    body = {"op": "save-phrase", "text": text, "translation": translation, "kind": "expression", "title": PHRASE_TITLE, "sentence": "", "url": ""}
+    return _request("POST", "/words", body) is not None
+
+
+def stored_phrase_keys() -> Optional[set]:
+    """readgloss에 저장된 구·문장의 정규화한 글 집합. 다리가 꺼져 있으면 None."""
+    state = _request("GET", "/words")
+    if not isinstance(state, dict):
+        return None
+    phrases = state.get("phrases")
+    if not isinstance(phrases, dict):
+        return set()
+    return {normalize_phrase(p.get("text")) for p in phrases.values() if isinstance(p, dict)}
 
 
 def pick_practice_words(state: dict, review: Optional[dict], now: datetime, limit: int = PRACTICE_LIMIT) -> List[Dict[str, str]]:

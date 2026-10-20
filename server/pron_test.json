@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "note": "Blind minimal-pair reading test. Both sentences of a pair are natural, so a transcriber cannot pick the word from context. The server transcribes without seeing the target and checks which member of the pair was heard.",
+  "contrasts": {
+    "can_cant": "can / can't",
+    "l_r": "l / r",
+    "p_f": "p / f",
+    "b_v": "b / v",
+    "th_f": "th / f",
+    "i_ee": "short i / long ee",
+    "ed": "-ed ending"
+  },
+  "items": [
+    {"id": "c1", "contrast": "can_cant", "target": "can", "other": "can't", "text": "I can go to the meeting tomorrow."},
+    {"id": "c2", "contrast": "can_cant", "target": "can't", "other": "can", "text": "I can't go to the meeting tomorrow."},
+    {"id": "c3", "contrast": "can_cant", "target": "can", "other": "can't", "text": "She can drive on the highway."},
+    {"id": "c4", "contrast": "can_cant", "target": "can't", "other": "can", "text": "She can't drive on the highway."},
+    {"id": "c5", "contrast": "can_cant", "target": "can't", "other": "can", "text": "We can't finish it by Friday."},
+    {"id": "c6", "contrast": "can_cant", "target": "can", "other": "can't", "text": "We can finish it by Friday."},
+    {"id": "c7", "contrast": "can_cant", "target": "can't", "other": "can", "text": "You can't park here."},
+    {"id": "c8", "contrast": "can_cant", "target": "can", "other": "can't", "text": "You can park here."},
+    {"id": "l1", "contrast": "l_r", "target": "collect", "other": "correct", "text": "Can you collect the data?"},
+    {"id": "l2", "contrast": "l_r", "target": "correct", "other": "collect", "text": "Can you correct the data?"},
+    {"id": "l3", "contrast": "l_r", "target": "play", "other": "pray", "text": "I like to play every morning."},
+    {"id": "l4", "contrast": "l_r", "target": "pray", "other": "play", "text": "I like to pray every morning."},
+    {"id": "p1", "contrast": "p_f", "target": "pan", "other": "fan", "text": "I bought a new pan."},
+    {"id": "p2", "contrast": "p_f", "target": "fan", "other": "pan", "text": "I bought a new fan."},
+    {"id": "p3", "contrast": "p_f", "target": "copy", "other": "coffee", "text": "Can I get a copy?"},
+    {"id": "p4", "contrast": "p_f", "target": "coffee", "other": "copy", "text": "Can I get a coffee?"},
+    {"id": "b1", "contrast": "b_v", "target": "boat", "other": "vote", "text": "We took the boat."},
+    {"id": "b2", "contrast": "b_v", "target": "vote", "other": "boat", "text": "We took the vote."},
+    {"id": "t1", "contrast": "th_f", "target": "three", "other": "free", "text": "I have three tickets."},
+    {"id": "t2", "contrast": "th_f", "target": "free", "other": "three", "text": "I have free tickets."},
+    {"id": "i1", "contrast": "i_ee", "target": "ship", "other": "sheep", "text": "Look at that ship."},
+    {"id": "i2", "contrast": "i_ee", "target": "sheep", "other": "ship", "text": "Look at that sheep."},
+    {"id": "i3", "contrast": "i_ee", "target": "live", "other": "leave", "text": "I want to live here."},
+    {"id": "i4", "contrast": "i_ee", "target": "leave", "other": "live", "text": "I want to leave here."},
+    {"id": "e1", "contrast": "ed", "target": "walked", "other": "walk", "text": "We walked to work."},
+    {"id": "e2", "contrast": "ed", "target": "walk", "other": "walked", "text": "We walk to work."}
+  ]
+}

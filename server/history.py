@@ -12,6 +12,7 @@ from itertools import islice
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from server.pricing import combine_cost
 from server.transcript_store import get_teachback_dir, get_transcript_dir, get_tutoring_dir
 
 logger = logging.getLogger(__name__)
@@ -21,7 +22,8 @@ _HEADER_RE = re.compile(r"# Call (\d{4}-\d{2}-\d{2} \d{2}:\d{2})\s*", re.ASCII)
 _DURATION_RE = re.compile(r"- duration: (\d+)m (\d+)s\s*", re.ASCII)
 _MISSION_RE = re.compile(r"- mission: (.*)")
 _COMPLETED_RE = re.compile(r"- completed: (yes|no)\s*", re.ASCII)
-_HEADER_LINES = 8
+_COST_RE = re.compile(r"- cost_usd: (\d+(?:\.\d+)?)\s*", re.ASCII)
+_HEADER_LINES = 9
 # 클라이언트가 가벼운 대화 통화의 지시문에 넣는 미션 이름. 전문 머리글의 mission이 이 값이면 kind는 smalltalk.
 SMALLTALK_MISSION = "Small Talk"
 
@@ -47,7 +49,7 @@ def _parse_call(path: Path) -> Optional[Dict[str, Any]]:
     except ValueError:
         return None
 
-    duration = mission = completed = None
+    duration = mission = completed = live_cost = None
     for line in head[1:]:
         if duration is None and (m := _DURATION_RE.fullmatch(line)):
             duration = int(m.group(1)) * 60 + int(m.group(2))
@@ -55,6 +57,8 @@ def _parse_call(path: Path) -> Optional[Dict[str, Any]]:
             mission = m.group(1).strip()
         elif completed is None and (m := _COMPLETED_RE.fullmatch(line)):
             completed = m.group(1) == "yes"
+        elif live_cost is None and (m := _COST_RE.fullmatch(line)):
+            live_cost = float(m.group(1))
     if duration is None:
         return None
 
@@ -69,7 +73,26 @@ def _parse_call(path: Path) -> Optional[Dict[str, Any]]:
         "completed": bool(completed),
         "has_tutoring": tutoring,
         "kind": "teachback" if teachback else "smalltalk" if mission == SMALLTALK_MISSION else "call",
+        "cost": combine_cost(live_cost, None),
     }
+
+
+def live_cost_of(path: Path) -> Optional[float]:
+    """전문 머리글의 Live 추정 비용(없거나 모르면 None)."""
+    call = _parse_call(Path(path))
+    return call["cost"]["live"] if call else None
+
+
+def _number(value: Any) -> Optional[float]:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _tutoring_cost(call: Dict[str, Any]) -> Optional[float]:
+    if not call["has_tutoring"]:
+        return None
+    directory = get_teachback_dir() if call["kind"] == "teachback" else get_tutoring_dir()
+    data = _read_json(directory / f"{call['stem']}.json")
+    return _number(data.get("cost_usd")) if data else None
 
 
 def _all_calls() -> List[Dict[str, Any]]:
@@ -86,7 +109,10 @@ def _all_calls() -> List[Dict[str, Any]]:
 
 def list_calls(limit: int = 50) -> List[Dict[str, Any]]:
     """최신순 통화 목록. limit개까지."""
-    return _all_calls()[: max(int(limit), 0)]
+    calls = _all_calls()[: max(int(limit), 0)]
+    for call in calls:
+        call["cost"] = combine_cost(call["cost"]["live"], _tutoring_cost(call))
+    return calls
 
 
 def totals(now: Optional[datetime] = None) -> Dict[str, int]:
@@ -123,4 +149,5 @@ def load_call(stem: str) -> Dict[str, Any]:
         raise FileNotFoundError("통화 기록을 읽을 수 없습니다")
     directory = get_teachback_dir() if call["kind"] == "teachback" else get_tutoring_dir()
     tutoring = _read_json(directory / f"{stem}.json") if call["has_tutoring"] else None
+    call["cost"] = combine_cost(call["cost"]["live"], _number(tutoring.get("cost_usd")) if tutoring else None)
     return {"call": call, "tutoring": tutoring}

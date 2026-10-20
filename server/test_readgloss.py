@@ -33,7 +33,7 @@ STATE = {
         {"lemma": "ancient", "gloss": "오래된", "ts": ms(NOW - timedelta(days=30))},
         {"lemma": "mitigate", "gloss": "완화하다\n(위험을)", "ts": ms(NOW - timedelta(days=2))},
     ],
-    "phrases": {},
+    "phrases": {"aaaaaaaaaaaa": {"text": "Circle  back later", "translation": "", "kind": "expression", "ts": 1}, "bad": "x"},
 }
 DICT_FOUND = {
     "found": True,
@@ -218,6 +218,42 @@ class BridgeClientTest(unittest.TestCase):
         self.assertEqual(saved, 1)
         self.assertEqual([c[:2] for c in FakeBridge.calls], [("GET", "/ping"), ("POST", "/words")])
         self.assertEqual(FakeBridge.calls[1][4]["lemma"], "leverage")
+
+    def test_save_phrase_posts_an_expression_card(self):
+        self.assertTrue(readgloss.save_phrase("I can't make it.", "못 가요."))
+
+        self.assertEqual(
+            FakeBridge.calls[0][:2] + (FakeBridge.calls[0][4],),
+            (
+                "POST",
+                "/words",
+                {
+                    "op": "save-phrase",
+                    "text": "I can't make it.",
+                    "translation": "못 가요.",
+                    "kind": "expression",
+                    "title": "English Tutor 카드",
+                    "sentence": "",
+                    "url": "",
+                },
+            ),
+        )
+
+    def test_stored_phrase_keys_are_whitespace_and_case_normalized(self):
+        self.assertEqual(readgloss.stored_phrase_keys(), {"circle back later"})
+        self.assertEqual(readgloss.normalize_phrase("  Circle\n back   LATER "), "circle back later")
+
+    def test_phrase_calls_are_none_false_when_bridge_refuses_or_is_down(self):
+        self.token_file.write_text("wrong", encoding="utf-8")
+        self.assertIsNone(readgloss.stored_phrase_keys())
+        self.assertFalse(readgloss.save_phrase("Circle back", ""))
+
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            closed_port = s.getsockname()[1]
+        self.env(f"http://127.0.0.1:{closed_port}", self.token_file)
+        self.assertIsNone(readgloss.stored_phrase_keys())
+        self.assertFalse(readgloss.save_phrase("Circle back", ""))
 
     def test_lookup_word_posts_to_dict_and_compacts(self):
         out = readgloss.lookup_word("leverage")
