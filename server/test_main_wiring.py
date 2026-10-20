@@ -830,5 +830,93 @@ class PartnerMemoryWiringTest(unittest.IsolatedAsyncioTestCase):
         self.mocks["update"].assert_not_called()
 
 
+class ChatEndpointsTest(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+
+        from fastapi.testclient import TestClient
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        patcher = mock.patch.dict("os.environ", {"CHAT_DIR": self.tmp.name})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        main.chat._INFLIGHT.clear()
+        self.client = TestClient(main.app)
+
+    def send(self, pid="priya", **body):
+        return self.client.post(f"/api/chat/{pid}", json={"instruction": "be Priya", "message": "hi", **body})
+
+    def test_unknown_and_park_ids_are_400(self):
+        for pid in ("park", "nobody"):
+            with self.subTest(pid=pid):
+                self.assertEqual(self.client.get(f"/api/chat/{pid}").status_code, 400)
+                self.assertEqual(self.send(pid).status_code, 400)
+                self.assertEqual(self.client.post(f"/api/chat/{pid}/close").status_code, 400)
+
+    def test_send_then_get(self):
+        with mock.patch.object(main.chat, "generate_reply", return_value="Hey you!"):
+            res = self.send(message="hello")
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertEqual(body["reply"], "Hey you!")
+        self.assertEqual([m["role"] for m in body["messages"]], ["me", "friend"])
+        listed = self.client.get("/api/chat/priya").json()["messages"]
+        self.assertEqual([m["text"] for m in listed], ["hello", "Hey you!"])
+
+    def test_bad_bodies_are_400_and_415(self):
+        self.assertEqual(self.send(message="").status_code, 400)
+        self.assertEqual(self.send(message="x" * 1001).status_code, 400)
+        self.assertEqual(self.send(instruction="").status_code, 400)
+        self.assertEqual(self.send(instruction="x" * 24001).status_code, 400)
+        res = self.client.post("/api/chat/priya", content='{"instruction": "x", "message": "hi"}', headers={"content-type": "text/plain"})
+        self.assertEqual(res.status_code, 415)
+
+    def test_model_failure_is_502_and_saves_nothing(self):
+        with mock.patch.object(main.chat, "generate_reply", side_effect=RuntimeError("429")):
+            res = self.send()
+        self.assertEqual(res.status_code, 502)
+        self.assertEqual(self.client.get("/api/chat/priya").json(), {"messages": []})
+
+
+class ChatCloseWiringTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        import tempfile
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        patcher = mock.patch.dict("os.environ", {"CHAT_DIR": self.tmp.name})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        main.chat._INFLIGHT.clear()
+
+    async def drain(self):
+        while main._background_tasks:
+            await asyncio.gather(*list(main._background_tasks))
+
+    async def test_close_schedules_one_chat_memory_update_over_new_messages(self):
+        main.chat.append_messages("priya", [{"role": "me", "text": "I like tea", "at": ""}, {"role": "friend", "text": "Same!", "at": ""}])
+        with mock.patch.object(main.partner_memory, "update", return_value=True) as update, mock.patch(
+            "server.tutor.make_generate_text", return_value=lambda prompt: "{}"
+        ):
+            first = await main.chat_close("priya")
+            await self.drain()
+            second = await main.chat_close("priya")
+            await self.drain()
+
+        self.assertEqual(first, {"status": "scheduled"})
+        self.assertEqual(second, {"status": "nothing"})
+        update.assert_called_once()
+        args, kwargs = update.call_args
+        self.assertEqual(args[0], "priya")
+        self.assertEqual(args[1], [("me", "I like tea"), ("partner", "Same!")])
+        self.assertEqual(kwargs["mode"], "chat")
+
+    async def test_close_with_no_messages_is_nothing(self):
+        with mock.patch.object(main.partner_memory, "update") as update:
+            self.assertEqual(await main.chat_close("jake"), {"status": "nothing"})
+        update.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

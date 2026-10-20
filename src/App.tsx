@@ -5,6 +5,7 @@ import type { Retry } from './lib/instructions';
 import { takePendingLatency } from './lib/latency';
 import { go, useRoute, useRouteParam } from './lib/router';
 import type { CallSetup, FinishedCall } from './lib/setup';
+import { Chat } from './screens/Chat';
 import { CallHistory } from './screens/History';
 import { Home } from './screens/Home';
 import { Missions } from './screens/Missions';
@@ -103,6 +104,16 @@ export function App() {
         );
       case 'pron':
         return <Pron />;
+      case 'chat':
+        return (
+          <Chat
+            partnerId={param}
+            brief={profile?.brief ?? ''}
+            interests={profile?.interests}
+            profileReady={profile !== null}
+            onCall={(partner) => startCall({ kind: 'smalltalk', partner })}
+          />
+        );
       case 'call':
         return setup ? (
           <Suspense fallback={null}>

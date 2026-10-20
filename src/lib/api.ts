@@ -91,13 +91,33 @@ export function formatUsdShort(n: number): string {
 
 export type PartnerMemoryFact = { text: string; last_seen: string };
 export type PartnerMemoryThread = { text: string; ko: string; last_seen: string };
+export type PartnerMemorySelfStory = { story: string; progress: string; last_seen: string };
+export type PartnerMemoryJoke = { text: string; last_seen: string };
+export type PartnerMemoryEpisode = { date: string; mode: 'call' | 'chat'; summary: string };
 export type PartnerMemory = {
   partner: string;
   updated: string;
   facts: PartnerMemoryFact[];
   threads: PartnerMemoryThread[];
+  self_story: PartnerMemorySelfStory[];
+  jokes: PartnerMemoryJoke[];
+  episodes: PartnerMemoryEpisode[];
 };
-export type PartnerMemoryKind = 'facts' | 'threads';
+export type PartnerMemoryKind = 'facts' | 'threads' | 'self_story' | 'jokes' | 'episodes';
+
+// 서버 응답(옛 v1 파일은 새 키가 없다)을 PartnerMemory로 맞춘다.
+function toPartnerMemory(raw: any, id: string): PartnerMemory {
+  const list = (v: unknown) => (Array.isArray(v) ? v : []);
+  return {
+    partner: String(raw?.partner ?? id),
+    updated: String(raw?.updated ?? ''),
+    facts: list(raw?.facts),
+    threads: list(raw?.threads),
+    self_story: list(raw?.self_story),
+    jokes: list(raw?.jokes),
+    episodes: list(raw?.episodes),
+  };
+}
 
 export type WordInfo = { word: string; lemma: string; gloss: string; senses: string[]; pos?: string };
 
@@ -151,12 +171,7 @@ export async function getPartnerMemory(id: string, signal?: AbortSignal): Promis
   if (!res.ok) throw new Error(await errorMessage(res, '친구의 기억을 불러오지 못했어요.'));
   const data = await res.json();
   if (data?.status !== 'ok' || !data.memory) return null;
-  return {
-    partner: String(data.memory.partner ?? id),
-    updated: String(data.memory.updated ?? ''),
-    facts: Array.isArray(data.memory.facts) ? data.memory.facts : [],
-    threads: Array.isArray(data.memory.threads) ? data.memory.threads : [],
-  };
+  return toPartnerMemory(data.memory, id);
 }
 
 export async function clearPartnerMemory(id: string): Promise<void> {
@@ -188,12 +203,44 @@ export async function forgetPartnerMemoryItem(id: string, kind: PartnerMemoryKin
   if (res.status === 409) throw new MemoryChangedError();
   if (!res.ok) throw new Error(await errorMessage(res, '기억을 지우지 못했어요.'));
   const data = await res.json();
-  return {
-    partner: String(data?.memory?.partner ?? id),
-    updated: String(data?.memory?.updated ?? ''),
-    facts: Array.isArray(data?.memory?.facts) ? data.memory.facts : [],
-    threads: Array.isArray(data?.memory?.threads) ? data.memory.threads : [],
-  };
+  return toPartnerMemory(data?.memory, id);
+}
+
+export type ChatMessage = { role: 'me' | 'friend'; text: string; at: string };
+
+export async function getChat(id: string, signal?: AbortSignal): Promise<ChatMessage[]> {
+  let res: Response;
+  try {
+    res = await fetch(`/api/chat/${encodeURIComponent(id)}`, { signal });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') throw e;
+    throw new Error('대화를 불러오지 못했어요.');
+  }
+  if (!res.ok) throw new Error(await errorMessage(res, '대화를 불러오지 못했어요.'));
+  const data = await res.json();
+  return Array.isArray(data?.messages) ? data.messages : [];
+}
+
+// 메시지를 보내고 친구의 답과 저장된 두 메시지를 받는다. 실패하면 서버에는 아무것도 남지 않는다.
+export async function sendChat(id: string, instruction: string, message: string): Promise<{ reply: string; messages: ChatMessage[] }> {
+  let res: Response;
+  try {
+    res = await fetch(`/api/chat/${encodeURIComponent(id)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instruction, message }),
+    });
+  } catch {
+    throw new Error('서버에 연결하지 못했어요. 잠시 뒤에 다시 보내 주세요.');
+  }
+  if (!res.ok) throw new Error(await errorMessage(res, '메시지를 보내지 못했어요. 잠시 뒤에 다시 보내 주세요.'));
+  const data = await res.json();
+  return { reply: String(data?.reply ?? ''), messages: Array.isArray(data?.messages) ? data.messages : [] };
+}
+
+// 대화를 떠날 때 부른다. 탭을 닫는 중에도 나가도록 keepalive로 보내고, 실패해도 화면에는 영향이 없다.
+export function closeChat(id: string): void {
+  void fetch(`/api/chat/${encodeURIComponent(id)}/close`, { method: 'POST', keepalive: true }).catch(() => {});
 }
 
 export async function getTimeLimits(): Promise<TimeLimits> {
