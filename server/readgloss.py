@@ -26,6 +26,8 @@ DEFAULT_TOKEN_FILE = "~/dev/readgloss/data/token"
 # 다리는 DNS 리바인딩을 막으려고 Host 머리글이 이 값인지 검사한다. 시험 다리를 다른 포트에 띄워도 같은 값을 보낸다.
 BRIDGE_HOST = "127.0.0.1:47831"
 TIMEOUT_SEC = 1.5
+# 사전 도우미는 처음 요청 때 띄우느라 느릴 수 있다(다리 쪽 제한 3초).
+LOOKUP_TIMEOUT_SEC = 4.0
 MAX_RESPONSE_BYTES = 5_000_000
 
 PRACTICE_LIMIT = 5
@@ -33,6 +35,8 @@ PRACTICE_LIMIT = 5
 REVIEW_FIRST = 3
 LOOKUP_DAYS = 14
 GLOSS_MAX = 40
+SENSES_MAX = 4
+SAVE_GLOSS_MAX = 200
 PUSH_LIMIT = 5
 # readgloss bridge/lookup.mjs WORD_RE와 같은 규칙(원형 키).
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z'’-]{0,63}")
@@ -49,7 +53,7 @@ def _token() -> Optional[str]:
     return token or None
 
 
-def _request(method: str, path: str, body: Optional[dict] = None) -> Optional[Any]:
+def _request(method: str, path: str, body: Optional[dict] = None, timeout: float = TIMEOUT_SEC) -> Optional[Any]:
     """다리 요청 한 번. 실패하면 None(다리 꺼짐·토큰 없음·거절·깨진 응답)."""
     token = _token()
     if not token:
@@ -62,7 +66,7 @@ def _request(method: str, path: str, body: Optional[dict] = None) -> Optional[An
     if data is not None:
         req.add_header("Content-Type", "application/json")
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_SEC) as res:
+        with urllib.request.urlopen(req, timeout=timeout) as res:
             raw = res.read(MAX_RESPONSE_BYTES + 1)
         if len(raw) > MAX_RESPONSE_BYTES:
             raise ValueError("response too large")
@@ -75,6 +79,63 @@ def _request(method: str, path: str, body: Optional[dict] = None) -> Optional[An
 def _gloss(value: Any) -> str:
     text = " ".join(str(value or "").split())
     return text[:GLOSS_MAX]
+
+
+_SENSE_SPLIT_RE = re.compile(r"[,;:，；：]")
+_SENSE_TAG_RE = re.compile(r"[〔\[][^〕\]]*[〕\]]|\([^)]*\)")
+_HANGUL_RE = re.compile(r"[가-힣]")
+
+
+def _short_sense(text: Any) -> str:
+    """사전 뜻 한 덩어리에서 짧은 한국어 뜻 하나를 뽑는다. 한글이 없으면 빈 글."""
+    first = _SENSE_SPLIT_RE.split(_SENSE_TAG_RE.sub(" ", str(text or "")))[0]
+    first = " ".join(first.split()).rstrip(".。")
+    return _gloss(first) if _HANGUL_RE.search(first) else ""
+
+
+def compact_lookup(word: str, result: dict) -> Dict[str, Any]:
+    """다리의 /dict 응답을 화면용으로 줄인다. 사전에 없으면 gloss·senses가 비어 있다."""
+    lemma = result.get("lemma") if isinstance(result.get("lemma"), str) and result.get("lemma") else word.lower()
+    senses: List[str] = []
+
+    def add(text: Any) -> None:
+        short = _short_sense(text)
+        if short and short not in senses and len(senses) < SENSES_MAX:
+            senses.append(short)
+
+    # 내 사전 → 분야 용어 → 사전 뜻 순(다리 카드와 같은 우선순위).
+    for key in ("mine", "term"):
+        extra = result.get(key)
+        if isinstance(extra, dict):
+            add(extra.get("ko"))
+    pos = ""
+    for entry in result.get("entries") or []:
+        if not isinstance(entry, dict):
+            continue
+        for sense in entry.get("senses") or []:
+            if not isinstance(sense, dict):
+                continue
+            add(sense.get("text"))
+            pos = pos or str(sense.get("pos") or "").strip()
+    gloss = _gloss(result.get("gloss")) or (senses[0] if senses else "")
+    out: Dict[str, Any] = {"word": word, "lemma": lemma, "gloss": gloss, "senses": senses}
+    if pos:
+        out["pos"] = pos[:20]
+    return out
+
+
+def lookup_word(word: str) -> Optional[Dict[str, Any]]:
+    """readgloss 사전에서 단어 뜻을 찾는다. 다리가 꺼져 있거나 거절하면 None."""
+    result = _request("POST", "/dict", {"word": word}, timeout=LOOKUP_TIMEOUT_SEC)
+    if not isinstance(result, dict):
+        return None
+    return compact_lookup(word, result)
+
+
+def save_word(lemma: str, word: str, gloss: str, sentence: str) -> bool:
+    """단어 하나를 readgloss 단어장에 넣는다. 다리가 꺼져 있거나 거절하면 False."""
+    body = {"op": "save", "lemma": lemma, "word": word, "gloss": gloss[:SAVE_GLOSS_MAX], "sentence": sentence, "url": ""}
+    return _request("POST", "/words", body) is not None
 
 
 def pick_practice_words(state: dict, review: Optional[dict], now: datetime, limit: int = PRACTICE_LIMIT) -> List[Dict[str, str]]:

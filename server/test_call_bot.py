@@ -29,6 +29,26 @@ class ParseCallConfigTest(unittest.TestCase):
             self.assertEqual(config.time_limit, 900)
             self.assertEqual(mission.time_limit, 600)
 
+    def test_smalltalk_has_opener_and_its_own_time_limit(self):
+        with mock.patch.dict(os.environ, {"SESSION_TIME_LIMIT": "600", "TEACHBACK_TIME_LIMIT": "900", "SMALLTALK_TIME_LIMIT": "420"}):
+            config = parse_call_config({"system_instruction": INSTRUCTION, "mode": "smalltalk"})
+            mission = parse_call_config({"system_instruction": INSTRUCTION, "mode": "mission"})
+
+            self.assertTrue(config.opener)
+            self.assertEqual(config.time_limit, 420)
+            self.assertEqual(mission.time_limit, 600)
+
+    def test_smalltalk_time_limit_defaults_to_300(self):
+        env = {k: v for k, v in os.environ.items() if k != "SMALLTALK_TIME_LIMIT"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(call_bot.smalltalk_time_limit_from_env(), 300)
+            self.assertEqual(call_bot.pause_limit_from_env(), 600)
+
+    def test_smalltalk_mission_name_comes_from_instruction(self):
+        config = parse_call_config({"system_instruction": 'You are Ms. Park. trying to: "Small Talk"', "mode": "smalltalk"})
+
+        self.assertEqual(config.mission, "Small Talk")
+
     def test_rejects_bad_input(self):
         bad = [
             None,
@@ -49,13 +69,86 @@ class ParseCallConfigTest(unittest.TestCase):
 
 
 class MissionToolsTest(unittest.TestCase):
-    def test_teachback_gets_no_mission_tool(self):
-        self.assertIsNone(call_bot.mission_tools(CallConfig(system_instruction=INSTRUCTION, mode="teachback")))
+    def test_teachback_and_smalltalk_get_no_mission_tool(self):
+        for mode in ("teachback", "smalltalk"):
+            self.assertIsNone(call_bot.mission_tools(CallConfig(system_instruction=INSTRUCTION, mode=mode)))
 
     def test_mission_and_free_talk_get_complete_mission(self):
         for mode in ("mission", "freetalk"):
             tools = call_bot.mission_tools(CallConfig(system_instruction=INSTRUCTION, mode=mode))
             self.assertEqual([t.name for t in tools.standard_tools], ["complete_mission"])
+
+
+class FakeTime:
+    def __init__(self):
+        self.t = 100.0
+
+    def __call__(self):
+        return self.t
+
+
+class CallClockTest(unittest.TestCase):
+    def setUp(self):
+        self.time = FakeTime()
+        self.clock = call_bot.CallClock(now=self.time)
+
+    def test_elapsed_is_zero_before_start_and_counts_after(self):
+        self.assertEqual(self.clock.elapsed(), 0.0)
+        self.clock.start()
+        self.time.t += 30
+
+        self.assertEqual(self.clock.elapsed(), 30)
+
+    def test_paused_time_does_not_count(self):
+        self.clock.start()
+        self.time.t += 20
+        self.assertTrue(self.clock.pause())
+        self.time.t += 500
+        self.assertEqual(self.clock.elapsed(), 20)
+        self.assertEqual(self.clock.paused_for(), 500)
+        self.assertTrue(self.clock.resume())
+        self.time.t += 10
+
+        self.assertEqual(self.clock.elapsed(), 30)
+        self.assertEqual(self.clock.paused_total(), 500)
+        self.assertEqual(self.clock.paused_for(), 0)
+
+    def test_double_pause_and_resume_without_pause_do_nothing(self):
+        self.assertFalse(self.clock.pause())  # 시작 전
+        self.clock.start()
+        self.assertFalse(self.clock.resume())
+        self.assertTrue(self.clock.pause())
+        self.time.t += 5
+        self.assertFalse(self.clock.pause())
+
+        self.assertEqual(self.clock.paused_for(), 5)
+
+    def test_check_reports_time_limit_with_remaining_wait(self):
+        self.clock.start()
+        self.time.t += 100
+        self.assertEqual(self.clock.check(180, 600), (None, 80))
+        self.time.t += 80
+
+        self.assertEqual(self.clock.check(180, 600), ("time_limit", 0.0))
+
+    def test_check_while_paused_waits_for_pause_limit_not_time_limit(self):
+        self.clock.start()
+        self.time.t += 170
+        self.clock.pause()
+        self.time.t += 599
+        self.assertEqual(self.clock.check(180, 600), (None, 1))
+        self.time.t += 1
+
+        self.assertEqual(self.clock.check(180, 600), ("pause_limit", 0.0))
+
+    def test_resume_gives_back_the_remaining_session_time(self):
+        self.clock.start()
+        self.time.t += 170
+        self.clock.pause()
+        self.time.t += 300
+        self.clock.resume()
+
+        self.assertEqual(self.clock.check(180, 600), (None, 10))
 
 
 class CallRecordTest(unittest.TestCase):
@@ -105,6 +198,17 @@ class FinishCallTest(unittest.TestCase):
         self.assertEqual(order[0], "wav")
         meta = order[1][1]
         self.assertEqual((meta["mission"], meta["completed"], meta["duration_sec"], meta["model"]), ("Day 1 Team Intro", True, 65, "model-x"))
+
+    def test_paused_seconds_are_not_part_of_the_duration(self):
+        record = CallRecord(started_at=1_792_450_000.0, chunks=[("Me", "Hi")], paused_sec=40.0)
+        config = CallConfig(system_instruction=INSTRUCTION, mode="smalltalk")
+
+        with mock.patch.object(call_bot, "save_transcript", side_effect=lambda chunks, meta, d: meta) as save_md, \
+                mock.patch.object(call_bot, "get_transcript_dir", return_value=Path("/tmp")):
+            meta = finish_call(record, config, "m", ended_at=1_792_450_100.0)
+
+        self.assertEqual(meta["duration_sec"], 60)
+        save_md.assert_called_once()
 
     def test_audio_failure_does_not_block_transcript(self):
         record = CallRecord(chunks=[("Me", "Hi")], mic_pcm=bytearray(b"\x00"))

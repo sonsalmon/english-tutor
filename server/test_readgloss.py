@@ -35,6 +35,25 @@ STATE = {
     ],
     "phrases": {},
 }
+DICT_FOUND = {
+    "found": True,
+    "lemma": "leverage",
+    "gloss": "영향력",
+    "mine": {"ko": "활용하다"},
+    "entries": [
+        {
+            "headword": "leverage",
+            "senses": [
+                {"pos": "명사", "num": 1, "text": "영향력, 세력", "examples": []},
+                {"pos": "명사", "num": 2, "text": "〔물리〕 지레의 작용; 지렉대", "examples": []},
+                {"pos": "타동사", "num": 1, "text": "English only", "examples": []},
+                {"pos": "타동사", "num": 2, "text": "영향력", "examples": []},
+                {"pos": "타동사", "num": 3, "text": "빚을 이용해 투자하다", "examples": []},
+                {"pos": "타동사", "num": 4, "text": "효과를 높이다", "examples": []},
+            ],
+        }
+    ],
+}
 REVIEW = {"due": [{"type": "word", "key": "leverage", "gloss": "활용하다"}, {"type": "phrase", "key": "abc123abc123"}]}
 
 
@@ -99,6 +118,21 @@ class PushOpsTest(unittest.TestCase):
         self.assertTrue(all(o.get("kind", "expression") == "expression" for o in ops))
 
 
+class CompactLookupTest(unittest.TestCase):
+    def test_compact_shape_keeps_four_short_korean_senses(self):
+        out = readgloss.compact_lookup("Leverage", DICT_FOUND)
+
+        self.assertEqual(
+            out,
+            {"word": "Leverage", "lemma": "leverage", "gloss": "영향력", "senses": ["활용하다", "영향력", "지레의 작용", "빚을 이용해 투자하다"], "pos": "명사"},
+        )
+
+    def test_unknown_word_has_empty_meaning_and_no_pos(self):
+        out = readgloss.compact_lookup("Zzzq", {"found": False, "lemma": "zzzq"})
+
+        self.assertEqual(out, {"word": "Zzzq", "lemma": "zzzq", "gloss": "", "senses": []})
+
+
 class FakeBridge(BaseHTTPRequestHandler):
     calls = []
 
@@ -122,6 +156,10 @@ class FakeBridge(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         FakeBridge.calls.append(("POST", self.path, self.headers.get("Host"), self.headers.get("X-Bridge-Token"), body))
+        if self.headers.get("X-Bridge-Token") != "secret":
+            return self._reply({"error": "unauthorized"}, 401)
+        if self.path == "/dict":
+            return self._reply(DICT_FOUND if body.get("word") == "leverage" else {"found": False})
         self._reply({"ok": True})
 
 
@@ -156,6 +194,33 @@ class BridgeClientTest(unittest.TestCase):
         self.assertEqual(saved, 1)
         self.assertEqual([c[:2] for c in FakeBridge.calls], [("GET", "/ping"), ("POST", "/words")])
         self.assertEqual(FakeBridge.calls[1][4]["lemma"], "leverage")
+
+    def test_lookup_word_posts_to_dict_and_compacts(self):
+        out = readgloss.lookup_word("leverage")
+
+        self.assertEqual((out["word"], out["lemma"], out["gloss"], len(out["senses"])), ("leverage", "leverage", "영향력", 4))
+        self.assertEqual(FakeBridge.calls[0][:2] + (FakeBridge.calls[0][4],), ("POST", "/dict", {"word": "leverage"}))
+        self.assertEqual(readgloss.lookup_word("nothing")["senses"], [])
+
+    def test_save_word_posts_save_op(self):
+        self.assertTrue(readgloss.save_word("leverage", "Leverages", "활용하다", "We leverage it."))
+
+        self.assertEqual(
+            FakeBridge.calls[0][:2] + (FakeBridge.calls[0][4],),
+            ("POST", "/words", {"op": "save", "lemma": "leverage", "word": "Leverages", "gloss": "활용하다", "sentence": "We leverage it.", "url": ""}),
+        )
+
+    def test_lookup_and_save_are_none_false_when_bridge_refuses_or_is_down(self):
+        self.token_file.write_text("wrong", encoding="utf-8")
+        self.assertIsNone(readgloss.lookup_word("leverage"))
+        self.assertFalse(readgloss.save_word("leverage", "leverage", "", ""))
+
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            closed_port = s.getsockname()[1]
+        self.env(f"http://127.0.0.1:{closed_port}", self.token_file)
+        self.assertIsNone(readgloss.lookup_word("leverage"))
+        self.assertFalse(readgloss.save_word("leverage", "leverage", "", ""))
 
     def test_wrong_token_is_skipped_quietly(self):
         self.token_file.write_text("wrong", encoding="utf-8")

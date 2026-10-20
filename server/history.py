@@ -22,6 +22,8 @@ _DURATION_RE = re.compile(r"- duration: (\d+)m (\d+)s\s*", re.ASCII)
 _MISSION_RE = re.compile(r"- mission: (.*)")
 _COMPLETED_RE = re.compile(r"- completed: (yes|no)\s*", re.ASCII)
 _HEADER_LINES = 8
+# 클라이언트가 가벼운 대화 통화의 지시문에 넣는 미션 이름. 전문 머리글의 mission이 이 값이면 kind는 smalltalk.
+SMALLTALK_MISSION = "Small Talk"
 
 
 def _valid_stem(stem: Any) -> bool:
@@ -66,7 +68,7 @@ def _parse_call(path: Path) -> Optional[Dict[str, Any]]:
         "duration_sec": duration,
         "completed": bool(completed),
         "has_tutoring": tutoring,
-        "kind": "teachback" if teachback else "call",
+        "kind": "teachback" if teachback else "smalltalk" if mission == SMALLTALK_MISSION else "call",
     }
 
 

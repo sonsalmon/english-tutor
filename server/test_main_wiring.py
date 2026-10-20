@@ -198,5 +198,75 @@ class LearnerProfileEndpointTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("p0", body["brief"])
 
 
+class WordEndpointsTest(unittest.TestCase):
+    def setUp(self):
+        from fastapi.testclient import TestClient
+
+        self.client = TestClient(main.app)
+
+    def post(self, path, body):
+        return self.client.post(path, json=body)
+
+    def test_lookup_returns_the_compact_dict(self):
+        compact = {"word": "leverage", "lemma": "leverage", "gloss": "영향력", "senses": ["영향력"], "pos": "명사"}
+        with mock.patch.object(main, "lookup_word", return_value=compact) as lookup:
+            res = self.post("/api/word", {"word": "leverage"})
+
+        self.assertEqual((res.status_code, res.json()), (200, compact))
+        lookup.assert_called_once_with("leverage")
+
+    def test_lookup_rejects_anything_but_one_english_word(self):
+        with mock.patch.object(main, "lookup_word") as lookup:
+            for body in ({"word": "two words"}, {"word": ""}, {"word": "123"}, {"word": 5}, {}, {"word": "a" * 65}):
+                with self.subTest(body=str(body)):
+                    self.assertEqual(self.post("/api/word", body).status_code, 400)
+            self.assertEqual(self.client.post("/api/word", json=["leverage"]).status_code, 400)
+
+        lookup.assert_not_called()
+
+    def test_lookup_is_503_with_korean_detail_when_bridge_is_off(self):
+        with mock.patch.object(main, "lookup_word", return_value=None):
+            res = self.post("/api/word", {"word": "leverage"})
+
+        self.assertEqual((res.status_code, res.json()), (503, {"detail": "readgloss가 꺼져 있어 뜻을 찾지 못했어요."}))
+
+    def test_word_endpoints_are_json_only(self):
+        for path in ("/api/word", "/api/word/save"):
+            res = self.client.post(path, content='{"word": "leverage"}', headers={"content-type": "text/plain"})
+            self.assertEqual(res.status_code, 415)
+
+    def test_save_passes_normalized_values_and_answers_saved(self):
+        body = {"word": "Leverages", "lemma": "Leverage", "gloss": "활용하다", "sentence": "We leverage it."}
+        with mock.patch.object(main, "save_word", return_value=True) as save:
+            res = self.post("/api/word/save", body)
+
+        self.assertEqual((res.status_code, res.json()), (200, {"saved": True}))
+        save.assert_called_once_with("leverage", "Leverages", "활용하다", "We leverage it.")
+
+    def test_save_rejects_bad_fields(self):
+        good = {"word": "leverage", "lemma": "leverage", "gloss": "활용", "sentence": "x"}
+        bad = [
+            {**good, "word": "two words"},
+            {**good, "lemma": "two words"},
+            {**good, "lemma": 3},
+            {**good, "sentence": "x" * 1001},
+            {**good, "gloss": "x" * 201},
+            {**good, "gloss": 7},
+        ]
+        with mock.patch.object(main, "save_word", return_value=True) as save:
+            for body in bad:
+                with self.subTest(body=str(body)[:50]):
+                    self.assertEqual(self.post("/api/word/save", body).status_code, 400)
+            self.assertEqual(self.post("/api/word/save", {**good, "sentence": "x" * 1000}).status_code, 200)
+
+        self.assertEqual(save.call_count, 1)
+
+    def test_save_is_503_when_bridge_is_off(self):
+        with mock.patch.object(main, "save_word", return_value=False):
+            res = self.post("/api/word/save", {"word": "leverage", "lemma": "leverage", "gloss": "", "sentence": ""})
+
+        self.assertEqual(res.status_code, 503)
+
+
 if __name__ == "__main__":
     unittest.main()

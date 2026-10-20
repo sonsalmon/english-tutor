@@ -99,6 +99,19 @@ class HistoryTest(HistoryDirs):
         self.assertEqual((by_stem["2026-10-20-100000"]["kind"], by_stem["2026-10-20-100000"]["has_tutoring"]), ("call", True))
         self.assertEqual((by_stem["2026-10-20-110000"]["kind"], by_stem["2026-10-20-110000"]["has_tutoring"]), ("call", False))
 
+    def test_small_talk_kind_and_totals_still_cover_all_calls(self):
+        self.add_call("2026-10-20-090000", "2026-10-20 09:00", mission="Small Talk", duration="5m 0s")
+        self.add_call("2026-10-20-100000", "2026-10-20 10:00", mission="Small Talk")
+        self.add_call("2026-10-20-110000", "2026-10-20 11:00")
+        (self.teachback / "2026-10-20-100000.json").write_text("{}", encoding="utf-8")
+
+        by_stem = {c["stem"]: c for c in history.list_calls()}
+
+        self.assertEqual(by_stem["2026-10-20-090000"]["kind"], "smalltalk")
+        self.assertEqual(by_stem["2026-10-20-100000"]["kind"], "teachback")
+        self.assertEqual(by_stem["2026-10-20-110000"]["kind"], "call")
+        self.assertEqual(history.totals(datetime(2026, 10, 21, 9, 0))["calls"], 3)
+
     def test_unparsable_files_are_skipped(self):
         self.add_call("2026-10-20-090000", "2026-10-20 09:00")
         (self.sessions / "2026-10-20-100000.md").write_text("not a transcript\n", encoding="utf-8")
@@ -155,6 +168,14 @@ class CallsHttpTest(HistoryDirs):
         self.assertEqual(listing.json()["totals"]["calls"], 1)
         self.assertEqual(detail.status_code, 200)
         self.assertIsNone(detail.json()["tutoring"])
+
+    def test_status_time_limits_include_smalltalk(self):
+        env = {"SESSION_TIME_LIMIT": "180", "TEACHBACK_TIME_LIMIT": "900"}
+        with mock.patch.dict(os.environ, env):
+            os.environ.pop("SMALLTALK_TIME_LIMIT", None)
+            limits = self.client.get("/api/status").json()["time_limits"]
+
+        self.assertEqual(limits, {"call": 180, "teachback": 900, "smalltalk": 300})
 
     def test_bad_stem_is_400_and_unknown_stem_is_404_not_the_spa_page(self):
         self.assertEqual(self.client.get("/api/calls/not-a-stem").status_code, 400)

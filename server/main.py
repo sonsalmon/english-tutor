@@ -31,9 +31,17 @@ from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCRequestHandler,
 )
 
-from server.call_bot import parse_call_config, run_bot
+from server.call_bot import parse_call_config, run_bot, smalltalk_time_limit_from_env
 from server.history import list_calls, load_call, totals as call_totals
-from server.readgloss import LEMMA_RE, practice_words, push_tutoring, words_used
+from server.readgloss import (
+    LEMMA_RE,
+    WORD_RE,
+    lookup_word,
+    practice_words,
+    push_tutoring,
+    save_word,
+    words_used,
+)
 from server.transcript_store import get_tutoring_dir
 from server.lesson import (
     LessonError,
@@ -91,6 +99,7 @@ async def get_status():
         "time_limits": {
             "call": session_time_limit_from_env(None),
             "teachback": session_time_limit_from_env("teachback"),
+            "smalltalk": smalltalk_time_limit_from_env(),
         },
     }
 
@@ -359,6 +368,62 @@ async def call_detail_endpoint(stem: str):
         raise HTTPException(status_code=400, detail=str(e))
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+READGLOSS_OFF_DETAIL = "readgloss가 꺼져 있어 뜻을 찾지 못했어요."
+READGLOSS_SAVE_OFF_DETAIL = "readgloss가 꺼져 있어 단어를 저장하지 못했어요."
+MAX_SENTENCE_CHARS = 1000
+MAX_GLOSS_CHARS = 200
+
+
+async def _json_object(raw: Request) -> dict:
+    """JSON 객체 본문만 받는다. 다른 페이지의 단순 요청(text/plain 등)은 415, 형식이 틀리면 400."""
+    if "application/json" not in raw.headers.get("content-type", ""):
+        raise HTTPException(status_code=415, detail="JSON으로 보내야 합니다.")
+    try:
+        body = await raw.json()
+    except Exception:
+        body = None
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="요청 형식이 틀렸어요.")
+    return body
+
+
+def _english_word(value) -> str:
+    word = value.strip() if isinstance(value, str) else ""
+    if not WORD_RE.fullmatch(word):
+        raise HTTPException(status_code=400, detail="영어 단어 하나만 찾을 수 있어요.")
+    return word
+
+
+@app.post("/api/word")
+async def word_endpoint(raw: Request):
+    """readgloss 사전에서 영어 단어 하나의 뜻을 찾는다. 다리가 꺼져 있으면 503."""
+    word = _english_word((await _json_object(raw)).get("word"))
+    result = await asyncio.to_thread(lookup_word, word)
+    if result is None:
+        raise HTTPException(status_code=503, detail=READGLOSS_OFF_DETAIL)
+    return result
+
+
+@app.post("/api/word/save")
+async def word_save_endpoint(raw: Request):
+    """찾은 단어를 readgloss 단어장에 저장한다. 다리가 꺼져 있으면 503."""
+    body = await _json_object(raw)
+    word = _english_word(body.get("word"))
+    lemma = body.get("lemma")
+    gloss = body.get("gloss", "")
+    sentence = body.get("sentence", "")
+    if not isinstance(lemma, str) or not LEMMA_RE.fullmatch(lemma.strip().lower()):
+        raise HTTPException(status_code=400, detail="원형 형식이 틀렸어요.")
+    if not isinstance(gloss, str) or len(gloss) > MAX_GLOSS_CHARS:
+        raise HTTPException(status_code=400, detail="뜻은 문자열 200자 이하여야 해요.")
+    if not isinstance(sentence, str) or len(sentence) > MAX_SENTENCE_CHARS:
+        raise HTTPException(status_code=400, detail="문장은 문자열 1000자 이하여야 해요.")
+    saved = await asyncio.to_thread(save_word, lemma.strip().lower(), word, gloss, sentence)
+    if not saved:
+        raise HTTPException(status_code=503, detail=READGLOSS_SAVE_OFF_DETAIL)
+    return {"saved": True}
 
 
 @app.get("/{full_path:path}")

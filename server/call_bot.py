@@ -27,7 +27,11 @@ from server.transcript_store import (
 
 logger = logging.getLogger(__name__)
 
-MODES = ("mission", "freetalk", "teachback")
+MODES = ("mission", "freetalk", "teachback", "smalltalk")
+SMALLTALK_TIME_LIMIT_ENV = "SMALLTALK_TIME_LIMIT"
+DEFAULT_SMALLTALK_TIME_LIMIT = 300
+PAUSE_LIMIT_ENV = "PAUSE_LIMIT_SEC"
+DEFAULT_PAUSE_LIMIT_SEC = 600
 MAX_INSTRUCTION_CHARS = 30_000
 MIC_SAMPLE_RATE = 16_000
 MIC_MAX_BYTES = MIC_SAMPLE_RATE * 2 * 60 * 30  # 16bit mono, 30분
@@ -64,6 +68,74 @@ COMPLETE_MISSION_PROPERTIES = {
 }
 
 
+def smalltalk_time_limit_from_env(env=None) -> int:
+    """가벼운 대화 통화의 제한 시간(초). `SMALLTALK_TIME_LIMIT`(기본 300)."""
+    env = os.environ if env is None else env
+    return int(env.get(SMALLTALK_TIME_LIMIT_ENV, str(DEFAULT_SMALLTALK_TIME_LIMIT)))
+
+
+def pause_limit_from_env(env=None) -> int:
+    """일시정지를 이 시간(초)보다 오래 두면 통화를 끝낸다. `PAUSE_LIMIT_SEC`(기본 600)."""
+    env = os.environ if env is None else env
+    return int(env.get(PAUSE_LIMIT_ENV, str(DEFAULT_PAUSE_LIMIT_SEC)))
+
+
+class CallClock:
+    """통화 경과 시간. 일시정지 동안은 흐르지 않고, 일시정지 자체의 길이도 잰다."""
+
+    def __init__(self, now=time.monotonic):
+        self._now = now
+        self._started: Optional[float] = None
+        self._paused_at: Optional[float] = None
+        self._paused_total = 0.0
+
+    def start(self) -> None:
+        self._started = self._now()
+        self._paused_at = None
+        self._paused_total = 0.0
+
+    @property
+    def paused(self) -> bool:
+        return self._paused_at is not None
+
+    def pause(self) -> bool:
+        """일시정지한다. 시작 전이거나 이미 멈춰 있으면 False."""
+        if self._started is None or self.paused:
+            return False
+        self._paused_at = self._now()
+        return True
+
+    def resume(self) -> bool:
+        """다시 시작한다. 멈춰 있지 않으면 False."""
+        if not self.paused:
+            return False
+        self._paused_total += self._now() - self._paused_at
+        self._paused_at = None
+        return True
+
+    def paused_for(self) -> float:
+        """지금 일시정지가 이어진 시간(멈춰 있지 않으면 0)."""
+        return self._now() - self._paused_at if self.paused else 0.0
+
+    def paused_total(self) -> float:
+        """통화 동안 일시정지한 총 시간(지금 멈춰 있는 시간 포함)."""
+        return self._paused_total + self.paused_for()
+
+    def elapsed(self) -> float:
+        """일시정지를 뺀 통화 경과 시간."""
+        if self._started is None:
+            return 0.0
+        return self._now() - self._started - self.paused_total()
+
+    def check(self, time_limit: float, pause_limit: float) -> Tuple[Optional[str], float]:
+        """(끝낼 이유, 다음 확인까지 기다릴 초). 이유는 "time_limit"·"pause_limit"·None."""
+        if self.paused:
+            wait = pause_limit - self.paused_for()
+            return ("pause_limit", 0.0) if wait <= 0 else (None, wait)
+        wait = time_limit - self.elapsed()
+        return ("time_limit", 0.0) if wait <= 0 else (None, wait)
+
+
 @dataclass(frozen=True)
 class CallConfig:
     system_instruction: str
@@ -81,6 +153,8 @@ class CallConfig:
 
     @property
     def time_limit(self) -> int:
+        if self.mode == "smalltalk":
+            return smalltalk_time_limit_from_env()
         return session_time_limit_from_env("teachback" if self.mode == "teachback" else None)
 
 
@@ -113,6 +187,7 @@ class CallRecord:
     chunks: List[Tuple[str, str]] = field(default_factory=list)
     mic_pcm: bytearray = field(default_factory=bytearray)
     completed: bool = False
+    paused_sec: float = 0.0
 
     def add_user(self, text: str) -> None:
         clean = " ".join(NOISE_MARK_RE.sub(" ", text or "").split())
@@ -146,7 +221,7 @@ def finish_call(record: CallRecord, config: CallConfig, model: str, ended_at: Op
             record.chunks,
             {
                 "started_at": started_str,
-                "duration_sec": int(ended_at - record.started_at),
+                "duration_sec": max(0, int(ended_at - record.started_at - record.paused_sec)),
                 "model": model,
                 "mission": config.mission,
                 "completed": record.completed,
@@ -159,8 +234,8 @@ def finish_call(record: CallRecord, config: CallConfig, model: str, ended_at: Op
 
 
 def mission_tools(config: CallConfig):
-    """미션·자유 대화에만 complete_mission 도구를 준다. Teach-back은 점수·종료 도구 없이 수업한다(f05f290과 같음)."""
-    if config.mode == "teachback":
+    """미션·자유 대화에만 complete_mission 도구를 준다. Teach-back과 가벼운 대화는 점수·종료 도구 없이 진행한다(f05f290과 같음)."""
+    if config.mode in ("teachback", "smalltalk"):
         return None
     from pipecat.adapters.schemas.function_schema import FunctionSchema
     from pipecat.adapters.schemas.tools_schema import ToolsSchema
@@ -294,10 +369,37 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
     async def on_track_audio(buffer, user_audio, bot_audio, sample_rate, num_channels):
         record.add_mic(user_audio)
 
+    clock = CallClock()
+    pause_limit = pause_limit_from_env()
+    clock_changed = asyncio.Event()
+
     async def end_at_time_limit():
-        await asyncio.sleep(config.time_limit)
-        logger.info("Session time limit reached (%ss)", config.time_limit)
-        await worker.queue_frames([RTVIServerMessageFrame(data={"type": "time_limit"}), EndFrame()])
+        # 일시정지·재개마다 남은 시간을 다시 계산한다(타이머를 한 번만 걸면 멈춘 동안도 줄어든다).
+        while True:
+            clock_changed.clear()  # check 전에 비워야 그 사이에 온 변화를 놓치지 않는다
+            reason, wait = clock.check(config.time_limit, pause_limit)
+            if reason:
+                break
+            try:
+                await asyncio.wait_for(clock_changed.wait(), timeout=wait)
+            except asyncio.TimeoutError:
+                pass
+        logger.info("Session ended: %s (limit %ss, pause limit %ss)", reason, config.time_limit, pause_limit)
+        data = {"type": "time_limit"} if reason == "time_limit" else {"type": "time_limit", "reason": reason}
+        await worker.queue_frames([RTVIServerMessageFrame(data=data), EndFrame()])
+
+    # 클라이언트가 sendClientMessage("pause"|"resume")을 보내면 RTVIProcessor가 on_client_message를 부른다.
+    @worker.rtvi.event_handler("on_client_message")
+    async def on_client_message(rtvi, message):
+        if message.type == "pause":
+            if clock.pause():
+                clock_changed.set()
+                await rtvi.interrupt_bot()  # 말하던 튜터를 멈춘다
+            await rtvi.send_server_message({"type": "paused"})
+        elif message.type == "resume":
+            if clock.resume():
+                clock_changed.set()
+            await rtvi.send_server_message({"type": "resumed"})
 
     limiter: Optional[asyncio.Task] = None
     recording = False
@@ -312,6 +414,7 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
     async def on_client_connected(transport, client):
         nonlocal limiter, recording
         record.started_at = time.time()
+        clock.start()
         await audiobuffer.start_recording()
         recording = True
         limiter = asyncio.create_task(end_at_time_limit())
@@ -330,5 +433,6 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
         if limiter:
             limiter.cancel()
         await stop_recording()
+        record.paused_sec = clock.paused_total()
         saved = await asyncio.to_thread(finish_call, record, config, model)
         logger.info("Call finished; transcript saved: %s", saved)
