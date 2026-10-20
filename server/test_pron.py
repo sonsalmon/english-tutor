@@ -149,8 +149,8 @@ class BriefTest(unittest.TestCase):
         self.assertEqual(
             brief,
             "Pronunciation check (reading test 2026-10-20): "
-            "can / can't: can't was heard as can in 4 of 5 sentences; "
-            "l / r: correct was heard as collect in 1 of 2 sentences.\n"
+            "can / can't: can't was heard as can in 4 of 4 sentences; "
+            "l / r: correct was heard as collect in 1 of 1 sentences.\n"
             "When you are not sure which of these words the learner said, ask briefly, e.g. 'Did you mean can or can't?'",
         )
         self.assertNotIn("p / f", brief)
@@ -168,8 +168,56 @@ class BriefTest(unittest.TestCase):
         summary = pron.weak_summary(self.result(self.ANSWERS))
 
         self.assertEqual(summary["date"], "2026-10-20")
-        self.assertEqual(summary["weak"][0], {"label": "can / can't", "as_other": 4, "unclear": 0, "total": 5})
+        self.assertEqual(
+            summary["weak"][0],
+            {
+                "label": "can / can't",
+                "as_other": 4,
+                "unclear": 0,
+                "total": 5,
+                "worst": {"target": "can't", "other": "can", "as_other": 4, "unclear": 0, "total": 4},
+            },
+        )
         self.assertIsNone(pron.weak_summary(None))
+
+    def test_direction_totals_count_per_target(self):
+        answers = [
+            {"id": "c2", "text": "I can go to the meeting tomorrow."},
+            {"id": "c4", "text": "She can drive on the highway."},
+            {"id": "c5", "text": "We can't finish it by Friday."},
+            {"id": "c7", "text": "You can't park here."},
+        ]
+
+        rows = {r["contrast"]: r for r in pron.judge_answers(answers)}
+
+        cant = next(d for d in rows["can_cant"]["directions"] if d["target"] == "can't")
+        self.assertEqual(cant, {"target": "can't", "other": "can", "total": 4, "as_target": 2, "as_other": 2, "unclear": 0})
+        self.assertEqual([d["target"] for d in rows["can_cant"]["directions"]], ["can", "can't"])
+
+    def test_brief_uses_direction_totals_and_stays_under_600_chars(self):
+        answers = [
+            {"id": "c2", "text": "I can go to the meeting tomorrow."},
+            {"id": "c4", "text": "She can drive on the highway."},
+            {"id": "c5", "text": "We can't finish it by Friday."},
+            {"id": "c7", "text": "You can't park here."},
+        ]
+        self.assertIn("in 2 of 4 sentences", pron.pron_brief(self.result(answers)))
+
+        everything_wrong = [{"id": i["id"], "text": f"I said {i['other']} today."} for i in ITEMS.values()]
+        brief = pron.pron_brief(self.result(everything_wrong))
+        self.assertLessEqual(len(brief), 600)
+        self.assertTrue(brief.startswith("Pronunciation check (reading test 2026-10-20): "))
+        self.assertTrue(brief.endswith("'Did you mean can or can't?'"))
+
+    def test_brief_drops_whole_contrast_parts_when_over_the_cap(self):
+        everything_wrong = [{"id": i["id"], "text": f"I said {i['other']} today."} for i in ITEMS.values()]
+        result = self.result(everything_wrong)
+        with mock.patch.object(pron, "BRIEF_MAX_CHARS", 300):
+            brief = pron.pron_brief(result)
+
+        self.assertIn("can / can't", brief)
+        self.assertNotIn("b / v", brief)
+        self.assertTrue(brief.endswith("'Did you mean can or can't?'"))
 
 
 class PronHttpTest(unittest.TestCase):

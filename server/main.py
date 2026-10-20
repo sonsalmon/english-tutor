@@ -121,7 +121,7 @@ async def learner_profile_endpoint():
     pron_result = await asyncio.to_thread(pron.latest_result)
     return {
         "load_failed": broken,
-        "brief": "\n".join(part for part in (profile_brief(card), pron.pron_brief(pron_result)) if part),
+        "brief": "\n".join(part for part in (pron.pron_brief(pron_result), profile_brief(card)) if part),
         "pron": pron.weak_summary(pron_result),
         "interests": list(card["interests"]) if card else [],
         "updated": card["updated"] if card else None,

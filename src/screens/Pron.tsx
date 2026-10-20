@@ -10,6 +10,7 @@ import {
   startRecorder,
   transcribePron,
   type PronContrast,
+  type PronDirection,
   type PronItem,
   type PronResult,
   type PronTest,
@@ -65,6 +66,7 @@ function Session({ items, onDone, onExit }: { items: PronItem[]; onDone: (result
   const [finishError, setFinishError] = useState<string | null>(null);
   const recorder = useRef<Recorder | null>(null);
   const abort = useRef(new AbortController());
+  const mounted = useRef(false);
   const version = useRef<Record<string, number>>({});
   const queue = useRef<Promise<void>>(Promise.resolve());
   const stopRef = useRef<() => Promise<void>>(async () => {});
@@ -73,13 +75,17 @@ function Session({ items, onDone, onExit }: { items: PronItem[]; onDone: (result
   const last = index === items.length - 1;
   const job = jobs[item.id];
 
-  useEffect(
-    () => () => {
+  // StrictMode(dev)는 마운트 -> 정리 -> 마운트를 하므로 컨트롤러는 마운트마다 새로 만든다.
+  useEffect(() => {
+    mounted.current = true;
+    abort.current = new AbortController();
+    return () => {
+      mounted.current = false;
       recorder.current?.cancel();
+      recorder.current = null;
       abort.current.abort();
-    },
-    [],
-  );
+    };
+  }, []);
 
   const enqueue = useCallback((id: string, blob: Blob) => {
     const v = (version.current[id] ?? 0) + 1;
@@ -110,9 +116,15 @@ function Session({ items, onDone, onExit }: { items: PronItem[]; onDone: (result
     setError(null);
     setStep('starting');
     try {
-      recorder.current = await startRecorder(setLevel, () => void stopRef.current());
+      const started = await startRecorder(setLevel, () => void stopRef.current());
+      if (!mounted.current) {
+        started.cancel();
+        return;
+      }
+      recorder.current = started;
       setStep('recording');
     } catch (e) {
+      if (!mounted.current) return;
       setError(e instanceof MicError ? e.message : '마이크를 켜지 못했어요.');
       setStep('ready');
     }
@@ -347,11 +359,35 @@ function direction(c: PronContrast): string | null {
   return parts.length ? parts.join(', ') : null;
 }
 
-function severity(c: PronContrast): number {
-  return c.as_other * 10 + c.unclear;
+type Counts = { as_other: number; unclear: number; total: number };
+
+// 방향별 숫자가 있으면 (다르게 들림 + 불분명) 비율이 가장 큰 방향. 옛 결과에는 없다.
+function worstDirection(c: PronContrast): PronDirection | null {
+  let best: PronDirection | null = null;
+  for (const d of c.directions ?? []) {
+    if (d.total <= 0) continue;
+    if (!best || (d.as_other + d.unclear) / d.total > (best.as_other + best.unclear) / best.total) best = d;
+  }
+  return best;
 }
 
-function Bar({ c }: { c: PronContrast }) {
+function directionLines(c: PronContrast): string[] {
+  return (c.directions ?? [])
+    .filter((d) => d.as_other + d.unclear >= 1)
+    .map((d) => {
+      const parts: string[] = [];
+      if (d.as_other > 0) parts.push(`${d.target} → ${d.other}으로 들림 ${d.as_other}/${d.total}`);
+      if (d.unclear > 0) parts.push(`${parts.length ? '' : `${d.target}: `}알아듣기 어려움 ${d.unclear}`);
+      return parts.join(', ');
+    });
+}
+
+function severity(c: PronContrast): number {
+  const w = worstDirection(c);
+  return w ? (w.as_other * 10 + w.unclear) / w.total : c.as_other * 10 + c.unclear;
+}
+
+function Bar({ c }: { c: Counts }) {
   const pct = (n: number) => `${(n / Math.max(c.total, 1)) * 100}%`;
   return (
     <div
@@ -366,8 +402,11 @@ function Bar({ c }: { c: PronContrast }) {
 }
 
 function ContrastCard({ c }: { c: PronContrast }) {
+  const lines = directionLines(c);
   const summary = [direction(c) ?? `다르게 들린 문장 ${c.as_other}개`];
   if (c.unclear > 0) summary.push(`정확히 알아듣기 어려운 문장 ${c.unclear}개`);
+  const worst = worstDirection(c);
+  const big = worst ?? c;
   const shown = c.misheard.slice(0, 3);
   const unclearAll = c.unclear_heard ?? [];
   const unclearShown = unclearAll.slice(0, 3);
@@ -378,14 +417,24 @@ function ContrastCard({ c }: { c: PronContrast }) {
           <WordText text={c.label} />
         </h3>
         <p className="text-xl font-bold tabular-nums">
-          {c.as_other}
-          <span className="text-ink-soft">/{c.total}</span>
+          {big.as_other}
+          <span className="text-ink-soft">/{big.total}</span>
         </p>
       </header>
       <div className="mt-3">
-        <Bar c={c} />
+        <Bar c={big} />
       </div>
-      <p className="mt-3 text-[15px] leading-relaxed">{summary.join(', ')}</p>
+      {lines.length > 0 ? (
+        <div className="mt-3 space-y-1 text-[15px] leading-relaxed">
+          {lines.map((line) => (
+            <p key={line} lang="en">
+              {line}
+            </p>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-3 text-[15px] leading-relaxed">{summary.join(', ')}</p>
+      )}
       {shown.length > 0 && (
         <ul className="mt-3 space-y-2">
           {shown.map((m, i) => (
@@ -522,6 +571,20 @@ export function Pron() {
     setRound((r) => r + 1);
     setPhase('test');
   };
+
+  if (phase === 'test' && test && test.items.length === 0) {
+    return (
+      <Screen>
+        <TopBar title="발음 진단" onBack={() => setPhase('intro')} />
+        <div role="alert" className="mt-4">
+          <p className="text-end-press">시험 문장을 불러오지 못했어요.</p>
+          <div className="mt-3">
+            <QuietButton onClick={() => void begin()}>다시 불러오기</QuietButton>
+          </div>
+        </div>
+      </Screen>
+    );
+  }
 
   if (phase === 'test' && test) {
     return (

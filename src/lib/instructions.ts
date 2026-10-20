@@ -4,7 +4,7 @@
 import { isPark, type Partner } from './partners';
 
 export const TOPIC_MAX = 4000;
-const BRIEF_MAX = 1500;
+const BRIEF_MAX = 2000;
 const LANGUAGE = 'English';
 const FROM_LANGUAGE = 'Korean';
 
@@ -235,12 +235,12 @@ export function cleanInterests(raw: unknown): string[] {
     .slice(0, INTEREST_MAX);
 }
 
-const PARTNER_RULES = `YOUR ROLE: you are a conversation partner, not a teacher and not a coach. Never correct the learner's English, never talk about grammar or word forms, and never mention scores, levels or mistakes. If the learner seems stuck or does not understand you, say the same thing again with simpler, shorter words and keep the conversation going, like a kind speaker would. If you did not catch something, just ask them to say it again. ALL your speech is in English. Do not speak Korean.
+const PARTNER_RULES = `YOUR ROLE: you are a conversation partner, not a teacher and not a coach. Never correct the learner's English, never talk about grammar or word forms, and never mention scores, levels or mistakes. Asking which of two similar words they meant, when you truly did not catch it, is fine and is not a correction. If the learner seems stuck or does not understand you, say the same thing again with simpler, shorter words and keep the conversation going, like a kind speaker would. If you did not catch something, just ask them to say it again. ALL your speech is in English. Do not speak Korean.
 RESPECT: your accent and phrases are a normal, correct way of speaking English. Use them lightly and naturally. Never exaggerate them, never make mistakes on purpose, and never joke about how anyone speaks. The learner's English coach, Ms. Park, will go over the call afterwards; feedback is her job, not yours.`;
 
 function partnerMemoryBlock(brief: string, withTool: boolean): string {
   const base = memoryBlock(brief, withTool);
-  return brief ? `${base}\nUse these notes only to get a feel for the learner. Never bring up their weak points or mistakes.` : base;
+  return brief ? `${base}\nUse these notes only to get a feel for the learner. Never bring up their weak points or mistakes. One exception: if the notes include a pronunciation check and you are not sure which word of a listed pair the learner said, ask once, briefly, for example "Did you mean can or can't?", then carry on. That is checking what you heard, not correcting them.` : base;
 }
 
 function partnerInterestsBlock(partner: Partner, interests: string[]): string {

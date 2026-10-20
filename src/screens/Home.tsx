@@ -6,6 +6,7 @@ import { pronSummaryOf, type PronWeak } from '../lib/pron';
 import { go } from '../lib/router';
 
 function weakText(w: PronWeak): string {
+  if (w.worst && w.worst.total > 0) return `${w.worst.target} → ${w.worst.other} ${w.worst.as_other}/${w.worst.total}`;
   const parts: string[] = [];
   if (w.as_other > 0) parts.push(`다르게 들려요 ${w.as_other}/${w.total}`);
   if (w.unclear > 0) parts.push(`불분명해요 ${w.unclear}/${w.total}`);

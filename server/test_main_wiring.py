@@ -271,7 +271,7 @@ class LearnerProfileEndpointTest(unittest.IsolatedAsyncioTestCase):
             {"date": "2026-10-20", "weak": [{"label": "can / can't", "as_other": 3, "unclear": 0, "total": 4}]},
         )
 
-    async def test_pron_brief_follows_the_card_brief(self):
+    async def test_pron_brief_comes_before_the_card_brief(self):
         self.pron_latest.return_value = PRON_RESULT
         card = {
             "updated": "2026-10-20T09:00:00+09:00",
@@ -286,7 +286,8 @@ class LearnerProfileEndpointTest(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(main, "load_profile", return_value=card):
             body = await main.learner_profile_endpoint()
 
-        self.assertTrue(body["brief"].startswith("Level: B1.2.\nPronunciation check"))
+        self.assertTrue(body["brief"].startswith("Pronunciation check"))
+        self.assertIn("\nLevel: B1.2.", body["brief"])
 
 
 class PhraseEndpointsTest(unittest.TestCase):

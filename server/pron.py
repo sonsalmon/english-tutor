@@ -29,6 +29,7 @@ KST = timezone(timedelta(hours=9))
 MAX_WAV_BYTES = 2 * 1024 * 1024
 MAX_ANSWERS = 40
 MAX_ANSWER_CHARS = 500
+BRIEF_MAX_CHARS = 600
 RESULT_FILE_RE = re.compile(r"\d{4}-\d{2}-\d{2}-\d{6}\.json", re.ASCII)
 
 BLIND_PROMPT = (
@@ -48,7 +49,7 @@ TIPS: Dict[str, str] = {
     "l_r": (
         "l은 혀끝을 윗잇몸 뒤에 붙이고 소리 내요. "
         "r은 혀끝을 어디에도 닿지 않게 뒤로 말고 입술을 살짝 모아요. "
-        "collect와 correct는 두 번째 글자 소리에서 혀 위치를 바꿔 보세요."
+        "collect와 correct는 세 번째 글자(l / r) 소리에서 혀 위치를 바꿔 보세요."
     ),
     "p_f": (
         "p는 두 입술을 붙였다가 공기를 터뜨려요. "
@@ -153,13 +154,23 @@ def judge_answers(answers: List[Dict[str, str]]) -> List[Dict[str, Any]]:
             "misheard": [],
             "unclear_heard": [],
             "tip": TIPS.get(key, _FILLER_TIP),
+            "directions": [],
         }
         for key, label in data["contrasts"].items()
     }
+    directions: Dict[Any, Dict[str, Any]] = {}
+    for item in data["items"]:
+        key = (item["contrast"], item["target"])
+        if key not in directions:
+            directions[key] = {"target": item["target"], "other": item["other"], "total": 0, "as_target": 0, "as_other": 0, "unclear": 0}
+            rows[item["contrast"]]["directions"].append(directions[key])
     for answer in answers:
         item = by_id[answer["id"]]
         row = rows[item["contrast"]]
         verdict = judge_item(item, answer["text"])
+        direction = directions[(item["contrast"], item["target"])]
+        direction["total"] += 1
+        direction["as_" + verdict if verdict != "unclear" else "unclear"] += 1
         row["total"] += 1
         row["as_" + verdict if verdict != "unclear" else "unclear"] += 1
         if verdict == "other":
@@ -193,13 +204,17 @@ def pron_brief(result: Optional[Dict[str, Any]]) -> str:
     for c in weak:
         total = c["total"]
         pieces = []
-        counts: Dict[str, int] = {}
-        for m in c.get("misheard") or []:
-            counts[m["target"]] = counts.get(m["target"], 0) + 1
-        for target, n in list(counts.items())[:2]:
-            pair = _pair_of(c["contrast"], target)
-            if pair:
-                pieces.append(f"{target} was heard as {pair['other']} in {n} of {total} sentences")
+        if c.get("directions"):
+            for d in [d for d in c["directions"] if d.get("as_other", 0) > 0][:2]:
+                pieces.append(f"{d['target']} was heard as {d['other']} in {d['as_other']} of {d['total']} sentences")
+        else:
+            counts: Dict[str, int] = {}
+            for m in c.get("misheard") or []:
+                counts[m["target"]] = counts.get(m["target"], 0) + 1
+            for target, n in list(counts.items())[:2]:
+                pair = _pair_of(c["contrast"], target)
+                if pair:
+                    pieces.append(f"{target} was heard as {pair['other']} in {n} of {total} sentences")
         if c["unclear"]:
             pieces.append(f"could not tell in {c['unclear']} of {total} sentences")
         parts.append(f"{c['label']}: " + ", ".join(pieces))
@@ -210,23 +225,36 @@ def pron_brief(result: Optional[Dict[str, Any]]) -> str:
     if pair:
         words = sorted([pair["target"], pair["other"]])
         question = f" e.g. 'Did you mean {words[0]} or {words[1]}?'"
-    return (
-        f"Pronunciation check (reading test {result.get('date', '')}): " + "; ".join(parts) + ".\n"
-        "When you are not sure which of these words the learner said, ask briefly," + (question or " by naming the two words.")
-    )
+    head = f"Pronunciation check (reading test {result.get('date', '')}): "
+    tail = ".\nWhen you are not sure which of these words the learner said, ask briefly," + (question or " by naming the two words.")
+    while len(parts) > 1 and len(head) + len("; ".join(parts)) + len(tail) > BRIEF_MAX_CHARS:
+        parts.pop()
+    return head + "; ".join(parts) + tail
+
+
+def _worst_direction(contrast: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    best: Optional[Dict[str, Any]] = None
+    for d in contrast.get("directions") or []:
+        if d.get("total", 0) <= 0:
+            continue
+        if best is None or (d["as_other"] + d["unclear"]) / d["total"] > (best["as_other"] + best["unclear"]) / best["total"]:
+            best = d
+    if best is None:
+        return None
+    return {k: best[k] for k in ("target", "other", "as_other", "unclear", "total")}
 
 
 def weak_summary(result: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """GET /api/learner-profile의 "pron" 값. 시험 결과가 없으면 None."""
     if not result:
         return None
-    return {
-        "date": result.get("date", ""),
-        "weak": [
-            {"label": c["label"], "as_other": c["as_other"], "unclear": c["unclear"], "total": c["total"]}
-            for c in weak_contrasts(result)
-        ],
-    }
+    weak = []
+    for c in weak_contrasts(result):
+        entry = {"label": c["label"], "as_other": c["as_other"], "unclear": c["unclear"], "total": c["total"]}
+        if c.get("directions"):  # 옛 저장 결과에는 방향이 없으니 키를 넣지 않는다
+            entry["worst"] = _worst_direction(c)
+        weak.append(entry)
+    return {"date": result.get("date", ""), "weak": weak}
 
 
 def get_pron_dir() -> Path:

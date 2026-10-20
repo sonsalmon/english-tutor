@@ -4,6 +4,14 @@
 export type PronItem = { id: string; text: string };
 export type PronTest = { items: PronItem[]; contrasts: Record<string, string> };
 export type PronMisheard = { target: string; heard_text: string };
+export type PronDirection = {
+  target: string;
+  other: string;
+  total: number;
+  as_target: number;
+  as_other: number;
+  unclear: number;
+};
 export type PronContrast = {
   contrast: string;
   label: string;
@@ -13,13 +21,15 @@ export type PronContrast = {
   unclear: number;
   misheard: PronMisheard[];
   unclear_heard?: PronMisheard[];
+  directions?: PronDirection[];
   tip: string;
 };
 export type PronResult = { date: string; created_at: string; contrasts: PronContrast[]; cost_usd?: number | null };
 export type PronAnswer = { id: string; text: string };
 
 // GET /api/learner-profile 의 pron 키. api.ts의 LearnerProfile 타입에는 아직 없어서 여기서 보강한다.
-export type PronWeak = { label: string; as_other: number; unclear: number; total: number };
+export type PronWorst = { target: string; other: string; as_other: number; unclear: number; total: number };
+export type PronWeak = { label: string; as_other: number; unclear: number; total: number; worst?: PronWorst | null };
 export type PronSummary = { date: string; weak: PronWeak[] };
 
 export function pronSummaryOf(profile: unknown): PronSummary | null {
