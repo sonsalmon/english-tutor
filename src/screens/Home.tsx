@@ -1,9 +1,9 @@
-import { Briefcase, GraduationCap, MessageSquareText, Phone } from 'lucide-react';
+import { Briefcase, GraduationCap, History as HistoryIcon, MessageSquareText, Phone } from 'lucide-react';
 import { CallButton, List, Portrait, RowLink, Screen } from '../components/ui';
-import type { LearnerProfile } from '../lib/api';
+import type { CallTotals, LearnerProfile } from '../lib/api';
 import { go } from '../lib/router';
 
-export function Home({ profile, onQuickCall }: { profile: LearnerProfile | null; onQuickCall: () => void }) {
+export function Home({ profile, totals, onQuickCall }: { profile: LearnerProfile | null; totals: CallTotals | null; onQuickCall: () => void }) {
   const focus = profile?.weak_points?.[0];
   return (
     <Screen>
@@ -50,6 +50,12 @@ export function Home({ profile, onQuickCall }: { profile: LearnerProfile | null;
           <RowLink icon={Briefcase} title="상황 역할극" desc="미국 회사와 생활 장면 12개" onClick={() => go('missions')} />
           <RowLink icon={MessageSquareText} title="주제 정해서 대화" desc="글이나 메모를 붙여 넣고 이야기해요" onClick={() => go('topic')} />
           <RowLink icon={GraduationCap} title="가르치며 배우기" desc="오늘 공부한 내용을 영어로 설명해요" onClick={() => go('teachback')} />
+          <RowLink
+            icon={HistoryIcon}
+            title="통화 기록"
+            desc={totals && totals.calls > 0 ? `지금까지 ${totals.calls}번, ${totals.minutes}분, ${totals.days}일` : '지난 통화와 요약을 다시 봐요'}
+            onClick={() => go('history')}
+          />
         </List>
       </section>
     </Screen>
