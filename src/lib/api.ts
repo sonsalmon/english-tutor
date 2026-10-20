@@ -19,6 +19,18 @@ export type Tutoring = {
   unanswered?: { question: string; teacher_said: string; cause: string; evidence: string }[];
 };
 
+export type CallSummary = {
+  stem: string;
+  started_at: string;
+  mission: string;
+  duration_sec: number;
+  completed: boolean;
+  has_tutoring: boolean;
+  kind: 'teachback' | 'call';
+};
+export type CallTotals = { calls: number; minutes: number; days: number; week: number };
+export type CallDetail = { call: CallSummary; tutoring: Tutoring | null };
+
 const EMPTY_PROFILE: LearnerProfile = { brief: '', updated: null, weak_points: [], next_goal: '' };
 
 // 폰 시계가 Mac과 다르면 튜터링이 "이번 통화 전문"을 못 찾는다(서버는 파일 시각과 started_at을 비교).
@@ -75,6 +87,18 @@ export async function getLesson(date?: string, signal?: AbortSignal): Promise<Le
   };
 }
 
+function toTutoring(data: Record<string, unknown>): Tutoring {
+  const list = (v: unknown) => (Array.isArray(v) ? v : []);
+  return {
+    corrections: list(data.corrections),
+    good: list(data.good),
+    vocab: list(data.vocab),
+    pragmatics: list(data.pragmatics),
+    retry: (data.retry as Retry) || {},
+    unanswered: list(data.unanswered),
+  };
+}
+
 export async function requestTutoring(body: { started_at: number; mode?: 'teachback'; lesson_date?: string }): Promise<Tutoring> {
   const res = await fetch('/api/tutor', {
     method: 'POST',
@@ -82,14 +106,27 @@ export async function requestTutoring(body: { started_at: number; mode?: 'teachb
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(await errorMessage(res, '튜터링 분석에 실패했어요.'));
+  return toTutoring(await res.json());
+}
+
+export async function getCalls(limit = 50, signal?: AbortSignal): Promise<{ totals: CallTotals; calls: CallSummary[] }> {
+  const res = await fetch(`/api/calls?limit=${limit}`, { signal });
+  if (!res.ok) throw new Error(await errorMessage(res, '통화 기록을 불러오지 못했어요.'));
   const data = await res.json();
-  const list = (v: unknown) => (Array.isArray(v) ? v : []);
   return {
-    corrections: list(data.corrections),
-    good: list(data.good),
-    vocab: list(data.vocab),
-    pragmatics: list(data.pragmatics),
-    retry: data.retry || {},
-    unanswered: list(data.unanswered),
+    totals: {
+      calls: Number(data?.totals?.calls) || 0,
+      minutes: Number(data?.totals?.minutes) || 0,
+      days: Number(data?.totals?.days) || 0,
+      week: Number(data?.totals?.week) || 0,
+    },
+    calls: Array.isArray(data?.calls) ? data.calls : [],
   };
+}
+
+export async function getCall(stem: string, signal?: AbortSignal): Promise<CallDetail> {
+  const res = await fetch(`/api/calls/${encodeURIComponent(stem)}`, { signal });
+  if (!res.ok) throw new Error(await errorMessage(res, '통화 기록을 불러오지 못했어요.'));
+  const data = await res.json();
+  return { call: data.call, tutoring: data.tutoring ? toTutoring(data.tutoring) : null };
 }

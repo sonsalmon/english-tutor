@@ -31,6 +31,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
 )
 
 from server.call_bot import parse_call_config, run_bot
+from server.history import list_calls, load_call, totals as call_totals
 from server.lesson import (
     LessonError,
     get_lesson,
@@ -286,6 +287,25 @@ async def offer(raw: Request, background_tasks: BackgroundTasks):
 async def ice_candidate(request: SmallWebRTCPatchRequest):
     await _webrtc.handle_patch_request(request)
     return {"status": "success"}
+
+
+@app.get("/api/calls")
+async def calls_endpoint(limit: int = 50):
+    """저장된 통화 목록(최신순)과 누적 합계. 화면의 통화 기록과 홈 합계가 쓴다."""
+    limit = max(1, min(limit, 200))
+    calls = await asyncio.to_thread(list_calls, limit)
+    return {"totals": await asyncio.to_thread(call_totals), "calls": calls}
+
+
+@app.get("/api/calls/{stem}")
+async def call_detail_endpoint(stem: str):
+    """통화 한 건과 저장된 튜터링(없으면 null). stem 형식이 틀리면 400, 없으면 404."""
+    try:
+        return await asyncio.to_thread(load_call, stem)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @app.get("/{full_path:path}")

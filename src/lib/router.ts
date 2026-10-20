@@ -1,28 +1,52 @@
 import { useEffect, useState } from 'react';
 
-export type Route = 'home' | 'missions' | 'topic' | 'teachback' | 'call' | 'summary';
-const ROUTES: Route[] = ['home', 'missions', 'topic', 'teachback', 'call', 'summary'];
+export type Route = 'home' | 'missions' | 'topic' | 'teachback' | 'call' | 'summary' | 'history';
+const ROUTES: Route[] = ['home', 'missions', 'topic', 'teachback', 'call', 'summary', 'history'];
+
+function segments(hash: string): string[] {
+  return hash.replace(/^#\/?/, '').split('/');
+}
 
 function parse(hash: string): Route {
-  const name = hash.replace(/^#\/?/, '') as Route;
+  const name = segments(hash)[0] as Route;
   return ROUTES.includes(name) ? name : 'home';
 }
 
-export function go(route: Route, replace = false) {
-  const hash = route === 'home' ? '#/' : `#/${route}`;
+// #/history/<stem>처럼 경로 뒤에 붙은 값. 없으면 null.
+function parseParam(hash: string): string | null {
+  return segments(hash)[1] || null;
+}
+
+export function go(route: Route, replace = false, param?: string) {
+  const path = route === 'home' ? '' : route + (param ? `/${encodeURIComponent(param)}` : '');
+  const hash = `#/${path}`;
   if (replace) window.location.replace(hash);
   else window.location.hash = hash;
 }
 
-export function useRoute(): Route {
-  const [route, setRoute] = useState<Route>(() => parse(window.location.hash));
+function useHash<T>(read: (hash: string) => T): T {
+  const [value, setValue] = useState<T>(() => read(window.location.hash));
   useEffect(() => {
     const onChange = () => {
-      setRoute(parse(window.location.hash));
+      setValue(read(window.location.hash));
       window.scrollTo(0, 0);
     };
     window.addEventListener('hashchange', onChange);
     return () => window.removeEventListener('hashchange', onChange);
-  }, []);
-  return route;
+  }, [read]);
+  return value;
+}
+
+export function useRoute(): Route {
+  return useHash(parse);
+}
+
+export function useRouteParam(): string | null {
+  const raw = useHash(parseParam);
+  if (raw === null) return null;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
 }

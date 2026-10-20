@@ -1,8 +1,9 @@
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
-import { getLearnerProfile, getTimeLimits, type LearnerProfile, type TimeLimits } from './lib/api';
+import { getCalls, getLearnerProfile, getTimeLimits, type CallTotals, type LearnerProfile, type TimeLimits } from './lib/api';
 import type { Retry } from './lib/instructions';
-import { go, useRoute } from './lib/router';
+import { go, useRoute, useRouteParam } from './lib/router';
 import type { CallSetup, FinishedCall } from './lib/setup';
+import { CallHistory } from './screens/History';
 import { Home } from './screens/Home';
 import { Missions } from './screens/Missions';
 import { Summary } from './screens/Summary';
@@ -13,7 +14,9 @@ const Call = lazy(() => import('./screens/Call').then((m) => ({ default: m.Call 
 
 export function App() {
   const route = useRoute();
+  const param = useRouteParam();
   const [profile, setProfile] = useState<LearnerProfile | null>(null);
+  const [totals, setTotals] = useState<CallTotals | null>(null);
   const [limits, setLimits] = useState<TimeLimits>({ call: 600, teachback: 900 });
   const [setup, setSetup] = useState<CallSetup | null>(null);
   const [callKey, setCallKey] = useState(0);
@@ -26,6 +29,16 @@ export function App() {
   useEffect(() => {
     if (route === 'home' || profile === null) void getLearnerProfile().then(setProfile);
     // 홈으로 돌아올 때마다 통화 뒤 갱신된 학습자 카드를 다시 읽는다.
+  }, [route]);
+
+  useEffect(() => {
+    if (route !== 'home') return;
+    const controller = new AbortController();
+    getCalls(1, controller.signal).then(
+      (data) => setTotals(data.totals),
+      () => {},
+    );
+    return () => controller.abort();
   }, [route]);
 
   useEffect(() => {
@@ -77,7 +90,9 @@ export function App() {
       ) : null;
     case 'summary':
       return finished ? <Summary call={finished} onRetry={retry} /> : null;
+    case 'history':
+      return <CallHistory stem={param} />;
     default:
-      return <Home profile={profile} onQuickCall={() => startCall({ kind: 'freetalk', topic: '' })} />;
+      return <Home profile={profile} totals={totals} onQuickCall={() => startCall({ kind: 'freetalk', topic: '' })} />;
   }
 }
