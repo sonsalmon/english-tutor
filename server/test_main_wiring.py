@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -847,6 +848,14 @@ class ChatEndpointsTest(unittest.TestCase):
     def send(self, pid="priya", **body):
         return self.client.post(f"/api/chat/{pid}", json={"instruction": "be Priya", "message": "hi", **body})
 
+    def test_close_requires_json_body(self):
+        self.assertEqual(self.client.post("/api/chat/priya/close").status_code, 415)
+        self.assertEqual(
+            self.client.post("/api/chat/priya/close", content="{}", headers={"content-type": "text/plain"}).status_code, 415
+        )
+        res = self.client.post("/api/chat/priya/close", json={})
+        self.assertEqual((res.status_code, res.json()), (200, {"status": "nothing"}))
+
     def test_unknown_and_park_ids_are_400(self):
         for pid in ("park", "nobody"):
             with self.subTest(pid=pid):
@@ -879,6 +888,38 @@ class ChatEndpointsTest(unittest.TestCase):
         self.assertEqual(self.client.get("/api/chat/priya").json(), {"messages": []})
 
 
+class ShellCacheHeaderTest(unittest.TestCase):
+    def test_index_sw_and_manifest_are_no_cache_but_assets_are_not(self):
+        import tempfile
+
+        from fastapi.testclient import TestClient
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        dist = Path(tmp.name) / "dist"
+        (dist / "assets").mkdir(parents=True)
+        for name in ("index.html", "sw.js", "manifest.webmanifest", "assets/app-abc.js"):
+            (dist / name).write_text("x", encoding="utf-8")
+        old = os.getcwd()
+        os.chdir(tmp.name)
+        self.addCleanup(os.chdir, old)
+        client = TestClient(main.app)
+
+        for path in ("/", "/sw.js", "/manifest.webmanifest", "/index.html", "/chat/priya"):
+            with self.subTest(path=path):
+                self.assertEqual(client.get(path).headers.get("cache-control"), "no-cache")
+        self.assertNotEqual(client.get("/assets/app-abc.js").headers.get("cache-control"), "no-cache")
+
+
+class _JsonRequest:
+    """main.chat_close를 직접 부를 때 쓰는 JSON 본문({}) 요청."""
+
+    headers = {"content-type": "application/json"}
+
+    async def json(self):
+        return {}
+
+
 class ChatCloseWiringTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         import tempfile
@@ -899,9 +940,9 @@ class ChatCloseWiringTest(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(main.partner_memory, "update", return_value=True) as update, mock.patch(
             "server.tutor.make_generate_text", return_value=lambda prompt: "{}"
         ):
-            first = await main.chat_close("priya")
+            first = await main.chat_close("priya", _JsonRequest())
             await self.drain()
-            second = await main.chat_close("priya")
+            second = await main.chat_close("priya", _JsonRequest())
             await self.drain()
 
         self.assertEqual(first, {"status": "scheduled"})
@@ -912,9 +953,33 @@ class ChatCloseWiringTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(args[1], [("me", "I like tea"), ("partner", "Same!")])
         self.assertEqual(kwargs["mode"], "chat")
 
+    async def test_close_during_update_is_nothing_then_one_more_update_covers_only_new_messages(self):
+        main.chat.append_messages("priya", [{"role": "me", "text": "first", "at": ""}, {"role": "friend", "text": "ok", "at": ""}])
+        calls = []
+        overlap = []
+
+        def fake_update(partner_id, turns, generate_text=None, mode="call"):
+            calls.append(list(turns))
+            if len(calls) == 1:  # 갱신이 도는 중에 새 메시지가 오고 close가 또 온다
+                main.chat.append_messages("priya", [{"role": "me", "text": "second", "at": ""}, {"role": "friend", "text": "yes", "at": ""}])
+                overlap.append(asyncio.run(main.chat_close("priya", _JsonRequest())))
+            return True
+
+        with mock.patch.object(main.partner_memory, "update", side_effect=fake_update), mock.patch(
+            "server.tutor.make_generate_text", return_value=lambda prompt: "{}"
+        ):
+            first = await main.chat_close("priya", _JsonRequest())
+            await self.drain()
+
+        self.assertEqual(first, {"status": "scheduled"})
+        self.assertEqual(overlap, [{"status": "nothing"}])
+        self.assertEqual(calls, [[("me", "first"), ("partner", "ok")], [("me", "second"), ("partner", "yes")]])
+        self.assertEqual(main.chat._read_state("priya"), 4)
+        self.assertEqual(main.chat._INFLIGHT, {})
+
     async def test_close_with_no_messages_is_nothing(self):
         with mock.patch.object(main.partner_memory, "update") as update:
-            self.assertEqual(await main.chat_close("jake"), {"status": "nothing"})
+            self.assertEqual(await main.chat_close("jake", _JsonRequest()), {"status": "nothing"})
         update.assert_not_called()
 
 

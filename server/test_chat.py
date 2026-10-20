@@ -19,6 +19,7 @@ class ChatTestCase(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         chat._INFLIGHT.clear()
+        chat._CLIENT = None
 
     def say(self, pid, n, start=0):
         chat.append_messages(
@@ -162,6 +163,39 @@ class SendTest(ChatTestCase):
         self.assertEqual([(c.role, c.parts[0].text) for c in calls["contents"]], [("user", "hi"), ("model", "yo")])
 
 
+class AppendRepairTest(ChatTestCase):
+    def test_append_after_a_half_written_line_starts_on_a_new_line(self):
+        self.say("priya", 2)
+        with open(chat.chat_path("priya"), "a", encoding="utf-8") as f:
+            f.write('{"role": "me", "te')  # 덧붙이다 죽은 줄
+        self.say("priya", 2, start=2)
+
+        texts = [m["text"] for m in chat.read_all("priya")]
+        self.assertEqual(texts, ["m0", "m1", "m2", "m3"])  # 새 줄이 깨진 줄에 붙지 않는다
+
+    def test_append_to_missing_or_clean_file_adds_no_blank_line(self):
+        self.say("priya", 1)
+        self.say("priya", 1, start=1)
+        self.assertEqual(len(chat.chat_path("priya").read_text(encoding="utf-8").splitlines()), 2)
+        self.assertNotIn("\n\n", chat.chat_path("priya").read_text(encoding="utf-8"))
+
+
+class ReplyClientTest(ChatTestCase):
+    def test_record_usage_is_called_and_client_is_reused_with_timeout(self):
+        response = mock.Mock(text="hello")
+        client = mock.Mock()
+        client.models.generate_content.return_value = response
+        history = [{"role": "me", "text": "hi", "at": ""}]
+        with mock.patch("server.tutor._make_client", return_value=client) as make, mock.patch("server.tutor.record_usage") as record:
+            chat.generate_reply("be Priya", history)
+            chat.generate_reply("be Priya", history)
+
+        self.assertEqual(record.call_count, 2)
+        record.assert_called_with(response)
+        make.assert_called_once()
+        self.assertEqual(make.call_args.kwargs["http_options"].timeout, chat.REPLY_TIMEOUT_MS)
+
+
 class CloseTest(ChatTestCase):
     def model(self, calls):
         def generate_text(prompt):
@@ -216,6 +250,28 @@ class CloseTest(ChatTestCase):
         self.say("priya", 2)
         self.assertIsNotNone(chat.prepare_close("priya"))
         self.assertIsNone(chat.prepare_close("priya"))
+
+    def test_overlapping_close_with_new_messages_waits_and_never_reprocesses(self):
+        self.say("priya", 2)
+        calls = []
+        turns, total = chat.prepare_close("priya")
+        self.say("priya", 2, start=2)  # 갱신이 도는 중에 새 메시지
+        self.assertIsNone(chat.prepare_close("priya"))  # 같은 친구는 겹쳐 돌리지 않는다
+
+        self.assertTrue(chat.finish_close("priya", turns, total, generate_text=self.model(calls)))
+        turns2, total2 = chat.prepare_close("priya")  # 끝난 뒤 남은 메시지만 한 번 더
+        self.assertEqual((turns2, total2), ([("me", "m2"), ("partner", "m3")], 4))
+        self.assertTrue(chat.finish_close("priya", turns2, total2, generate_text=self.model(calls)))
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("m0", calls[1])
+        self.assertEqual([e["mode"] for e in partner_memory.load_memory("priya")["episodes"]], ["chat", "chat"])
+
+    def test_state_never_moves_backwards(self):
+        chat._write_state("priya", 4)
+        chat._write_state("priya", 2)
+        self.assertEqual(chat._read_state("priya"), 4)
+        chat._write_state("priya", 6)
+        self.assertEqual(chat._read_state("priya"), 6)
 
     def test_only_the_last_60_messages_go_to_memory(self):
         self.say("priya", 100)

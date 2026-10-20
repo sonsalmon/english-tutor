@@ -1,13 +1,22 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { MORE_ICON, MORE_ITEMS, NAV_ITEMS, TAB_ITEMS, navRouteOf } from '../lib/nav';
-import { go, type Route } from '../lib/router';
+import { go, useRouteParam, type Route } from '../lib/router';
 import { Portrait } from './ui';
 
 // 통화 화면은 사이드바·탭바 없이 전체를 쓴다. 통화 중에 다른 메뉴로 나가면 통화가 끊기기 때문이다.
+// 친구와의 대화 화면(#/chat/<id>)은 메신저처럼 탭바를 숨기고 입력창을 맨 아래에 붙인다. 목록(#/chat)은 탭바가 있다.
 export function AppShell({ route, children }: { route: Route; children: ReactNode }) {
+  const param = useRouteParam();
   if (route === 'call') return <>{children}</>;
+  const inConversation = route === 'chat' && param !== null;
   return (
-    <div className="pb-[calc(4rem+env(safe-area-inset-bottom))] lg:pb-0 lg:pl-60 [&>main]:min-h-[calc(100dvh-4rem-env(safe-area-inset-bottom))] lg:[&>main]:min-h-0">
+    <div
+      className={`lg:pb-0 lg:pl-60 ${
+        inConversation
+          ? ''
+          : 'pb-[calc(4rem+env(safe-area-inset-bottom))] [&>main]:min-h-[calc(100dvh-4rem-env(safe-area-inset-bottom))] lg:[&>main]:min-h-0'
+      }`}
+    >
       <aside className="fixed inset-y-0 left-0 z-10 hidden w-60 flex-col border-r border-line bg-surface px-3 py-6 lg:flex">
         <div className="flex items-center gap-3 px-2">
           <Portrait size={48} />
@@ -40,7 +49,7 @@ export function AppShell({ route, children }: { route: Route; children: ReactNod
         </nav>
       </aside>
       {children}
-      <TabBar route={route} />
+      {!inConversation && <TabBar route={route} />}
     </div>
   );
 }

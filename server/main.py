@@ -491,9 +491,15 @@ async def chat_send(partner_id: str, raw: Request):
 
 def _schedule_chat_memory_update(partner_id: str, turns: list, total: int) -> None:
     async def _run():
+        nonlocal turns, total
         try:
-            if await asyncio.to_thread(chat.finish_close, partner_id, turns, total):
+            while await asyncio.to_thread(chat.finish_close, partner_id, turns, total):
                 logger.info("Partner memory updated from chat: %s", partner_id)
+                # 도는 동안 새 메시지가 쌓였으면(그 사이 close는 nothing이었다) 한 번 더 건다. 실패하면 멈춘다.
+                nxt = await asyncio.to_thread(chat.prepare_close, partner_id)
+                if nxt is None:
+                    break
+                turns, total = nxt
         except Exception as e:  # noqa: BLE001 - 기억 갱신은 부가 기능
             logger.error(f"Chat memory update failed: {e}")
 
@@ -503,9 +509,10 @@ def _schedule_chat_memory_update(partner_id: str, turns: list, total: int) -> No
 
 
 @app.post("/api/chat/{partner_id}/close")
-async def chat_close(partner_id: str):
-    """대화를 떠날 때 부른다. 아직 기억에 반영하지 않은 메시지가 있으면 친구 기억 갱신을 뒤에서 걸고 scheduled, 없으면 nothing."""
+async def chat_close(partner_id: str, raw: Request):
+    """대화를 떠날 때 부른다(JSON 본문 {} 필수). 아직 기억에 반영하지 않은 메시지가 있으면 친구 기억 갱신을 뒤에서 걸고 scheduled, 없으면 nothing."""
     _partner_or_400(partner_id)
+    await _json_object(raw)
     prepared = await asyncio.to_thread(chat.prepare_close, partner_id)
     if prepared is None:
         return {"status": "nothing"}
@@ -850,14 +857,21 @@ async def pron_latest_endpoint():
     return await asyncio.to_thread(pron.latest_result) or {"result": None}
 
 
+# 셸(index.html)·서비스 워커·매니페스트는 브라우저 HTTP 캐시가 옛 것을 주지 않게 매번 확인시킨다.
+NO_CACHE_FILES = ("index.html", "sw.js", "manifest.webmanifest")
+NO_CACHE_HEADERS = {"Cache-Control": "no-cache"}
+
+
 @app.get("/{full_path:path}")
 async def serve_spa(full_path: str):
     dist_dir = os.path.realpath("dist")
     file_path = os.path.realpath(os.path.join(dist_dir, full_path))
     if full_path and file_path.startswith(dist_dir + os.sep) and os.path.isfile(file_path):
+        if full_path in NO_CACHE_FILES:
+            return FileResponse(file_path, headers=NO_CACHE_HEADERS)
         return FileResponse(file_path)
 
-    return FileResponse("dist/index.html")
+    return FileResponse("dist/index.html", headers=NO_CACHE_HEADERS)
 
 if __name__ == "__main__":
     import uvicorn

@@ -332,7 +332,7 @@ function Conversation({ partner, brief, interests, profileReady, onCall }: Conve
           e.preventDefault();
           void submit();
         }}
-        className="sticky bottom-[calc(4rem+env(safe-area-inset-bottom))] z-10 -mx-5 border-t border-line bg-paper/95 px-5 pt-3 pb-3 backdrop-blur lg:bottom-0 lg:mx-0 lg:px-0 lg:pb-6"
+        className="sticky bottom-0 z-10 -mx-5 border-t border-line bg-paper/95 px-5 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur lg:mx-0 lg:px-0 lg:pb-6"
       >
         {error && (
           <p role="alert" className="mb-2 rounded-xl border border-end/40 bg-end/10 px-4 py-2.5 text-sm text-ink">

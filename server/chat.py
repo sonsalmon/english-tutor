@@ -42,7 +42,9 @@ class ChatInputError(ValueError):
 
 _FILE_LOCK = threading.RLock()
 _PARTNER_LOCKS: Dict[str, threading.Lock] = {}
-_INFLIGHT: Dict[str, int] = {}  # 친구별로 지금 기억 갱신 중인 메시지 수(같은 구간을 두 번 걸지 않는다)
+_INFLIGHT: Dict[str, int] = {}  # 친구별로 지금 기억 갱신 중인 메시지 수(친구당 갱신은 한 번에 하나만 돈다)
+REPLY_TIMEOUT_MS = 30_000  # 채팅 답 요청 시간 제한(멈춘 Vertex가 친구 락을 계속 잡지 않게)
+_CLIENT: Any = None
 
 
 def get_chat_dir() -> Path:
@@ -121,7 +123,16 @@ def append_messages(partner_id: str, messages: List[Dict[str, str]]) -> None:
     lines = "".join(json.dumps(m, ensure_ascii=False) + "\n" for m in messages)
     with _FILE_LOCK:
         path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "ab+") as probe:  # 지난번에 덧붙이다 죽어 마지막 줄이 반쯤 쓰였으면 줄바꿈부터 쓴다
+            size = probe.seek(0, os.SEEK_END)
+            if size:
+                probe.seek(size - 1)
+                needs_newline = probe.read(1) != b"\n"
+            else:
+                needs_newline = False
         with open(path, "a", encoding="utf-8") as f:
+            if needs_newline:
+                f.write("\n")
             f.write(lines)
             f.flush()
             os.fsync(f.fileno())
@@ -162,6 +173,19 @@ def contents_for(messages: List[Dict[str, str]]) -> List[Tuple[str, str]]:
     return out
 
 
+def _get_client() -> Any:
+    """채팅 답용 클라이언트를 한 번만 만들어 재사용한다(요청 시간 제한 포함)."""
+    global _CLIENT
+    from google.genai import types
+
+    from server import tutor
+
+    with _FILE_LOCK:
+        if _CLIENT is None:
+            _CLIENT = tutor._make_client(http_options=types.HttpOptions(timeout=REPLY_TIMEOUT_MS))
+        return _CLIENT
+
+
 def generate_reply(instruction: str, history: List[Dict[str, str]]) -> str:
     """Vertex 텍스트 모델로 친구의 답을 만든다(마크다운 정리 전의 원문)."""
     from google.genai import types
@@ -169,13 +193,14 @@ def generate_reply(instruction: str, history: List[Dict[str, str]]) -> str:
     from server import tutor
 
     model = tutor.tutor_model()
-    client = tutor._make_client()
+    client = _get_client()
     contents = [types.Content(role=role, parts=[types.Part(text=text)]) for role, text in contents_for(history)]
     config = types.GenerateContentConfig(
         system_instruction=instruction,
         thinking_config=types.ThinkingConfig(thinking_budget=0) if "flash" in model else None,
     )
     response = client.models.generate_content(model=model, contents=contents, config=config)
+    tutor.record_usage(response)
     return response.text
 
 
@@ -214,6 +239,7 @@ def _read_state(partner_id: str) -> int:
 def _write_state(partner_id: str, memorized: int) -> None:
     path = state_path(partner_id)
     with _FILE_LOCK:
+        memorized = max(memorized, _read_state(partner_id))  # 반영한 수는 뒤로 가지 않는다
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".state-", suffix=".tmp")
         try:
@@ -231,14 +257,14 @@ def _write_state(partner_id: str, memorized: int) -> None:
 
 
 def prepare_close(partner_id: str) -> Optional[Tuple[List[Tuple[str, str]], int]]:
-    """아직 기억에 반영하지 않은 메시지로 (턴, 전체 메시지 수)를 만든다. 학습자 메시지가 없거나 같은 구간이 이미 진행 중이면 None."""
+    """아직 기억에 반영하지 않은 메시지로 (턴, 전체 메시지 수)를 만든다. 학습자 메시지가 없거나 이 친구의 갱신이 이미 진행 중이면 None."""
     with _FILE_LOCK:
         messages = read_all(partner_id)
         total = len(messages)
         pending = messages[min(_read_state(partner_id), total) :]
         if not any(m["role"] == "me" for m in pending):
             return None
-        if _INFLIGHT.get(partner_id) == total:
+        if partner_id in _INFLIGHT:  # 진행 중이면 겹쳐 돌리지 않는다. 끝난 뒤 남은 메시지는 호출한 쪽이 한 번 더 건다.
             return None
         _INFLIGHT[partner_id] = total
     turns = [(m["role"] if m["role"] == "me" else "partner", m["text"]) for m in pending[-MEMORY_MESSAGES:]]
@@ -263,5 +289,4 @@ def finish_close(
         return ok
     finally:
         with _FILE_LOCK:
-            if _INFLIGHT.get(partner_id) == total:
-                del _INFLIGHT[partner_id]
+            _INFLIGHT.pop(partner_id, None)

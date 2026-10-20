@@ -340,6 +340,47 @@ class V2Test(MemoryDirCase):
         summary = pm.load_memory("priya")["episodes"][0]["summary"]
         self.assertTrue(0 < len(summary) <= 200)
 
+    def test_overlong_progress_is_cut_at_word_boundary_not_dropped(self):
+        progress = " ".join(f"beat{i:02d}" for i in range(30))[:162]  # 162자
+        out = pm.normalize({"self_story": [{"story": "Trek", "progress": progress}, {"story": "Tomato", "progress": "short"}]}, "priya", NOW)
+
+        stories = {x["story"]: x["progress"] for x in out["self_story"]}
+        self.assertEqual(set(stories), {"Trek", "Tomato"})
+        self.assertTrue(0 < len(stories["Trek"]) <= pm.PROGRESS_MAX)
+        self.assertTrue(progress.startswith(stories["Trek"]))
+        self.assertFalse(stories["Trek"].endswith("beat"))  # 단어 한가운데에서 자르지 않는다
+
+    def test_response_missing_list_keys_keeps_old_lists(self):
+        old = v2()
+        pm.update("priya", TURNS, lambda p: json.dumps(old), NOW)
+        before = pm.load_memory("priya")
+        self.assertTrue(before["self_story"] and before["jokes"])
+
+        ok = pm.update("priya", TURNS, lambda p: json.dumps({"facts": [], "threads": [], "episode": "Short chat."}), NOW + timedelta(days=1))
+
+        self.assertTrue(ok)
+        after = pm.load_memory("priya")
+        self.assertEqual(after["self_story"], before["self_story"])
+        self.assertEqual(after["jokes"], before["jokes"])
+        self.assertEqual(after["facts"], [])  # 키가 있고 빈 목록이면 그대로 비운다
+
+    def test_long_episode_ends_at_sentence_boundary(self):
+        long = "First we talked about the trek. " + "Then we kept chatting about many other things " * 8 + "The end."
+        self.assertTrue(pm.update("priya", TURNS, lambda p: json.dumps(v2(episode=long)), NOW))
+
+        summary = pm.load_memory("priya")["episodes"][0]["summary"]
+        self.assertEqual(summary, "First we talked about the trek.")
+
+    def test_long_episode_without_sentence_end_gets_ellipsis(self):
+        long = "word " * 60
+        self.assertTrue(pm.update("priya", TURNS, lambda p: json.dumps(v2(episode=long)), NOW))
+
+        summary = pm.load_memory("priya")["episodes"][0]["summary"]
+        self.assertTrue(summary.endswith("word…") and len(summary) <= pm.SUMMARY_MAX)
+
+    def test_prompt_asks_for_bigger_storyline(self):
+        self.assertIn("bigger storyline", pm.build_prompt("priya", None, TURNS, "2026-10-20"))
+
     def test_bad_mode_and_missing_episode(self):
         self.assertFalse(pm.update("priya", TURNS, lambda p: json.dumps(v2()), NOW, mode="email"))
         self.assertFalse((self.dir / "priya.json").exists())

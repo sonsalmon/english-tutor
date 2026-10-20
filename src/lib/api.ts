@@ -240,7 +240,12 @@ export async function sendChat(id: string, instruction: string, message: string)
 
 // 대화를 떠날 때 부른다. 탭을 닫는 중에도 나가도록 keepalive로 보내고, 실패해도 화면에는 영향이 없다.
 export function closeChat(id: string): void {
-  void fetch(`/api/chat/${encodeURIComponent(id)}/close`, { method: 'POST', keepalive: true }).catch(() => {});
+  void fetch(`/api/chat/${encodeURIComponent(id)}/close`, {
+    method: 'POST',
+    keepalive: true,
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  }).catch(() => {});
 }
 
 export async function getTimeLimits(): Promise<TimeLimits> {

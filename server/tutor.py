@@ -348,11 +348,11 @@ def is_empty_result(data: Dict[str, Any]) -> bool:
     )
 
 
-def _make_client() -> genai.Client:
+def _make_client(http_options: Optional[types.HttpOptions] = None) -> genai.Client:
     """ADC로 Vertex AI 클라이언트를 만든다(새 키 없음)."""
     project = get_project_id()
     location = os.getenv("LOCATION", "us-central1")
-    return genai.Client(vertexai=True, project=project, location=location)
+    return genai.Client(vertexai=True, project=project, location=location, http_options=http_options)
 
 
 def tutor_model() -> str:

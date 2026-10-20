@@ -101,6 +101,30 @@ def _clean(value: Any) -> str:
     return " ".join(value.split()) if isinstance(value, str) else ""
 
 
+def _cut_words(text: str, limit: int) -> str:
+    """limit 안으로 단어 경계에서 자른다(버리지 않는다)."""
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    if text[limit] != " ":  # 단어 한가운데면 마지막 단어를 뺀다
+        head = cut.rsplit(" ", 1)
+        cut = head[0] if len(head) == 2 else cut
+    return cut.rstrip(" ,;:-")
+
+
+_SENTENCE_END = re.compile(r"[.!?](?=\s|$)")
+
+
+def _cut_summary(text: str, limit: int) -> str:
+    """limit 안에서 문장 끝으로 끝나게 자른다. 문장 끝이 없으면 단어 경계에서 자르고 '…'를 붙인다."""
+    if len(text) <= limit:
+        return text
+    ends = [m.end() for m in _SENTENCE_END.finditer(text[:limit])]
+    if ends:
+        return text[: ends[-1]].rstrip()
+    return _cut_words(text, limit - 1) + "…"
+
+
 def _date(value: Any, fallback: str) -> str:
     if isinstance(value, str) and _DATE_RE.fullmatch(value):
         try:
@@ -142,12 +166,9 @@ def normalize(data: Any, partner_id: str, now: datetime) -> Dict[str, Any]:
     for item in data.get("self_story") or []:
         if not isinstance(item, dict):
             continue
-        story = _clean(item.get("story"))
-        progress = _clean(item.get("progress"))
-        if (
-            not story or len(story) > STORY_MAX or not progress or len(progress) > PROGRESS_MAX
-            or story.lower() in seen or _has_contact(story, progress)
-        ):
+        story = _cut_words(_clean(item.get("story")), STORY_MAX)  # 길다고 이야기 항목을 버리지 않고 자른다
+        progress = _cut_words(_clean(item.get("progress")), PROGRESS_MAX)
+        if not story or not progress or story.lower() in seen or _has_contact(story, progress):
             continue
         seen.add(story.lower())
         stories.append({"story": story, "progress": progress, "last_seen": _date(item.get("last_seen"), today)})
@@ -339,7 +360,7 @@ Return ONLY a JSON object of exactly this shape:
 Rules:
 - facts = what {name} learned about the learner (likes, plans, opinions, small life events), based only on what the learner ("Me") said. Never record what the Partner said as a fact about the learner. Do not invent anything.
 - threads = things {name} would naturally pick up next time (e.g. "the jazz concert on Saturday"). Add new ones from this {kind}. Drop threads that were resolved in it. Keep unresolved older threads.
-- self_story = what {name} (Partner) told the learner about {name}'s OWN life: one entry per story, with a short title and "progress" = only the beats and concrete details {name} has actually told so far (older beats stay, new beats are added in order). Record only what the Partner really said in this transcript or what the current memory already holds; never write a beat that was not told, and never finish a story the Partner only began.
+- self_story = what {name} (Partner) told the learner about {name}'s OWN life: one entry per story, with a short title and "progress" = only the beats and concrete details {name} has actually told so far (older beats stay, new beats are added in order). Also record {name}'s ongoing bigger storyline when {name} has told one (e.g. a trek {name} is training for, a move, a job search) as its own entry, not only the small topic of the day. Record only what the Partner really said in this transcript or what the current memory already holds; never write a beat that was not told, and never finish a story the Partner only began.
 - jokes = nicknames, running gags and playful bits that BOTH sides used and that could be reused. Keep it empty if there were none.
 - episode = one short English summary of this {kind} (topics, what was decided, mood). Always provide it.
 - Merge with the current memory: keep older items that are still true, update changed ones, remove duplicates. Set last_seen to {today} for items mentioned or confirmed in this {kind} and keep the old date for the rest.
@@ -399,9 +420,12 @@ def update(
             data = parse_model_json(raw)
             # 에피소드는 모델이 옛 것을 다시 쓰지 않는다: 옛 목록 앞에 이번 대화 하나만 붙인다.
             episodes = list((old or {}).get("episodes") or [])
-            summary = _clean(data.get("episode"))
-            if len(summary) > SUMMARY_MAX:  # 모델이 길게 쓰면 버리지 말고 단어 경계에서 자른다
-                summary = summary[:SUMMARY_MAX].rsplit(" ", 1)[0].rstrip(" ,;:-")
+            # 모델이 길게 쓰면 버리지 말고 문장 끝에서(없으면 단어 경계에서 …) 자른다
+            summary = _cut_summary(_clean(data.get("episode")), SUMMARY_MAX)
+            # 모델이 목록 키를 빼면 그 목록은 옛 것을 그대로 둔다(빈 목록으로 지우지 않는다)
+            for key in ("facts", "threads", "self_story", "jokes"):
+                if not isinstance(data.get(key), list):
+                    data[key] = list((old or {}).get(key) or [])
             if summary:
                 episodes.insert(0, {"date": _today(now), "mode": mode, "summary": summary})
             new = normalize({**data, "episodes": episodes}, partner_id, now)
