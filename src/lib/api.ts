@@ -1,7 +1,13 @@
-import type { LessonSection, Retry } from './instructions';
+import type { LessonSection, PracticeWord, Retry } from './instructions';
 
 export type WeakPoint = { pattern: string; example: string };
-export type LearnerProfile = { brief: string; updated: string | null; weak_points: WeakPoint[]; next_goal: string };
+export type LearnerProfile = {
+  brief: string;
+  updated: string | null;
+  weak_points: WeakPoint[];
+  next_goal: string;
+  practice_words: PracticeWord[];
+};
 export type TimeLimits = { call: number; teachback: number };
 export type Lesson = {
   date: string;
@@ -17,6 +23,8 @@ export type Tutoring = {
   pragmatics: { pattern: string; note: string }[];
   retry: Retry;
   unanswered?: { question: string; teacher_said: string; cause: string; evidence: string }[];
+  practice_used?: string[];
+  readgloss?: { saved: number } | null;
 };
 
 export type CallSummary = {
@@ -31,7 +39,7 @@ export type CallSummary = {
 export type CallTotals = { calls: number; minutes: number; days: number; week: number };
 export type CallDetail = { call: CallSummary; tutoring: Tutoring | null };
 
-const EMPTY_PROFILE: LearnerProfile = { brief: '', updated: null, weak_points: [], next_goal: '' };
+const EMPTY_PROFILE: LearnerProfile = { brief: '', updated: null, weak_points: [], next_goal: '', practice_words: [] };
 
 // 폰 시계가 Mac과 다르면 튜터링이 "이번 통화 전문"을 못 찾는다(서버는 파일 시각과 started_at을 비교).
 // 서버 응답의 Date 헤더로 차이를 재서 통화 시각을 서버 시계 기준으로 맞춘다.
@@ -96,10 +104,17 @@ function toTutoring(data: Record<string, unknown>): Tutoring {
     pragmatics: list(data.pragmatics),
     retry: (data.retry as Retry) || {},
     unanswered: list(data.unanswered),
+    practice_used: list(data.practice_used),
+    readgloss: (data.readgloss as Tutoring['readgloss']) ?? null,
   };
 }
 
-export async function requestTutoring(body: { started_at: number; mode?: 'teachback'; lesson_date?: string }): Promise<Tutoring> {
+export async function requestTutoring(body: {
+  started_at: number;
+  mode?: 'teachback';
+  lesson_date?: string;
+  practice_words?: string[];
+}): Promise<Tutoring> {
   const res = await fetch('/api/tutor', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

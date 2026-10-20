@@ -83,6 +83,7 @@ export function App() {
             key={callKey}
             setup={setup}
             brief={profile?.brief ?? ''}
+            practiceWords={profile?.practice_words ?? []}
             timeLimit={setup.kind === 'teachback' ? limits.teachback : limits.call}
             onFinished={onFinished}
           />

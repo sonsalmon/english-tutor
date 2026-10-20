@@ -36,6 +36,23 @@ export function Home({ profile, totals, onQuickCall }: { profile: LearnerProfile
         )}
       </section>
 
+      {profile && profile.practice_words.length > 0 && (
+        <section className="mt-4 rounded-2xl border border-line bg-surface p-5">
+          <h2 className="text-sm font-semibold text-ink-soft">읽다가 찾아본 단어</h2>
+          <p className="mt-1 text-[15px] leading-relaxed">Ms. Park이 통화에서 이 단어를 써 볼 기회를 만들어요.</p>
+          <ul className="mt-3 flex flex-wrap gap-2">
+            {profile.practice_words.map((w) => (
+              <li key={w.lemma} className="rounded-xl bg-paper px-3 py-2">
+                <span lang="en" className="font-semibold">
+                  {w.lemma}
+                </span>
+                {w.gloss && <span className="ml-1.5 text-sm text-ink-soft">{w.gloss}</span>}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <div className="mt-6">
         <CallButton onClick={onQuickCall}>
           <Phone size={22} aria-hidden />
