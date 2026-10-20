@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -p . && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "bun test src"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",

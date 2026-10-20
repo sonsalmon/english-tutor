@@ -50,8 +50,11 @@ LIVE_MODEL_CHAT_ENV = "LIVE_MODEL_CHAT"
 VAD_CHAT_END_SENSITIVITY_ENV = "LIVE_VAD_CHAT_END_SENSITIVITY"
 VAD_CHAT_SILENCE_MS_ENV = "LIVE_VAD_CHAT_SILENCE_MS"
 VAD_CHAT_PREFIX_MS_ENV = "LIVE_VAD_CHAT_PREFIX_MS"
+VAD_PREFIX_MS_MAX = 2000
 VAD_SILENCE_MS_RANGE = (100, 3000)
 CHAT_DEFAULT_SILENCE_MS = 500  # next10 실험 결정: 채팅 기본 end=HIGH, silence 500ms
+# LIVE_MODEL·LIVE_AFFECTIVE_DIALOG는 gemini-3.8-live 시험(next10)을 위해 남긴 노브다. 둘 다 기본은 꺼져 있다
+# (LIVE_MODEL 미지정 = 기본 2.5 모델, 감정 대화는 켠 상태 유지). 3.8을 쓰지 않는 한 건드리지 않는다.
 AFFECTIVE_DIALOG_ENV = "LIVE_AFFECTIVE_DIALOG"  # 0|false|off면 끈다(gemini-3.8-live는 1007로 거부, 2026-10-20 확인)
 MISSION_RE = re.compile(r'trying to:\s*"([^"]+)"')
 MIN_LEARNER_WORDS = 3
@@ -102,15 +105,21 @@ def chat_vad_overrides(mode: str, env=None) -> dict:
     """smalltalk·freetalk에만 적용할 Gemini VAD 노브. 값이 잘못되면 그 노브만 무시한다(통화는 계속).
 
     키: end_sensitivity(EndSensitivity), silence_duration_ms(int), prefix_padding_ms(int).
-    환경 변수가 없으면 기본값 end=HIGH, silence_ms=500(next10 실험 결정)이고 앞 여유(prefix)는 기본 VAD 그대로다.
-    TURN_MODE=smart(Gemini VAD 끔)이면 비어 있다."""
+    환경 변수가 없으면 smalltalk만 end=HIGH, silence_ms=500(next10 실험 결정)이고, freetalk은 기존 기본값
+    (end=LOW, 1200ms)을 그대로 쓴다(빈 dict). 환경 변수는 두 채팅 모드 모두에 적용된다. 앞 여유(prefix)는 기본 VAD 그대로다.
+    TURN_MODE=smart(Gemini VAD 끔)이면 비어 있다.
+
+    되돌리기 한 줄(smalltalk도 옛 값으로): LIVE_VAD_CHAT_END_SENSITIVITY=LOW LIVE_VAD_CHAT_SILENCE_MS=1200
+    이유: 새 기본값의 근거가 설정당 유효 통화 2건뿐이고, 말 사이 멈춤이 긴 freetalk은 학습자가 잘릴 위험이 커서 제외했다."""
     env = os.environ if env is None else env
     if mode not in CHAT_MODES or env.get(TURN_MODE_ENV, "gemini") == "smart":
         return {}
-    out: dict = {
-        "end_sensitivity": EndSensitivity.END_SENSITIVITY_HIGH,
-        "silence_duration_ms": CHAT_DEFAULT_SILENCE_MS,
-    }
+    out: dict = {}
+    if mode == "smalltalk":
+        out = {
+            "end_sensitivity": EndSensitivity.END_SENSITIVITY_HIGH,
+            "silence_duration_ms": CHAT_DEFAULT_SILENCE_MS,
+        }
     raw = (env.get(VAD_CHAT_END_SENSITIVITY_ENV) or "").strip().upper()
     if raw in ("HIGH", "LOW"):
         out["end_sensitivity"] = getattr(EndSensitivity, f"END_SENSITIVITY_{raw}")
@@ -118,7 +127,7 @@ def chat_vad_overrides(mode: str, env=None) -> dict:
         logger.warning("%s=%r ignored (HIGH|LOW)", VAD_CHAT_END_SENSITIVITY_ENV, raw)
     for key, name, low, high in (
         ("silence_duration_ms", VAD_CHAT_SILENCE_MS_ENV, VAD_SILENCE_MS_RANGE[0], VAD_SILENCE_MS_RANGE[1]),
-        ("prefix_padding_ms", VAD_CHAT_PREFIX_MS_ENV, 0, None),
+        ("prefix_padding_ms", VAD_CHAT_PREFIX_MS_ENV, 0, VAD_PREFIX_MS_MAX),
     ):
         raw = (env.get(name) or "").strip()
         if not raw:
@@ -418,6 +427,12 @@ def mission_tools(config: CallConfig):
     ])
 
 
+def live_config_for(mode: str, env=None):
+    """run_bot이 쓰는 (Live 모델, Gemini VAD 설정, 로컬 사용자 설정, 전문 `- vad:` 요약)을 한 번에 돌려준다."""
+    vad, user_params = turn_settings(mode)
+    return live_model_for(mode, env), vad, user_params, vad_summary(chat_vad_overrides(mode, env))
+
+
 def turn_settings(mode: Optional[str] = None):
     """TURN_MODE에 따라 (Gemini VAD 설정, 로컬 VAD·Smart Turn 사용자 설정)을 돌려준다.
     mode가 smalltalk·freetalk이면 LIVE_VAD_CHAT_* 노브를 기본 VAD 위에 덮는다."""
@@ -464,10 +479,8 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
     from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
     from pipecat.workers.runner import WorkerRunner
 
-    model = live_model_for(config.mode)
+    model, vad, user_params, vad_meta = live_config_for(config.mode)
     record = CallRecord()
-    vad, user_params = turn_settings(config.mode)
-    vad_meta = vad_summary(chat_vad_overrides(config.mode))
     if vad_meta:
         logger.info("Chat VAD knobs applied (%s): %s", config.mode, vad_meta)
     logger.info("Live model for %s: %s", config.mode, model)

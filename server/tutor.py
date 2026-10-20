@@ -259,10 +259,27 @@ def normalize_thinking_gaps(value: Any) -> List[Dict[str, str]]:
     return rows
 
 
-def normalize_friend_message(value: Any) -> Optional[Dict[str, Any]]:
-    """friend_message 정리: 길이 상한, 빈 항목 제외, 최대 5개. 쓸 만한 phrase가 하나도 없으면 None."""
+_SPOKEN_LINE_RE = re.compile(r"^\s*\**(?:Me|Partner)\**:\**[ \t]*(.*)$", re.MULTILINE)
+_WORD_RE = re.compile(r"[a-z]+(?:'[a-z]+)?")
+
+
+def _long_words(text: str) -> List[str]:
+    return [w for w in _WORD_RE.findall(text.lower()) if len(w) >= 3]
+
+
+def _spoken_words(transcript: str) -> set:
+    """전문에서 Me·Partner 줄에 나온 소문자 단어(3글자 이상)."""
+    return {w for line in _SPOKEN_LINE_RE.findall(transcript) for w in _long_words(line)}
+
+
+def normalize_friend_message(value: Any, transcript: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """friend_message 정리: 길이 상한, 빈 항목 제외, 최대 5개. 쓸 만한 phrase가 하나도 없으면 None.
+
+    transcript가 있으면 phrase의 3글자 이상 단어 중 절반 미만이 전문(Me·Partner 줄)에 나오면 지어낸 표현으로 보고 버린다.
+    note는 확인하지 않는다."""
     if not isinstance(value, dict):
         return None
+    spoken = _spoken_words(transcript) if transcript is not None else None
     phrases: List[Dict[str, str]] = []
     raw = value.get("phrases")
     for item in raw if isinstance(raw, list) else []:
@@ -271,6 +288,10 @@ def normalize_friend_message(value: Any) -> Optional[Dict[str, Any]]:
         phrase = _capped(item.get("phrase"), MAX_FRIEND_PHRASE)
         if not phrase:
             continue
+        if spoken is not None:
+            words = _long_words(phrase)
+            if sum(w in spoken for w in words) * 2 < len(words):
+                continue
         phrases.append({"phrase": phrase, "note": _capped(item.get("note"), MAX_FRIEND_NOTE)})
         if len(phrases) >= MAX_FRIEND_PHRASES:
             break
@@ -283,7 +304,7 @@ def normalize_friend_message(value: Any) -> Optional[Dict[str, Any]]:
     }
 
 
-def normalize_tutor_json(raw: Any) -> Dict[str, Any]:
+def normalize_tutor_json(raw: Any, transcript: Optional[str] = None) -> Dict[str, Any]:
     """모델 출력을 고정 계약 모양으로 정리한다(누락 키 기본값, 개수 제한)."""
     data = extract_json(raw)
 
@@ -302,7 +323,7 @@ def normalize_tutor_json(raw: Any) -> Dict[str, Any]:
         "pragmatics": _rows(data, "pragmatics", ["pattern", "note"], MAX_PRAGMATICS),
         "thinking_gaps": normalize_thinking_gaps(data.get("thinking_gaps")),
         "topic_keywords": normalize_topic_keywords(data.get("topic_keywords")),
-        "friend_message": normalize_friend_message(data.get("friend_message")),
+        "friend_message": normalize_friend_message(data.get("friend_message"), transcript),
         "retry": {
             "goal": _clean_str(retry_raw.get("goal")),
             "target_phrases": phrases,
@@ -468,7 +489,7 @@ def analyze_transcript(
     last_error: Optional[Exception] = None
     for attempt in range(2):
         try:
-            result = normalize_tutor_json(generate_text(prompt))
+            result = normalize_tutor_json(generate_text(prompt), transcript)
             if is_empty_result(result):
                 raise ValueError("빈 결과(5개 섹션이 모두 비었습니다)")
             return result

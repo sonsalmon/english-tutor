@@ -1,4 +1,5 @@
 import type { LessonSection, PracticeWord, Retry } from './instructions';
+import type { CallLatency, LatencyResult } from './latency';
 
 export type WeakPoint = { pattern: string; example: string };
 export type LearnerProfile = {
@@ -55,6 +56,7 @@ export type CallSummary = {
   voice?: string | null;
   partner?: string | null;
   cost?: Cost | null;
+  latency?: CallLatency | null;
 };
 export type CallTotals = { calls: number; minutes: number; days: number; week: number };
 export type Turn = { speaker: 'me' | 'partner'; text: string };
@@ -304,6 +306,8 @@ export async function requestTutoring(body: {
   mode?: 'teachback';
   lesson_date?: string;
   practice_words?: string[];
+  // 이 통화의 응답 속도 측정값. 서버가 같은 요청 안에서 통화 기록에 저장한다.
+  latency?: LatencyResult;
 }): Promise<Tutoring> {
   const res = await fetch('/api/tutor', {
     method: 'POST',
@@ -376,17 +380,4 @@ export async function getCallCulture(stem: string, signal?: AbortSignal): Promis
     bank: Array.isArray(data?.bank) ? data.bank : [],
     attribution: typeof data?.attribution === 'string' ? data.attribution : '',
   };
-}
-
-// 응답 속도 측정 결과를 통화 기록에 붙인다(서버가 <stem>.latency.json으로 저장).
-export async function postCallLatency(
-  stem: string,
-  body: { turns_ms: number[]; first_audio_ms: number | null },
-): Promise<void> {
-  const res = await fetch(`/api/calls/${encodeURIComponent(stem)}/latency`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(await errorMessage(res, '응답 속도를 저장하지 못했어요.'));
 }

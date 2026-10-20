@@ -213,10 +213,16 @@ class LiveKnobsTest(unittest.TestCase):
             "silence_duration_ms": 800,
             "prefix_padding_ms": 150,
         })
-        self.assertEqual(call_bot.chat_vad_overrides("freetalk", env), got)
+        self.assertEqual(call_bot.chat_vad_overrides("freetalk", env), got)  # 환경 변수는 두 채팅 모드 모두에 적용
         self.assertEqual(call_bot.chat_vad_overrides("mission", env), {})
         self.assertEqual(call_bot.chat_vad_overrides("teachback", env), {})
         self.assertEqual(call_bot.chat_vad_overrides("smalltalk", {}), CHAT_DEFAULT_VAD)
+        self.assertEqual(call_bot.chat_vad_overrides("freetalk", {}), {})  # 새 기본값은 smalltalk만
+
+    def test_prefix_ms_has_upper_bound(self):
+        self.assertEqual(call_bot.chat_vad_overrides("smalltalk", {"LIVE_VAD_CHAT_PREFIX_MS": "2000"})["prefix_padding_ms"], 2000)
+        self.assertEqual(call_bot.chat_vad_overrides("smalltalk", {"LIVE_VAD_CHAT_PREFIX_MS": "2001"}), CHAT_DEFAULT_VAD)
+        self.assertEqual(call_bot.chat_vad_overrides("smalltalk", {"LIVE_VAD_CHAT_PREFIX_MS": "999999"}), CHAT_DEFAULT_VAD)
 
     def test_invalid_vad_values_are_ignored_per_knob(self):
         env = {"LIVE_VAD_CHAT_END_SENSITIVITY": "MID", "LIVE_VAD_CHAT_SILENCE_MS": "50", "LIVE_VAD_CHAT_PREFIX_MS": "abc"}
@@ -233,11 +239,31 @@ class LiveKnobsTest(unittest.TestCase):
             free, _ = call_bot.turn_settings("freetalk")
             mission, _ = call_bot.turn_settings("mission")
             teachback, _ = call_bot.turn_settings("teachback")
-        for params in (chat, free):
-            self.assertEqual((params.silence_duration_ms, params.end_sensitivity, params.prefix_padding_ms), (500, call_bot.EndSensitivity.END_SENSITIVITY_HIGH, 300))
-        for params in (mission, teachback):
+        self.assertEqual((chat.silence_duration_ms, chat.end_sensitivity, chat.prefix_padding_ms), (500, call_bot.EndSensitivity.END_SENSITIVITY_HIGH, 300))
+        for params in (free, mission, teachback):
             self.assertEqual((params.silence_duration_ms, params.end_sensitivity), (1200, call_bot.EndSensitivity.END_SENSITIVITY_LOW))
         self.assertEqual(call_bot.vad_summary(call_bot.chat_vad_overrides("smalltalk", {})), "end=HIGH silence_ms=500")
+
+    def test_live_config_for_per_mode(self):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("LIVE_") and k not in ("TURN_MODE", "MODEL")}
+        low = call_bot.EndSensitivity.END_SENSITIVITY_LOW
+        high = call_bot.EndSensitivity.END_SENSITIVITY_HIGH
+        with mock.patch.dict(os.environ, env, clear=True):
+            got = {m: call_bot.live_config_for(m) for m in ("smalltalk", "freetalk", "mission", "teachback")}
+            self.assertEqual(got["smalltalk"][1:2] and (got["smalltalk"][1].silence_duration_ms, got["smalltalk"][1].end_sensitivity), (500, high))
+            self.assertEqual(got["smalltalk"][3], "end=HIGH silence_ms=500")
+            for mode in ("freetalk", "mission", "teachback"):
+                model, vad, user_params, meta = got[mode]
+                self.assertEqual((vad.silence_duration_ms, vad.end_sensitivity), (1200, low), mode)
+                self.assertIsNone(meta, mode)
+                self.assertIsNone(user_params)
+            for mode in got:
+                self.assertEqual(got[mode][0], call_bot.DEFAULT_LIVE_MODEL)
+        with mock.patch.dict(os.environ, {**env, "LIVE_VAD_CHAT_SILENCE_MS": "800"}, clear=True):
+            model, vad, _, meta = call_bot.live_config_for("freetalk")
+            self.assertEqual((vad.silence_duration_ms, vad.end_sensitivity, meta), (800, low, "silence_ms=800"))
+            self.assertEqual(call_bot.live_config_for("mission")[1].silence_duration_ms, 1200)
+        self.assertEqual(call_bot.live_config_for("mission", {"LIVE_MODEL": "x"})[0], "x")
 
     def test_smart_turn_mode_skips_gemini_vad_knobs(self):
         env = {"TURN_MODE": "smart", "LIVE_VAD_CHAT_SILENCE_MS": "800"}

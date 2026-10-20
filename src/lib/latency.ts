@@ -1,12 +1,20 @@
 // 응답 속도(학습자가 말을 끝낸 뒤 Ms. Park이 소리를 내기까지)를 브라우저에서 잰다.
 // 서버 내부와 무관하게 마이크 트랙과 원격(봇) 오디오 트랙의 소리 크기(RMS)만 본다.
 
-export type LatencyResult = { turns_ms: number[]; first_audio_ms: number | null };
-export type CallLatency = { median_ms: number | null; p90_ms: number | null; turns: number; first_audio_ms: number | null };
+// cutoffs: 봇이 끼어든 직후 1.5초 안에 학습자가 말을 이어 간 횟수(그 턴은 turns_ms에서 뺀다).
+export type LatencyResult = { turns_ms: number[]; first_audio_ms: number | null; cutoffs: number };
+export type CallLatency = { median_ms: number | null; p90_ms: number | null; turns: number; first_audio_ms: number | null; cutoffs?: number };
 
-const MIC_MIN = 0.02; // 마이크 문턱의 절대 하한
+const MIC_MIN = 0.008; // 마이크 문턱의 절대 하한(작은 목소리도 잡는다)
 const BOT_MIN = 0.01; // 봇 소리 문턱의 절대 하한
-const FLOOR_FACTOR = 3; // 문턱 = max(하한, 배경 소음 * 3)
+const MIC_FACTOR = 4; // 마이크 문턱 = max(하한, 배경 소음 * 4)
+const BOT_FACTOR = 3; // 봇 문턱 = max(하한, 배경 소음 * 3)
+const FLOOR_CAP = 0.05; // 배경 소음 추정의 상한
+const SPEAK_MAX_MS = 5000; // 이보다 오래 계속 "발화 중"이면 소음이 올라간 것으로 보고 초기화
+const CUT_WINDOW_MS = 1500; // 봇 시작 뒤 이 시간 안에 학습자가 다시 말하면 끊김
+const CUT_FACTOR = 2; // 끊김 감시 문턱 = 봇 시작 때 마이크 문턱 * 2
+const GAP_MS = 100; // 샘플 간격이 이보다 크면 흐름이 끊긴 것으로 본다
+const FIRST_AUDIO_MAX_MS = 20000; // 서버가 받는 첫소리 상한
 const SPEECH_MS = 250; // 이만큼 이어서 문턱을 넘으면 학습자 발화
 const DIP_MS = 60; // 이보다 짧게 끊기는 틈은 같은 발화로 본다
 const END_MS = 200; // 이만큼 문턱 아래면 발화 끝(기록 시각은 떨어진 순간)
@@ -31,6 +39,15 @@ export class TurnDetector {
   private botRunStart = 0;
   private botOn = false;
   private botLastLoud = 0;
+  private lastT: number | null = null;
+  private speakingSince = 0;
+  private settling = false; // 소음이 올라가 초기화한 뒤 바닥이 따라 올라가는 중
+  private cutUntil = 0;
+  private cutThr = 0;
+  private cutSince: number | null = null;
+  private cutLastAbove = 0;
+  private turnAtOnset = false;
+  cutoffs = 0;
 
   private static floor(prev: number, v: number): number {
     return prev === 0 ? v : prev * 0.97 + v * 0.03;
@@ -38,7 +55,9 @@ export class TurnDetector {
 
   /** 20ms마다 (시각 ms, 마이크 RMS, 봇 RMS)를 넣는다. */
   push(t: number, mic: number, bot: number): void {
-    const botThr = Math.max(BOT_MIN, this.botFloor * FLOOR_FACTOR);
+    if (this.lastT !== null && t - this.lastT > GAP_MS) this.interrupt();
+    this.lastT = t;
+    const botThr = Math.max(BOT_MIN, this.botFloor * BOT_FACTOR);
     if (bot > botThr) {
       if (this.botRun === 0) this.botRunStart = t;
       this.botRun += 1;
@@ -53,17 +72,35 @@ export class TurnDetector {
       if (!this.botOn) this.botFloor = TurnDetector.floor(this.botFloor, bot);
     }
 
-    // 에코 방지: 봇이 말하는 동안 마이크 에너지는 무시한다.
+    this.watchCutoff(t, mic);
+
+    // 에코 방지: 봇이 말하는 동안 마이크 에너지는 (끊김 감시를 빼고) 무시한다.
     if (this.botOn) {
       this.aboveSince = null;
       return;
     }
 
-    const micThr = Math.max(MIC_MIN, this.micFloor * FLOOR_FACTOR);
+    const micThr = Math.max(MIC_MIN, this.micFloor * MIC_FACTOR);
     const above = mic > micThr;
-    if (!above && this.phase !== 'speaking') this.micFloor = TurnDetector.floor(this.micFloor, mic);
+    if (!above && this.phase !== 'speaking') this.micFloor = Math.min(FLOOR_CAP, TurnDetector.floor(this.micFloor, mic));
+    if (this.settling) {
+      // 소음이 오른 상태: 바닥을 천천히 따라 올리고, 문턱 아래로 내려올 때까지 발화로 보지 않는다.
+      if (!above) this.settling = false;
+      else {
+        this.micFloor = Math.min(FLOOR_CAP, TurnDetector.floor(this.micFloor, Math.min(mic, FLOOR_CAP)));
+        this.aboveSince = null;
+        return;
+      }
+    }
 
     if (this.phase === 'speaking') {
+      if (above && t - this.speakingSince > SPEAK_MAX_MS) {
+        this.phase = 'idle';
+        this.pendingEnd = null;
+        this.aboveSince = null;
+        this.settling = true;
+        return;
+      }
       if (above) {
         this.pendingEnd = null;
       } else {
@@ -84,6 +121,7 @@ export class TurnDetector {
       if (this.aboveSince === null) this.aboveSince = t;
       if (t - this.aboveSince >= SPEECH_MS) {
         this.phase = 'speaking';
+        this.speakingSince = t;
         this.pendingEnd = null;
         this.aboveSince = null;
       }
@@ -93,15 +131,43 @@ export class TurnDetector {
     if (this.phase === 'waiting' && t - this.learnerEnd > MAX_MS) this.phase = 'idle';
   }
 
+  // 봇 시작 뒤 1.5초 동안은 에코 규칙을 무시하고 더 높은 문턱으로 학습자가 말을 잇는지 본다.
+  private watchCutoff(t: number, mic: number): void {
+    if (t > this.cutUntil) return;
+    if (mic > this.cutThr) {
+      this.cutLastAbove = t;
+      if (this.cutSince === null) this.cutSince = t;
+      if (t - this.cutSince >= SPEECH_MS) {
+        this.cutoffs += 1;
+        if (this.turnAtOnset) this.turns.pop();
+        this.cutUntil = 0;
+        this.cutSince = null;
+        this.turnAtOnset = false;
+      }
+    } else if (this.cutSince !== null && t - this.cutLastAbove > DIP_MS) {
+      this.cutSince = null;
+    }
+  }
+
   private onBotOnset(t: number): void {
     if (this.firstBotT === null) this.firstBotT = t;
+    this.turnAtOnset = false;
+    this.cutThr = Math.max(MIC_MIN, this.micFloor * MIC_FACTOR) * CUT_FACTOR;
+    this.cutUntil = t + CUT_WINDOW_MS;
+    this.cutSince = null;
     if (this.phase === 'waiting') {
       const lat = t - this.learnerEnd;
-      if (lat >= 0 && lat <= MAX_MS) this.turns.push(Math.round(lat));
+      if (lat >= 0 && lat <= MAX_MS) {
+        this.turns.push(Math.round(lat));
+        this.turnAtOnset = true;
+      }
     } else if (this.phase === 'speaking' && this.pendingEnd !== null) {
       // 발화가 막 끝난 뒤(200ms 확인 구간) 시작한 봇 소리: 떨어진 순간 기준
       const lat = t - this.pendingEnd;
-      if (lat >= 0 && lat <= MAX_MS) this.turns.push(Math.round(lat));
+      if (lat >= 0 && lat <= MAX_MS) {
+        this.turns.push(Math.round(lat));
+        this.turnAtOnset = true;
+      }
     }
     // 학습자가 말하는 중에 봇이 시작했으면 겹침이라 버린다.
     this.phase = 'idle';
@@ -116,7 +182,17 @@ export class TurnDetector {
     this.aboveSince = null;
     this.botRun = 0;
     this.botOn = false;
+    this.cutUntil = 0;
+    this.cutSince = null;
+    this.turnAtOnset = false;
+    this.settling = false;
   }
+}
+
+function firstAudio(first: number | null, origin: number): number | null {
+  if (first === null) return null;
+  const ms = Math.max(0, Math.round(first - origin));
+  return ms > FIRST_AUDIO_MAX_MS ? null : ms; // 서버 상한을 넘으면 보내지 않는다(권한 창 대기 등)
 }
 
 export type Sample = { t: number; mic: number; bot: number };
@@ -125,7 +201,7 @@ export type Sample = { t: number; mic: number; bot: number };
 export function detectTurns(samples: Sample[], origin = 0): LatencyResult {
   const d = new TurnDetector();
   for (const s of samples) d.push(s.t, s.mic, s.bot);
-  return { turns_ms: [...d.turns], first_audio_ms: d.firstBotT === null ? null : Math.max(0, Math.round(d.firstBotT - origin)) };
+  return { turns_ms: [...d.turns], first_audio_ms: firstAudio(d.firstBotT, origin), cutoffs: d.cutoffs };
 }
 
 function rms(analyser: AnalyserNode, buf: Float32Array<ArrayBuffer>): number {
@@ -194,8 +270,7 @@ export class LatencyMeter {
     this.timer = null;
     void this.ctx?.close().catch(() => undefined);
     this.ctx = null;
-    const first = this.detector.firstBotT;
-    return { turns_ms: [...this.detector.turns], first_audio_ms: first === null ? null : Math.max(0, Math.round(first - this.origin)) };
+    return { turns_ms: [...this.detector.turns], first_audio_ms: firstAudio(this.detector.firstBotT, this.origin), cutoffs: this.detector.cutoffs };
   }
 }
 
@@ -204,7 +279,7 @@ export class LatencyMeter {
 let pending: LatencyResult | null = null;
 
 export function stashLatency(result: LatencyResult): void {
-  pending = result.turns_ms.length || result.first_audio_ms !== null ? result : null;
+  pending = result.turns_ms.length || result.first_audio_ms !== null || result.cutoffs ? result : null;
 }
 
 export function takePendingLatency(): LatencyResult | null {
@@ -225,6 +300,7 @@ export function summarizeLatency(result: LatencyResult): CallLatency {
     p90_ms: n ? sorted[Math.ceil(0.9 * n) - 1] : null,
     turns: n,
     first_audio_ms: result.first_audio_ms,
+    cutoffs: result.cutoffs,
   };
 }
 
@@ -242,7 +318,9 @@ export function latencyText(latency: CallLatency | null | undefined): string | n
   }
   const text = parts.length ? `응답 속도: ${parts[0]}` : '';
   const first = latency.first_audio_ms != null ? `첫소리 ${seconds(latency.first_audio_ms)}초` : '';
-  if (text && first) return `${text} · ${first}`;
-  if (text) return text;
-  return first ? `응답 속도: ${first}` : null;
+  const base = text && first ? `${text} · ${first}` : text || (first ? `응답 속도: ${first}` : '');
+  const cut = latency.cutoffs && latency.cutoffs > 0 ? `끊김 ${latency.cutoffs}번` : '';
+  if (base && cut) return `${base} · ${cut}`;
+  if (base) return base;
+  return cut ? `응답 속도: ${cut}` : null;
 }

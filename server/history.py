@@ -40,6 +40,7 @@ def _valid_stem(stem: Any) -> bool:
 
 LATENCY_MAX_MS = 20000
 LATENCY_MAX_TURNS = 200
+LATENCY_MAX_CUTOFFS = 200
 
 
 def _latency_path(stem: str) -> Path:
@@ -50,6 +51,10 @@ def _latency_ms(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= LATENCY_MAX_MS
 
 
+def _cutoffs_ok(value: Any) -> bool:
+    return value is None or (isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= LATENCY_MAX_CUTOFFS)
+
+
 def read_latency(stem: str) -> Optional[Dict[str, Any]]:
     """클라이언트가 잰 응답 속도 요약(중앙값·p90·턴 수·첫소리). 파일이 없거나 깨졌으면 None."""
     path = _latency_path(stem)
@@ -58,7 +63,13 @@ def read_latency(stem: str) -> Optional[Dict[str, Any]]:
     data = _read_json(path)
     turns = data.get("turns_ms") if data else None
     first = data.get("first_audio_ms") if data else None
-    if not isinstance(turns, list) or not all(_latency_ms(t) for t in turns) or not (first is None or _latency_ms(first)):
+    cutoffs = data.get("cutoffs") if data else None
+    if (
+        not isinstance(turns, list)
+        or not all(_latency_ms(t) for t in turns)
+        or not (first is None or _latency_ms(first))
+        or not _cutoffs_ok(cutoffs)
+    ):
         return None
     if not turns and first is None:
         return None
@@ -66,7 +77,7 @@ def read_latency(stem: str) -> Optional[Dict[str, Any]]:
     n = len(ordered)
     median = round((ordered[(n - 1) // 2] + ordered[n // 2]) / 2) if n else None
     p90 = ordered[math.ceil(0.9 * n) - 1] if n else None
-    return {"median_ms": median, "p90_ms": p90, "turns": n, "first_audio_ms": first}
+    return {"median_ms": median, "p90_ms": p90, "turns": n, "first_audio_ms": first, "cutoffs": cutoffs}
 
 
 def save_latency(stem: str, body: Dict[str, Any]) -> None:
@@ -77,13 +88,18 @@ def save_latency(stem: str, body: Dict[str, Any]) -> None:
     first = body.get("first_audio_ms")
     if not isinstance(turns, list) or len(turns) > LATENCY_MAX_TURNS or not all(_latency_ms(t) for t in turns):
         raise ValueError("turns_ms는 0~20000 정수 200개 이하여야 합니다")
+    if isinstance(first, int) and not isinstance(first, bool) and not 0 <= first <= LATENCY_MAX_MS:
+        first = None  # 권한 창 등으로 길어진 첫소리는 버리되 turns_ms는 저장한다
     if not (first is None or _latency_ms(first)):
         raise ValueError("first_audio_ms는 0~20000 정수여야 합니다")
+    cutoffs = body.get("cutoffs")
+    if not _cutoffs_ok(cutoffs):
+        raise ValueError("cutoffs는 0~200 정수여야 합니다")
     if not (get_transcript_dir() / f"{stem}.md").is_file():
         raise FileNotFoundError("해당 통화 기록이 없습니다")
     path = _latency_path(stem)
     tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps({"turns_ms": turns, "first_audio_ms": first}), encoding="utf-8")
+    tmp.write_text(json.dumps({"turns_ms": turns, "first_audio_ms": first, "cutoffs": cutoffs}), encoding="utf-8")
     tmp.replace(path)
 
 

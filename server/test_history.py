@@ -268,8 +268,8 @@ class CallsHttpTest(HistoryDirs):
         res = self.client.post(f"/api/calls/{stem}/latency", json={"turns_ms": [900, 1600, 700, 1000], "first_audio_ms": 2100})
 
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(json.loads((self.sessions / f"{stem}.latency.json").read_text()), {"turns_ms": [900, 1600, 700, 1000], "first_audio_ms": 2100})
-        expected = {"median_ms": 950, "p90_ms": 1600, "turns": 4, "first_audio_ms": 2100}
+        self.assertEqual(json.loads((self.sessions / f"{stem}.latency.json").read_text()), {"turns_ms": [900, 1600, 700, 1000], "first_audio_ms": 2100, "cutoffs": None})
+        expected = {"median_ms": 950, "p90_ms": 1600, "turns": 4, "first_audio_ms": 2100, "cutoffs": None}
         self.assertEqual(self.client.get("/api/calls").json()["calls"][0]["latency"], expected)
         self.assertEqual(self.client.get(f"/api/calls/{stem}").json()["call"]["latency"], expected)
 
@@ -285,7 +285,11 @@ class CallsHttpTest(HistoryDirs):
             {"turns_ms": [1] * 201},
             {"turns_ms": "x"},
             {},
-            {"turns_ms": [1], "first_audio_ms": 20001},
+            {"turns_ms": [1], "first_audio_ms": "x"},
+            {"turns_ms": [1], "cutoffs": 201},
+            {"turns_ms": [1], "cutoffs": -1},
+            {"turns_ms": [1], "cutoffs": True},
+            {"turns_ms": [1], "cutoffs": 1.5},
         ]
         for body in bad:
             self.assertEqual(self.client.post(url, json=body).status_code, 400, body)
@@ -299,7 +303,32 @@ class CallsHttpTest(HistoryDirs):
         self.add_call(stem, "2026-10-20 09:00")
         self.client.post(f"/api/calls/{stem}/latency", json={"turns_ms": [], "first_audio_ms": 1800})
 
-        self.assertEqual(history.read_latency(stem), {"median_ms": None, "p90_ms": None, "turns": 0, "first_audio_ms": 1800})
+        self.assertEqual(history.read_latency(stem), {"median_ms": None, "p90_ms": None, "turns": 0, "first_audio_ms": 1800, "cutoffs": None})
+
+    def test_out_of_range_first_audio_becomes_null_but_turns_are_saved(self):
+        stem = "2026-10-20-090000"
+        self.add_call(stem, "2026-10-20 09:00")
+        for first in (20001, -5):
+            res = self.client.post(f"/api/calls/{stem}/latency", json={"turns_ms": [900, 1100], "first_audio_ms": first})
+            self.assertEqual(res.status_code, 200, first)
+            self.assertEqual(json.loads((self.sessions / f"{stem}.latency.json").read_text())["first_audio_ms"], None)
+            self.assertEqual(history.read_latency(stem), {"median_ms": 1000, "p90_ms": 1100, "turns": 2, "first_audio_ms": None, "cutoffs": None})
+        self.assertEqual(self.client.post(f"/api/calls/{stem}/latency", json={"turns_ms": [20001], "first_audio_ms": 20001}).status_code, 400)
+
+    def test_cutoffs_are_stored_and_summarised(self):
+        stem = "2026-10-20-090000"
+        self.add_call(stem, "2026-10-20 09:00")
+        for cutoffs in (0, 3, 200):
+            res = self.client.post(f"/api/calls/{stem}/latency", json={"turns_ms": [800], "first_audio_ms": 1500, "cutoffs": cutoffs})
+            self.assertEqual(res.status_code, 200, cutoffs)
+            self.assertEqual(json.loads((self.sessions / f"{stem}.latency.json").read_text())["cutoffs"], cutoffs)
+            self.assertEqual(self.client.get(f"/api/calls/{stem}").json()["call"]["latency"]["cutoffs"], cutoffs)
+
+    def test_old_latency_file_without_cutoffs_still_reads(self):
+        stem = "2026-10-20-090000"
+        self.add_call(stem, "2026-10-20 09:00")
+        (self.sessions / f"{stem}.latency.json").write_text(json.dumps({"turns_ms": [900], "first_audio_ms": 1000}))
+        self.assertEqual(history.read_latency(stem)["cutoffs"], None)
 
     def test_bad_stem_is_400_and_unknown_stem_is_404_not_the_spa_page(self):
         self.assertEqual(self.client.get("/api/calls/not-a-stem").status_code, 400)

@@ -19,7 +19,7 @@ export function FriendMessage({ message, partnerId }: { message?: FriendMessageD
       </div>
       <div lang="en" className="mt-3 rounded-2xl rounded-tl-md border border-line bg-surface p-5 leading-relaxed">
         {message.opening && <p className="text-[17px] font-semibold">{message.opening}</p>}
-        <ul className={`space-y-3 ${message.opening ? 'mt-4' : ''}`}>
+        <ul role="list" className={`space-y-3 ${message.opening ? 'mt-4' : ''}`}>
           {message.phrases.map((p, i) => (
             <li key={i}>
               <span className="block font-semibold break-words">

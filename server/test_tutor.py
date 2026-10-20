@@ -72,6 +72,44 @@ class FriendMessageTest(unittest.TestCase):
         out = tutor.normalize_friend_message({"phrases": [fphrase("cutting board")]})
         self.assertEqual((out["opening"], out["next_time"]), ("", ""))
 
+    TRANSCRIPT = (
+        "# Call\n- partner: priya\n\n"
+        "**Me:** Yesterday I go to the farmers market and buy fresh tomatoes.\n"
+        "**Partner:** Oh nice! You went to the farmers market, that sounds fun.\n"
+    )
+
+    def test_phrase_not_in_transcript_is_dropped(self):
+        raw = fm([fphrase("quantum entanglement is spooky"), fphrase("went to the farmers market"), fphrase("buy fresh tomatoes")])
+        out = tutor.normalize_friend_message(raw, self.TRANSCRIPT)
+        self.assertEqual([p["phrase"] for p in out["phrases"]], ["went to the farmers market", "buy fresh tomatoes"])
+
+    def test_natural_fix_built_from_transcript_words_stays(self):
+        raw = fm([fphrase("I bought fresh tomatoes at the farmers market")])  # bought는 전문에 없지만 나머지 단어가 있다
+        out = tutor.normalize_friend_message(raw, self.TRANSCRIPT)
+        self.assertEqual(len(out["phrases"]), 1)
+
+    def test_all_phrases_invented_gives_none_and_notes_are_not_checked(self):
+        self.assertIsNone(tutor.normalize_friend_message(fm([fphrase("space shuttle launch", "farmers market tomatoes")]), self.TRANSCRIPT))
+
+    def test_header_and_other_lines_do_not_count_as_spoken(self):
+        # "priya"는 머리글에만 있다 -> Me·Partner 줄이 아니므로 근거가 되지 않는다
+        self.assertIsNone(tutor.normalize_friend_message(fm([fphrase("priya partner call")]), self.TRANSCRIPT))
+
+    def test_normalize_tutor_json_and_analyze_pass_the_transcript(self):
+        raw = {"corrections": [{"said": "a", "better": "b", "why": "c"}], "friend_message": fm([fphrase("space shuttle launch"), fphrase("farmers market")])}
+        out = tutor.normalize_tutor_json(raw, self.TRANSCRIPT)
+        self.assertEqual([p["phrase"] for p in out["friend_message"]["phrases"]], ["farmers market"])
+        got = tutor.analyze_transcript(self.TRANSCRIPT, generate_text=lambda _p: json.dumps(raw))
+        self.assertEqual([p["phrase"] for p in got["friend_message"]["phrases"]], ["farmers market"])
+
+    def test_profile_update_prompt_excludes_friend_message(self):
+        tutoring = {"corrections": [{"said": "x", "better": "y", "why": "z"}], "friend_message": fm([fphrase("zebra crossing")])}
+        prompt = lp.build_update_prompt({"level": "B1"}, tutoring, "2026-10-20")
+        self.assertNotIn("friend_message", prompt)
+        self.assertNotIn("zebra crossing", prompt)
+        self.assertIn('"corrections"', prompt)
+        self.assertIn("friend_message", tutoring)  # 원본 dict는 그대로
+
     def test_friend_message_alone_does_not_make_result_non_empty(self):
         out = tutor.normalize_tutor_json({"friend_message": fm([fphrase("cutting board")])})
         self.assertTrue(tutor.is_empty_result(out))
@@ -100,7 +138,7 @@ class FriendMessageTest(unittest.TestCase):
 
     def test_analyze_transcript_returns_friend_message(self):
         reply = json.dumps({"good": [{"said": "a", "note": "b"}], "friend_message": fm([fphrase("cutting board")])})
-        out = tutor.analyze_transcript("**Me:** hi", generate_text=lambda _p: reply)
+        out = tutor.analyze_transcript("**Me:** I bought a cutting board", generate_text=lambda _p: reply)
         self.assertEqual(out["friend_message"]["phrases"][0]["phrase"], "cutting board")
         reply_without = json.dumps({"good": [{"said": "a", "note": "b"}]})
         self.assertIsNone(tutor.analyze_transcript("**Me:** hi", generate_text=lambda _p: reply_without)["friend_message"])

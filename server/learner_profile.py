@@ -388,7 +388,7 @@ def build_update_prompt(card: Dict[str, Any], tutoring: Dict[str, Any], today: s
         "CURRENT CARD:\n"
         f"{json.dumps(card, ensure_ascii=False, indent=2)}\n\n"
         "NEW CALL TUTORING (analysis of the call that just ended):\n"
-        f"{json.dumps(tutoring, ensure_ascii=False, indent=2)}\n"
+        f"{json.dumps({k: v for k, v in tutoring.items() if k != 'friend_message'}, ensure_ascii=False, indent=2)}\n"
     )
 
 

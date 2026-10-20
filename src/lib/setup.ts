@@ -13,6 +13,7 @@ import {
   type Retry,
   type SeniorMode,
 } from './instructions';
+import type { LatencyResult } from './latency';
 import { isPark, partnerById } from './partners';
 
 // partner는 대화 상대 id다. 없으면 Ms. Park. Teach-back은 언제나 Ms. Park이다.
@@ -21,8 +22,6 @@ export type CallSetup =
   | { kind: 'freetalk'; topic: string; retry?: Retry | null; partner?: string; chip?: string }
   | { kind: 'smalltalk'; retry?: Retry | null; partner?: string; chip?: string }
   | { kind: 'teachback'; lessonDate: string; dayTitle?: string; sections: LessonSection[]; seniorMode: SeniorMode; retry?: Retry | null };
-
-import type { LatencyResult } from './latency';
 
 export type FinishedCall = {
   setup: CallSetup;
@@ -33,7 +32,7 @@ export type FinishedCall = {
   result: MissionResult | null;
   endReason: EndReason | null;
   practiceWords: string[];
-  /** 이 통화의 응답 속도 측정값. Summary가 서버로 보낸 뒤에는 다시 쓰지 않는다. */
+  /** 이 통화의 응답 속도 측정값. Summary가 튜터링 요청에 실어 서버로 보낸다. */
   latency?: LatencyResult | null;
 };
 

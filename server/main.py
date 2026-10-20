@@ -19,7 +19,7 @@ import logging
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import BackgroundTasks, FastAPI, Request, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -239,6 +239,20 @@ async def lesson_endpoint(request: Request, date: Optional[str] = None):
     return JSONResponse(data)
 
 
+async def _save_request_latency(stem: str, latency: Any) -> None:
+    """/api/tutor 본문에 실린 응답 속도를 저장한다. 없거나 형식이 틀려도 튜터 요청은 실패시키지 않는다."""
+    if latency is None:
+        return
+    from server.history import save_latency
+
+    try:
+        if not isinstance(latency, dict):
+            raise ValueError("latency는 객체여야 합니다")
+        await asyncio.to_thread(save_latency, stem, latency)
+    except (ValueError, FileNotFoundError) as e:
+        logger.warning(f"latency not saved for {stem}: {e}")
+
+
 @app.post("/api/tutor")
 async def tutor_endpoint(request: Request):
     """방금 저장된 통화 전문을 분석해 튜터링 JSON을 돌려준다.
@@ -272,6 +286,8 @@ async def tutor_endpoint(request: Request):
 
     try:
         path = await asyncio.to_thread(_wait_and_resolve_transcript, filename, started_at)
+        # 전문 경로(stem)가 정해지면 분석 결과와 상관없이 응답 속도를 먼저 저장한다(분석 중 화면을 떠나도 남는다).
+        await _save_request_latency(path.stem, body.get("latency"))
 
         if mode == "teachback":
             # 숨은 노트(그날 수업 자료)를 불러와 teach-back 분석에 넘긴다.

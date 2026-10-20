@@ -125,6 +125,33 @@ class TutorEndpointWiringTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(body["detail"])
         self.mocks["schedule"].assert_not_called()
 
+    async def test_latency_in_body_is_saved_for_success_and_error_with_stem(self):
+        latency = {"turns_ms": [900], "first_audio_ms": 1500, "cutoffs": 1}
+        with mock.patch("server.history.save_latency") as save:
+            await main.tutor_endpoint(FakeRequest({"latency": latency}))
+            save.assert_called_once_with(TRANSCRIPT.stem, latency)
+        main._TUTOR_CACHE.clear()
+        self.mocks["run"].side_effect = main.TutoringAnalysisError("빈 결과")
+        with mock.patch("server.history.save_latency") as save:
+            res = await main.tutor_endpoint(FakeRequest({"latency": latency}))
+            self.assertEqual(res.status_code, 502)
+            save.assert_called_once_with(TRANSCRIPT.stem, latency)
+
+    async def test_bad_or_failing_latency_never_fails_the_tutor_request(self):
+        for latency, exc in [({"turns_ms": "x"}, ValueError("bad")), ({"turns_ms": []}, FileNotFoundError("none")), ("oops", None), (5, None)]:
+            main._TUTOR_CACHE.clear()
+            with mock.patch("server.history.save_latency", side_effect=exc) as save:
+                res = await main.tutor_endpoint(FakeRequest({"latency": latency}))
+            self.assertEqual(res.status_code, 200, latency)
+            self.assertEqual(json.loads(res.body)["stem"], TRANSCRIPT.stem)
+            if not isinstance(latency, dict):
+                save.assert_not_called()
+
+    async def test_no_latency_in_body_saves_nothing(self):
+        with mock.patch("server.history.save_latency") as save:
+            await main.tutor_endpoint(FakeRequest({}))
+        save.assert_not_called()
+
     async def test_error_before_path_known_has_no_stem(self):
         self.mocks["resolve"].side_effect = FileNotFoundError("저장된 통화 기록이 없습니다")
         with self.assertRaises(main.HTTPException) as ctx:
