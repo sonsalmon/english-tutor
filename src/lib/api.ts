@@ -40,10 +40,26 @@ export type CallSummary = {
   completed: boolean;
   has_tutoring: boolean;
   kind: 'teachback' | 'smalltalk' | 'call';
+  voice?: string | null;
   cost?: Cost | null;
 };
 export type CallTotals = { calls: number; minutes: number; days: number; week: number };
-export type CallDetail = { call: CallSummary; tutoring: Tutoring | null };
+export type Turn = { speaker: 'me' | 'partner'; text: string };
+export type CallDetail = { call: CallSummary; tutoring: Tutoring | null; transcript: Turn[]; verbatim: string | null };
+
+export type Clip = {
+  id: string;
+  title: string;
+  channel: string;
+  thumbnail: string;
+  published?: string;
+  start?: number;
+  text?: string;
+  phrase?: string;
+  source?: 'db' | 'search';
+};
+export type ClipStatus = 'ok' | 'no_key' | 'no_query' | 'error';
+export type ClipResult = { query: string; clips: Clip[]; status: ClipStatus };
 
 export function formatUsd(n: number): string {
   return `$${n.toFixed(3)}`;
@@ -206,5 +222,34 @@ export async function getCall(stem: string, signal?: AbortSignal): Promise<CallD
   const res = await fetch(`/api/calls/${encodeURIComponent(stem)}`, { signal });
   if (!res.ok) throw new Error(await errorMessage(res, '통화 기록을 불러오지 못했어요.'));
   const data = await res.json();
-  return { call: data.call, tutoring: data.tutoring ? toTutoring(data.tutoring) : null };
+  return {
+    call: data.call,
+    tutoring: data.tutoring ? toTutoring(data.tutoring) : null,
+    transcript: Array.isArray(data.transcript) ? data.transcript : [],
+    verbatim: typeof data.verbatim === 'string' && data.verbatim.trim() ? data.verbatim : null,
+  };
+}
+
+export async function getCallClips(stem: string, signal?: AbortSignal): Promise<ClipResult> {
+  const res = await fetch(`/api/calls/${encodeURIComponent(stem)}/clips`, { signal });
+  if (!res.ok) throw new Error(await errorMessage(res, '관련 영상을 불러오지 못했어요.'));
+  const data = await res.json();
+  const status: ClipStatus = ['ok', 'no_key', 'no_query'].includes(data?.status) ? data.status : 'error';
+  return {
+    query: typeof data?.query === 'string' ? data.query : '',
+    clips: Array.isArray(data?.clips) ? data.clips : [],
+    status,
+  };
+}
+
+// 방금 끝난 통화의 stem. /api/tutor 응답에는 stem이 없어서, 튜터링이 끝난 뒤 통화 목록에서
+// startedAt 이후에 저장된 가장 최근 통화를 찾는다. 시계·시간대가 어긋나 못 찾으면 null.
+export async function findFinishedStem(startedAt: number, signal?: AbortSignal): Promise<string | null> {
+  const { calls } = await getCalls(5, signal);
+  const latest = calls[0];
+  const m = latest?.stem.match(/^(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})(\d{2})$/);
+  if (!m) return null;
+  const [y, mo, d, h, mi, s] = m.slice(1).map(Number);
+  const savedAt = new Date(y, mo - 1, d, h, mi, s).getTime();
+  return savedAt >= startedAt - 60_000 ? latest.stem : null;
 }

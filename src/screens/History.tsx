@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { List, RowLink, Screen, TopBar, useWide } from '../components/ui';
+import { ClipList } from '../components/ClipList';
 import { CostLine, TutoringBlocks } from '../components/TutoringBlocks';
+import { ReplayButton, TranscriptView } from '../components/TranscriptView';
 import { WordText } from '../components/WordText';
 import { formatUsdShort, getCall, getCalls, type CallDetail, type CallSummary, type CallTotals } from '../lib/api';
 import { go } from '../lib/router';
@@ -168,6 +170,9 @@ function CallDetailBody({ stem }: { stem: string }) {
           ) : (
             <p className="mt-8 leading-relaxed text-ink-soft">이 통화는 저장된 요약이 없어요.</p>
           )}
+          <TranscriptView turns={data.transcript} verbatim={data.verbatim} voice={data.call.voice} />
+          <ClipList stem={stem} />
+          <ReplayButton stem={stem} />
         </>
       )}
     </>

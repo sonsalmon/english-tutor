@@ -8,6 +8,7 @@ import { CallHistory } from './screens/History';
 import { Home } from './screens/Home';
 import { Missions } from './screens/Missions';
 import { Pron } from './screens/Pron';
+import { Replay } from './screens/Replay';
 import { Summary } from './screens/Summary';
 import { TeachbackPrep } from './screens/TeachbackPrep';
 import { Topic } from './screens/Topic';
@@ -119,6 +120,8 @@ export function App() {
         return finished ? <Summary call={finished} onRetry={retry} /> : null;
       case 'history':
         return <CallHistory stem={param} />;
+      case 'replay':
+        return <Replay stem={param} />;
       default:
         return <Home profile={profile} totals={totals} onQuickCall={() => startCall({ kind: 'freetalk', topic: '' })} onSmallTalk={startSmallTalk} onRetryProfile={retryProfile} />;
     }

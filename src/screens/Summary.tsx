@@ -1,9 +1,11 @@
 import { Check, LoaderCircle, Phone, RotateCcw } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
+import { ClipList } from '../components/ClipList';
 import { CostLine, TutoringBlocks } from '../components/TutoringBlocks';
+import { ReplayButton, TranscriptView } from '../components/TranscriptView';
 import { WordText } from '../components/WordText';
 import { CallButton, QuietButton, Screen } from '../components/ui';
-import { requestTutoring, type Tutoring } from '../lib/api';
+import { findFinishedStem, getCall, requestTutoring, type CallDetail, type Tutoring } from '../lib/api';
 import type { Retry } from '../lib/instructions';
 import { go } from '../lib/router';
 import { callTitle, type FinishedCall } from '../lib/setup';
@@ -54,6 +56,38 @@ function ReadingWords({ words, used, saved }: { words: string[]; used: string[];
         </p>
       )}
     </section>
+  );
+}
+
+// 튜터링이 끝난 통화의 전문·영상·다시 연습. stem을 못 찾으면 아무것도 보이지 않는다.
+function CallExtras({ startedAt }: { startedAt: number }) {
+  const [stem, setStem] = useState<string | null>(null);
+  const [detail, setDetail] = useState<CallDetail | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setStem(null);
+    setDetail(null);
+    findFinishedStem(startedAt, controller.signal)
+      .then(async (found) => {
+        if (!found) return;
+        const loaded = await getCall(found, controller.signal);
+        setStem(found);
+        setDetail(loaded);
+      })
+      .catch(() => {
+        // 못 찾으면 이 구역만 숨긴다. 요약 자체는 그대로 보인다.
+      });
+    return () => controller.abort();
+  }, [startedAt]);
+
+  if (!stem || !detail) return null;
+  return (
+    <>
+      <TranscriptView turns={detail.transcript} verbatim={detail.verbatim} voice={detail.call.voice} />
+      <ClipList stem={stem} />
+      <ReplayButton stem={stem} />
+    </>
   );
 }
 
@@ -153,6 +187,7 @@ export function Summary({ call, onRetry }: { call: FinishedCall; onRetry: (retry
       {tutoring && (
         <ReadingWords words={call.practiceWords} used={tutoring.practice_used ?? []} saved={tutoring.readgloss?.saved ?? 0} />
       )}
+      {tutoring && <CallExtras startedAt={call.startedAt} />}
 
       <div className="mt-auto space-y-3 pt-10 lg:flex lg:space-y-0 lg:gap-3">
         {canRetry && retry && (
