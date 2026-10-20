@@ -1,0 +1,15 @@
+[
+  {"handle": "@theoffice", "genre": "tv"},
+  {"handle": "@friends", "genre": "tv"},
+  {"handle": "@parksandrecreation", "genre": "tv"},
+  {"handle": "@LearnEnglishWithTVSeries", "genre": "tv"},
+  {"handle": "@SpeakEnglishWithVanessa", "genre": "daily"},
+  {"handle": "@RachelsEnglish", "genre": "daily"},
+  {"handle": "@EasyEnglishVideos", "genre": "daily"},
+  {"handle": "@TeamCoco", "genre": "podcast"},
+  {"handle": "@freakonomics", "genre": "podcast"},
+  {"handle": "@hiddenbrain", "genre": "podcast"},
+  {"handle": "@harvardbusinessreview", "genre": "work"},
+  {"handle": "@BusinessEnglishPod", "genre": "work"},
+  {"handle": "@SimonSinek", "genre": "work"}
+]
