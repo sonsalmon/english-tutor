@@ -87,7 +87,7 @@ export function useCall() {
   );
 
   const start = useCallback(
-    async (systemInstruction: string, mode: CallMode) => {
+    async (systemInstruction: string, mode: CallMode, voice = 'Kore') => {
       setStatus('connecting');
       setError(null);
       setLines([]);
@@ -163,7 +163,7 @@ export function useCall() {
         await client.connect({
           webrtcRequestParams: {
             endpoint: '/api/offer',
-            requestData: { system_instruction: systemInstruction, mode, voice: 'Kore' },
+            requestData: { system_instruction: systemInstruction, mode, voice },
           },
         });
       } catch (e) {

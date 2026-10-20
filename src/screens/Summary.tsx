@@ -1,6 +1,6 @@
 import { Check, LoaderCircle, Phone, RotateCcw } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
-import { TutoringBlocks } from '../components/TutoringBlocks';
+import { CostLine, TutoringBlocks } from '../components/TutoringBlocks';
 import { WordText } from '../components/WordText';
 import { CallButton, QuietButton, Screen } from '../components/ui';
 import { requestTutoring, type Tutoring } from '../lib/api';
@@ -99,6 +99,7 @@ export function Summary({ call, onRetry }: { call: FinishedCall; onRetry: (retry
       <p className="mt-1 text-ink-soft">
         <WordText text={callTitle(call.setup)} />, {duration(call.endedAt - call.startedAt - call.pausedMs)}
       </p>
+      {!error && <CostLine cost={tutoring?.cost} pending={!tutoring} className="mt-2" />}
       {call.endReason === 'time_limit' && <p className="mt-2 text-sm text-ink-soft">통화 시간이 다 되어 자동으로 끊었어요.</p>}
       {call.endReason === 'pause_limit' && <p className="mt-2 text-sm text-ink-soft">일시정지가 오래 이어져 통화를 끝냈어요.</p>}
       {call.endReason === 'dropped' && <p className="mt-2 text-sm text-ink-soft">연결이 끊어져 통화를 마쳤어요.</p>}
@@ -143,7 +144,12 @@ export function Summary({ call, onRetry }: { call: FinishedCall; onRetry: (retry
         </div>
       )}
 
-      {tutoring && <TutoringBlocks tutoring={tutoring} isTeachback={isTeachback} />}
+      {tutoring && (
+        <>
+          <h2 className="mt-10 text-[22px] leading-snug font-bold">Ms. Park의 정리</h2>
+          <TutoringBlocks tutoring={tutoring} isTeachback={isTeachback} />
+        </>
+      )}
       {tutoring && (
         <ReadingWords words={call.practiceWords} used={tutoring.practice_used ?? []} saved={tutoring.readgloss?.saved ?? 0} />
       )}

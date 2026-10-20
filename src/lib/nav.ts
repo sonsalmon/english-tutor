@@ -1,4 +1,4 @@
-import { Briefcase, Coffee, GraduationCap, History, House, MessageSquareText, type LucideIcon } from 'lucide-react';
+import { Briefcase, Coffee, GraduationCap, History, House, MessageSquareText, Mic, type LucideIcon } from 'lucide-react';
 import type { Route } from './router';
 
 export type NavItem = { label: string; route: Route; icon: LucideIcon };
@@ -10,5 +10,6 @@ export const NAV_ITEMS: NavItem[] = [
   { label: '상황 역할극', route: 'missions', icon: Briefcase },
   { label: '주제 정해서 대화', route: 'topic', icon: MessageSquareText },
   { label: '가르치며 배우기', route: 'teachback', icon: GraduationCap },
+  { label: '발음 진단', route: 'pron', icon: Mic },
   { label: '통화 기록', route: 'history', icon: History },
 ];

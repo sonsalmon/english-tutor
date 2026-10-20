@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { List, RowLink, Screen, TopBar, useWide } from '../components/ui';
-import { TutoringBlocks } from '../components/TutoringBlocks';
+import { CostLine, TutoringBlocks } from '../components/TutoringBlocks';
 import { WordText } from '../components/WordText';
-import { getCall, getCalls, type CallDetail, type CallSummary, type CallTotals } from '../lib/api';
+import { formatUsdShort, getCall, getCalls, type CallDetail, type CallSummary, type CallTotals } from '../lib/api';
 import { go } from '../lib/router';
 
 type Loaded<T> = { data: T | null; error: string | null };
@@ -66,6 +66,17 @@ function SummaryChip() {
   return <span className="shrink-0 rounded-full bg-paper px-2.5 py-1 text-xs font-semibold">요약 있음</span>;
 }
 
+function RowMeta({ call }: { call: CallSummary }) {
+  const total = call.cost?.total;
+  if (!call.has_tutoring && total == null) return null;
+  return (
+    <span className="flex shrink-0 flex-col items-end gap-1">
+      {call.has_tutoring && <SummaryChip />}
+      {total != null && <span className="text-xs text-ink-soft">예상 {formatUsdShort(total)}</span>}
+    </span>
+  );
+}
+
 type Filter = 'all' | 'study' | 'smalltalk';
 const FILTERS: { id: Filter; label: string }[] = [
   { id: 'all', label: '전체' },
@@ -118,7 +129,7 @@ function CallListBody({ activeStem }: { activeStem: string | null }) {
                     key={call.stem}
                     title={call.mission}
                     desc={`${formatWhen(call.started_at)}, ${formatDuration(call.duration_sec)}`}
-                    trailing={call.has_tutoring ? <SummaryChip /> : undefined}
+                    trailing={<RowMeta call={call} />}
                     active={call.stem === activeStem}
                     onClick={() => go('history', false, call.stem)}
                   />
@@ -150,6 +161,7 @@ function CallDetailBody({ stem }: { stem: string }) {
               {formatWhen(data.call.started_at)}, {formatDuration(data.call.duration_sec)}
               {data.call.completed ? '' : ', 중간에 마쳤어요'}
             </p>
+            <CostLine cost={data.call.cost ?? data.tutoring?.cost} className="mt-1" />
           </header>
           {data.tutoring ? (
             <TutoringBlocks tutoring={data.tutoring} isTeachback={data.call.kind === 'teachback'} />

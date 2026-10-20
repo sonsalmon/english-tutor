@@ -7,6 +7,7 @@ import type { CallSetup, FinishedCall } from './lib/setup';
 import { CallHistory } from './screens/History';
 import { Home } from './screens/Home';
 import { Missions } from './screens/Missions';
+import { Pron } from './screens/Pron';
 import { Summary } from './screens/Summary';
 import { TeachbackPrep } from './screens/TeachbackPrep';
 import { Topic } from './screens/Topic';
@@ -98,6 +99,8 @@ export function App() {
             }
           />
         );
+      case 'pron':
+        return <Pron />;
       case 'call':
         return setup ? (
           <Suspense fallback={null}>
@@ -106,6 +109,7 @@ export function App() {
               setup={setup}
               brief={profile?.brief ?? ''}
               practiceWords={profile?.practice_words ?? []}
+              interests={profile?.interests}
               timeLimit={setup.kind === 'teachback' ? limits.teachback : setup.kind === 'smalltalk' ? limits.smalltalk : limits.call}
               onFinished={onFinished}
             />

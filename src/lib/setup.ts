@@ -12,11 +12,13 @@ import {
   type Retry,
   type SeniorMode,
 } from './instructions';
+import { isPark, partnerById } from './partners';
 
+// partner는 대화 상대 id다. 없으면 Ms. Park. Teach-back은 언제나 Ms. Park이다.
 export type CallSetup =
-  | { kind: 'mission'; mission: Mission; retry?: Retry | null }
-  | { kind: 'freetalk'; topic: string; retry?: Retry | null }
-  | { kind: 'smalltalk'; retry?: Retry | null }
+  | { kind: 'mission'; mission: Mission; retry?: Retry | null; partner?: string }
+  | { kind: 'freetalk'; topic: string; retry?: Retry | null; partner?: string }
+  | { kind: 'smalltalk'; retry?: Retry | null; partner?: string }
   | { kind: 'teachback'; lessonDate: string; dayTitle?: string; sections: LessonSection[]; seniorMode: SeniorMode; retry?: Retry | null };
 
 export type FinishedCall = {
@@ -34,18 +36,26 @@ export function callMode(setup: CallSetup): CallMode {
   return setup.kind;
 }
 
+export function setupPartner(setup: CallSetup) {
+  return setup.kind === 'teachback' ? partnerById(undefined) : partnerById(setup.partner);
+}
+
 export function callTitle(setup: CallSetup): string {
-  if (setup.kind === 'mission') return setup.mission.title;
-  if (setup.kind === 'smalltalk') return SMALLTALK_TITLE;
+  const partner = setupPartner(setup);
+  const withPartner = isPark(partner) ? '' : ` with ${partner.name}`;
+  if (setup.kind === 'mission') return `${setup.mission.title}${withPartner}`;
+  if (setup.kind === 'smalltalk') return `${SMALLTALK_TITLE}${withPartner}`;
   if (setup.kind === 'teachback') return setup.dayTitle || `Teach-back ${setup.lessonDate}`;
+  if (!isPark(partner)) return `${setup.topic ? freeTalkTitle(setup.topic) : '자유 대화'}${withPartner}`;
   return setup.topic ? freeTalkTitle(setup.topic) : 'Ms. Park과 자유 대화';
 }
 
-export function buildInstruction(setup: CallSetup, brief: string, words: PracticeWord[] = []): string {
-  if (setup.kind === 'mission') return missionInstruction(setup.mission, brief, setup.retry, words);
-  if (setup.kind === 'smalltalk') return smallTalkInstruction(brief, words);
+export function buildInstruction(setup: CallSetup, brief: string, words: PracticeWord[] = [], interests: string[] = []): string {
+  const partner = setupPartner(setup);
+  if (setup.kind === 'mission') return missionInstruction(setup.mission, brief, setup.retry, words, partner, interests);
+  if (setup.kind === 'smalltalk') return smallTalkInstruction(brief, words, partner, interests);
   if (setup.kind === 'teachback') return teachbackInstruction(setup.sections, setup.seniorMode, setup.retry, brief);
-  return freeTalkInstruction(setup.topic, brief, setup.retry, words);
+  return freeTalkInstruction(setup.topic, brief, setup.retry, words, partner, interests);
 }
 
 // Teach-back은 수업 내용에 집중하도록 readgloss 단어를 넣지 않는다.

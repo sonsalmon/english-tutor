@@ -1,11 +1,13 @@
 import { Captions, CaptionsOff, Mic, MicOff, Pause, Phone, PhoneOff, Play, Volume2 } from 'lucide-react';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { PartnerPicker } from '../components/PartnerPicker';
 import { TalkingPortrait } from '../components/TalkingPortrait';
-import { QuietButton } from '../components/ui';
+import { QuietButton, useWide } from '../components/ui';
 import { WordText } from '../components/WordText';
 import { serverNow } from '../lib/api';
 import { go } from '../lib/router';
-import type { PracticeWord } from '../lib/instructions';
+import { cleanInterests, type PracticeWord } from '../lib/instructions';
+import { isPark, loadPartnerId, partnerById, PARK_ID, savePartnerId } from '../lib/partners';
 import { buildInstruction, callMode, callTitle, practiceWordsFor, type CallSetup, type FinishedCall } from '../lib/setup';
 import { useCall } from '../lib/useCall';
 
@@ -39,14 +41,23 @@ function RoundButton({ label, onClick, tone = 'plain', children }: {
   );
 }
 
-export function Call({ setup, brief, practiceWords, timeLimit, onFinished }: {
+export function Call({ setup: baseSetup, brief, practiceWords, interests, timeLimit, onFinished }: {
   setup: CallSetup;
   brief: string;
   practiceWords: PracticeWord[];
+  interests?: string[];
   timeLimit: number;
   onFinished: (call: FinishedCall) => void;
 }) {
   const call = useCall();
+  const wide = useWide();
+  const [partnerId, setPartnerId] = useState(() => (baseSetup.kind === 'teachback' ? PARK_ID : baseSetup.partner ?? loadPartnerId()));
+  const partner = partnerById(partnerId);
+  const setup = useMemo<CallSetup>(() => (baseSetup.kind === 'teachback' ? baseSetup : { ...baseSetup, partner: partnerId }), [baseSetup, partnerId]);
+  const choosePartner = (id: string) => {
+    setPartnerId(id);
+    savePartnerId(id);
+  };
   const [captions, setCaptions] = useState(true);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -125,7 +136,7 @@ export function Call({ setup, brief, practiceWords, timeLimit, onFinished }: {
   const dial = () => {
     setStartedAt(serverNow());
     setNow(Date.now());
-    void call.start(buildInstruction(setup, brief, practiceWordsFor(setup, practiceWords)), callMode(setup));
+    void call.start(buildInstruction(setup, brief, practiceWordsFor(setup, practiceWords), cleanInterests(interests)), callMode(setup), partner.voice);
   };
 
   // 남은 시간 = 제한 - (지금 - 시작 - 멈춰 있던 시간 합계). 일시정지 중에는 '지금'을 멈춘 시각으로 고정한다.
@@ -135,6 +146,8 @@ export function Call({ setup, brief, practiceWords, timeLimit, onFinished }: {
     call.resume();
     setNow(Date.now());
   };
+  const showPicker = (call.status === 'ready' || call.status === 'error') && setup.kind !== 'teachback';
+  const speakingLabel = setup.kind === 'teachback' ? '학생이 말하는 중' : isPark(partner) ? 'Ms. Park이 말하는 중' : `${partner.name}님이 말하는 중`;
   const status =
     call.status === 'ready'
       ? '준비되면 통화 버튼을 누르세요'
@@ -147,7 +160,7 @@ export function Call({ setup, brief, practiceWords, timeLimit, onFinished }: {
             : !call.micOn
             ? '마이크가 꺼져 있어요'
             : call.botSpeaking
-              ? setup.kind === 'teachback' ? '학생이 말하는 중' : 'Ms. Park이 말하는 중'
+              ? speakingLabel
               : '듣고 있어요';
 
   return (
@@ -164,8 +177,15 @@ export function Call({ setup, brief, practiceWords, timeLimit, onFinished }: {
       </header>
 
       <section className="flex flex-col items-center pt-6 text-center lg:col-start-1 lg:row-start-2 lg:self-center lg:pt-0">
-        <TalkingPortrait size={call.status === 'live' ? 168 : 200} level={call.botLevel} active={call.botSpeaking} />
-        <h1 className="mt-4 text-2xl font-bold">Ms. Park</h1>
+        <TalkingPortrait
+          size={call.status === 'live' ? 168 : showPicker && !wide ? 140 : 200}
+          level={call.botLevel}
+          active={call.botSpeaking}
+          src={partner.portrait}
+          alt={partner.name}
+          mouth={isPark(partner)}
+        />
+        <h1 className="mt-4 text-2xl font-bold">{partner.name}</h1>
         <p className={`mt-1 min-h-6 ${call.status === 'error' ? 'text-end-press' : 'text-ink-soft'}`} role="status">
           {status}
         </p>
@@ -179,6 +199,13 @@ export function Call({ setup, brief, practiceWords, timeLimit, onFinished }: {
         )}
       </section>
 
+      {showPicker && (
+        <section className="mt-4 min-h-0 flex-1 overflow-y-auto lg:col-start-2 lg:row-span-3 lg:row-start-1 lg:mt-0 lg:flex-none lg:self-center">
+          <PartnerPicker value={partnerId} onChange={choosePartner} />
+        </section>
+      )}
+
+      {!showPicker && (
       <section
         className="mt-4 min-h-0 flex-1 overflow-y-auto lg:col-start-2 lg:row-span-3 lg:row-start-1 lg:mt-0 lg:flex-none lg:rounded-2xl lg:border lg:border-line lg:bg-surface lg:p-8"
         aria-label="실시간 자막"
@@ -193,7 +220,7 @@ export function Call({ setup, brief, practiceWords, timeLimit, onFinished }: {
           <div className="space-y-3 rounded-2xl bg-surface p-4 lg:space-y-4 lg:rounded-none lg:bg-transparent lg:p-0 lg:text-lg lg:leading-relaxed">
             {call.lines.map((line) => (
               <p key={line.id} className={line.who === 'me' ? 'text-right text-ink' : 'text-ink'}>
-                <span className="mr-1.5 text-xs font-semibold text-ink-soft">{line.who === 'me' ? '나' : 'Ms. Park'}</span>
+                <span className="mr-1.5 text-xs font-semibold text-ink-soft">{line.who === 'me' ? '나' : partner.name}</span>
                 <WordText text={line.text} />
               </p>
             ))}
@@ -201,6 +228,7 @@ export function Call({ setup, brief, practiceWords, timeLimit, onFinished }: {
           </div>
         )}
       </section>
+      )}
 
       <footer className="pt-4 lg:col-start-1 lg:row-start-3">
         {call.status === 'ready' || call.status === 'error' ? (

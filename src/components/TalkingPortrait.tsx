@@ -42,13 +42,28 @@ function prefersReducedMotion(): boolean {
   return typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
-export function TalkingPortrait({ size, level = 0, active = false }: { size: number; level?: number; active?: boolean }) {
+// 입 모양 애니메이션은 ms-park.webp 좌표에 맞춰져 있어 mouth가 켜진 Ms. Park만 쓴다. 다른 상대는 말하는 링만 보여 준다.
+export function TalkingPortrait({
+  size,
+  level = 0,
+  active = false,
+  src = '/ms-park.webp',
+  alt = 'Ms. Park',
+  mouth = true,
+}: {
+  size: number;
+  level?: number;
+  active?: boolean;
+  src?: string;
+  alt?: string;
+  mouth?: boolean;
+}) {
   const uid = useId();
   const clipId = `${uid}-mouth-clip`;
   const lipId = `${uid}-lip`;
   const levelRef = useRef(level);
   levelRef.current = level;
-  const reduced = prefersReducedMotion();
+  const reduced = prefersReducedMotion() || !mouth;
 
   const group = useRef<SVGGElement | null>(null);
   const lowerLip = useRef<SVGPathElement | null>(null);
@@ -103,6 +118,22 @@ export function TalkingPortrait({ size, level = 0, active = false }: { size: num
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
   }, [active, reduced]);
+
+  if (!mouth) {
+    const ring = active ? 1.06 + Math.min(level, 1) * 0.14 : 1;
+    return (
+      <div className="relative grid shrink-0 place-items-center" style={{ width: size, height: size }}>
+        <span
+          aria-hidden
+          className="absolute inset-0 rounded-full bg-call/20 transition-[transform,opacity] duration-150 ease-out"
+          style={{ transform: `scale(${ring})`, opacity: active ? 1 : 0 }}
+        />
+        <div className="relative overflow-hidden rounded-full bg-line" style={{ width: size - 8, height: size - 8 }}>
+          <img src={src} alt={alt} width={size} height={size} className="size-full scale-[1.15] object-cover" />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <Portrait size={size} level={level} active={active}>

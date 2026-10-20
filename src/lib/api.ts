@@ -7,6 +7,7 @@ export type LearnerProfile = {
   weak_points: WeakPoint[];
   next_goal: string;
   practice_words: PracticeWord[];
+  interests?: string[];
   load_failed?: boolean;
 };
 export type TimeLimits = { call: number; teachback: number; smalltalk: number };
@@ -17,6 +18,8 @@ export type Lesson = {
   sections: LessonSection[];
   hidden_count?: number;
 };
+// 예상 비용(USD). 모르는 쪽은 null, total은 아는 쪽의 합이다.
+export type Cost = { live: number | null; tutoring: number | null; total: number | null };
 export type Tutoring = {
   corrections: { said: string; better: string; why: string }[];
   good: { said: string; note: string }[];
@@ -26,6 +29,7 @@ export type Tutoring = {
   unanswered?: { question: string; teacher_said: string; cause: string; evidence: string }[];
   practice_used?: string[];
   readgloss?: { saved: number } | null;
+  cost?: Cost | null;
 };
 
 export type CallSummary = {
@@ -36,9 +40,18 @@ export type CallSummary = {
   completed: boolean;
   has_tutoring: boolean;
   kind: 'teachback' | 'smalltalk' | 'call';
+  cost?: Cost | null;
 };
 export type CallTotals = { calls: number; minutes: number; days: number; week: number };
 export type CallDetail = { call: CallSummary; tutoring: Tutoring | null };
+
+export function formatUsd(n: number): string {
+  return `$${n.toFixed(3)}`;
+}
+
+export function formatUsdShort(n: number): string {
+  return `$${n.toFixed(n >= 0.01 ? 2 : 3)}`;
+}
 
 export type WordInfo = { word: string; lemma: string; gloss: string; senses: string[]; pos?: string };
 
@@ -155,6 +168,7 @@ function toTutoring(data: Record<string, unknown>): Tutoring {
     unanswered: list(data.unanswered),
     practice_used: list(data.practice_used),
     readgloss: (data.readgloss as Tutoring['readgloss']) ?? null,
+    cost: (data.cost as Cost | null | undefined) ?? null,
   };
 }
 

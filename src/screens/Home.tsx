@@ -2,7 +2,15 @@ import { Briefcase, Coffee, GraduationCap, History as HistoryIcon, MessageSquare
 import { CallButton, List, Portrait, QuietButton, RowLink, Screen } from '../components/ui';
 import { WordText } from '../components/WordText';
 import type { CallTotals, LearnerProfile } from '../lib/api';
+import { pronSummaryOf, type PronWeak } from '../lib/pron';
 import { go } from '../lib/router';
+
+function weakText(w: PronWeak): string {
+  const parts: string[] = [];
+  if (w.as_other > 0) parts.push(`다르게 들려요 ${w.as_other}/${w.total}`);
+  if (w.unclear > 0) parts.push(`불분명해요 ${w.unclear}/${w.total}`);
+  return parts.join(', ');
+}
 
 export function Home({
   profile,
@@ -18,6 +26,7 @@ export function Home({
   onRetryProfile: () => void;
 }) {
   const focus = profile?.weak_points?.[0];
+  const pron = pronSummaryOf(profile);
   return (
     <Screen>
       <header className="flex h-11 items-center lg:hidden">
@@ -82,6 +91,34 @@ export function Home({
           </p>
         )}
       </section>
+
+      {profile && !profile.load_failed && (
+        <section className="rounded-2xl border border-line bg-surface p-5">
+          <h2 className="text-sm font-semibold text-ink-soft">발음</h2>
+          {pron && pron.weak.length > 0 ? (
+            <>
+              <p className="mt-1 text-[15px] leading-relaxed">{pron.date} 진단에서 다르게 들린 소리예요.</p>
+              <ul className="mt-3 space-y-2">
+                {pron.weak.slice(0, 3).map((w) => (
+                  <li key={w.label} className="flex items-baseline justify-between gap-3">
+                    <span className="font-semibold">
+                      <WordText text={w.label} />
+                    </span>
+                    <span className="text-sm text-ink-soft">{weakText(w)}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : pron ? (
+            <p className="mt-1 leading-relaxed text-ink-soft">{pron.date} 진단에서는 다르게 들린 소리가 없었어요.</p>
+          ) : (
+            <p className="mt-1 leading-relaxed text-ink-soft">내 발음 습관부터 재 봐요. 문장을 읽으면 어떻게 들리는지 알려 줘요. 5분쯤 걸려요.</p>
+          )}
+          <div className="mt-4">
+            <QuietButton onClick={() => go('pron')}>{pron ? '자세히 보기' : '발음 진단하기'}</QuietButton>
+          </div>
+        </section>
+      )}
 
       {profile && profile.practice_words.length > 0 && (
         <section className="rounded-2xl border border-line bg-surface p-5">
