@@ -61,14 +61,39 @@ class TutorEndpointWiringTest(unittest.IsolatedAsyncioTestCase):
         self.mocks["schedule"].assert_not_called()
 
 
+EMPTY_PROFILE = {"brief": "", "updated": None, "weak_points": [], "next_goal": ""}
+
+
 class LearnerProfileEndpointTest(unittest.IsolatedAsyncioTestCase):
     async def test_broken_card_gives_empty_brief(self):
         with mock.patch.object(main, "load_profile", side_effect=main.ProfileError("broken")):
-            self.assertEqual(await main.learner_profile_endpoint(), {"brief": "", "updated": None})
+            self.assertEqual(await main.learner_profile_endpoint(), EMPTY_PROFILE)
 
     async def test_missing_card_gives_empty_brief(self):
         with mock.patch.object(main, "load_profile", return_value=None):
-            self.assertEqual(await main.learner_profile_endpoint(), {"brief": "", "updated": None})
+            self.assertEqual(await main.learner_profile_endpoint(), EMPTY_PROFILE)
+
+    async def test_card_gives_top_three_weak_points_for_home_screen(self):
+        points = [
+            {"pattern": f"p{i}", "count": 1, "last_seen": "2026-10-20", "example": f"e{i}", "misses": 0}
+            for i in range(4)
+        ]
+        card = {
+            "updated": "2026-10-20T09:00:00+09:00",
+            "level": {"cefr": "B1.2", "actfl": "Intermediate High", "source": "t"},
+            "weak_points": points,
+            "fixed_points": [],
+            "phrases": [],
+            "pragmatics": [],
+            "interests": [],
+            "next_goal": "Ask with do.",
+        }
+        with mock.patch.object(main, "load_profile", return_value=card):
+            body = await main.learner_profile_endpoint()
+
+        self.assertEqual(body["weak_points"], [{"pattern": f"p{i}", "example": f"e{i}"} for i in range(3)])
+        self.assertEqual(body["next_goal"], "Ask with do.")
+        self.assertIn("p0", body["brief"])
 
 
 if __name__ == "__main__":

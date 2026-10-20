@@ -1,0 +1,49 @@
+@import 'tailwindcss';
+@import 'pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css';
+
+@theme {
+  --color-paper: #f5f7fa;
+  --color-surface: #ffffff;
+  --color-ink: #14213d;
+  --color-ink-soft: #5b6577;
+  --color-line: #e2e6ec;
+  --color-call: #12a150;
+  --color-call-press: #0e8a44;
+  --color-end: #e5484d;
+  --color-end-press: #c9363b;
+  --color-marker: #ffe066;
+  --font-sans: 'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+}
+
+html,
+body {
+  background: var(--color-paper);
+  color: var(--color-ink);
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  word-break: keep-all;
+}
+
+/* 형광펜: 글자 아래 절반에만 칠해 약점·고친 문장을 표시한다. */
+.mark {
+  background: linear-gradient(transparent 55%, var(--color-marker) 55%);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--color-ink) 45%, transparent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
