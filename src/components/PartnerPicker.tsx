@@ -1,5 +1,5 @@
 import { Check } from 'lucide-react';
-import { isPark, PARTNERS, partnerMeta } from '../lib/partners';
+import { PARTNERS, partnerMeta } from '../lib/partners';
 
 // 폰에서는 옆으로 밀어 고르는 카드 줄, 넓은 화면에서는 2열 격자. 네이티브 라디오라 방향키와 스크린 리더가 그대로 동작한다.
 export function PartnerPicker({ value, onChange }: { value: string; onChange: (id: string) => void }) {
@@ -19,7 +19,7 @@ export function PartnerPicker({ value, onChange }: { value: string; onChange: (i
             />
             <span className="flex h-full cursor-pointer flex-col gap-2 rounded-2xl border border-line bg-surface p-3 peer-checked:border-ink peer-checked:ring-2 peer-checked:ring-ink peer-focus-visible:outline-3 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-ink/45 lg:flex-row lg:items-start lg:gap-3 lg:p-3 lg:[&_.more]:sr-only lg:peer-checked:[&_.more]:not-sr-only">
               <span className="size-16 shrink-0 overflow-hidden rounded-full bg-line lg:size-14">
-                <img src={p.portrait} alt="" width={64} height={64} className={`size-full object-cover ${isPark(p) ? '' : 'scale-[1.15]'}`} />
+                <img src={p.portrait} alt="" width={64} height={64} className="size-full object-cover" />
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block font-bold">{p.name}</span>

@@ -129,7 +129,7 @@ export function TalkingPortrait({
           style={{ transform: `scale(${ring})`, opacity: active ? 1 : 0 }}
         />
         <div className="relative overflow-hidden rounded-full bg-line" style={{ width: size - 8, height: size - 8 }}>
-          <img src={src} alt={alt} width={size} height={size} className="size-full scale-[1.15] object-cover" />
+          <img src={src} alt={alt} width={size} height={size} className="size-full object-cover" />
         </div>
       </div>
     );

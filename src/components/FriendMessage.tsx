@@ -1,5 +1,5 @@
 import type { FriendMessage as FriendMessageData } from '../lib/api';
-import { isPark, partnerById } from '../lib/partners';
+import { partnerById } from '../lib/partners';
 import { WordText } from './WordText';
 
 // 통화가 끝난 뒤 대화 상대가 보내는 짧은 메시지. 이번 통화에서 나온 표현만 담겨 있다.
@@ -11,7 +11,7 @@ export function FriendMessage({ message, partnerId }: { message?: FriendMessageD
     <section className="mt-6" aria-labelledby="friend-message-title">
       <div className="flex items-center gap-3">
         <span className="size-10 shrink-0 overflow-hidden rounded-full bg-line">
-          <img src={partner.portrait} alt="" width={40} height={40} className={`size-full object-cover ${isPark(partner) ? '' : 'scale-[1.15]'}`} />
+          <img src={partner.portrait} alt="" width={40} height={40} className="size-full object-cover" />
         </span>
         <h2 id="friend-message-title" className="text-lg font-bold">
           {partner.name}의 메시지
