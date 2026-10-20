@@ -1,65 +1,18 @@
-import { ExternalLink, LoaderCircle, X } from 'lucide-react';
-import { useEffect, useId, useRef, useState } from 'react';
+import { ExternalLink, X } from 'lucide-react';
+import { useEffect, useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
 
-type YGEvent = { totalResult?: number };
-type YGWidget = { fetch: (query: string, lang: string, accent?: string) => void };
-type YGNamespace = {
-  // 위젯은 요소가 아니라 요소 id 문자열을 받는다(공식 예제 new YG.Widget("widget-1", ...)). 요소를 넘기면 영상이 뜨지 않았다.
-  Widget: new (
-    elementId: string,
-    options: { width?: number; components?: number; events?: Record<string, (e: YGEvent) => void> },
-  ) => YGWidget;
-};
-
-declare global {
-  interface Window {
-    YG?: YGNamespace;
-    onYouglishAPIReady?: () => void;
-  }
+// YouGlish 임베드 페이지를 iframe으로만 띄운다. 공식 widget.js는 이 앱과 같은 출처에서 실행되어
+// 유료 통화(/api/offer)와 통화 기록 API에 닿을 수 있다. iframe 안의 YouGlish 코드는 자기 출처에만 머문다.
+// 이 주소는 widget.js가 만드는 iframe과 같고, 결과가 없으면 YouGlish가 직접 "No result found"를 보여 준다.
+function embedUrl(phrase: string): string {
+  return `https://youglish.com/pronounce/${encodeURIComponent(phrase)}/english/us/emb=1&e_comp=8`;
 }
-
-const WIDGET_SRC = 'https://youglish.com/public/emb/widget.js';
-const COMPONENTS_CAPTION_ONLY = 8;
-const FETCH_TIMEOUT_MS = 15000;
-
-let apiPromise: Promise<YGNamespace> | null = null;
-
-function loadYouGlish(): Promise<YGNamespace> {
-  if (window.YG?.Widget) return Promise.resolve(window.YG);
-  apiPromise ??= new Promise<YGNamespace>((resolve, reject) => {
-    window.onYouglishAPIReady = () => {
-      if (window.YG) resolve(window.YG);
-      else reject(new Error('YG missing'));
-    };
-    const script = document.createElement('script');
-    script.src = WIDGET_SRC;
-    script.async = true;
-    script.onerror = () => {
-      apiPromise = null;
-      script.remove();
-      reject(new Error('widget.js load failed'));
-    };
-    document.head.appendChild(script);
-  });
-  return apiPromise;
-}
-
-type Status = 'loading' | 'ready' | 'empty' | 'error';
-
-const MESSAGES: Record<Exclude<Status, 'ready'>, string> = {
-  loading: '원어민이 이 표현을 말하는 영상을 찾고 있어요.',
-  empty: '이 표현이 들어간 영상을 찾지 못했어요. YouGlish에서 직접 검색해 보세요.',
-  error: '영상을 불러오지 못했어요. YouGlish 사이트에서 열어 보세요.',
-};
 
 export function YouGlishSheet({ phrase, onClose }: { phrase: string; onClose: () => void }) {
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
-  const widgetBox = useRef<HTMLDivElement>(null);
-  const boxId = `yg-${useId().replace(/[^a-zA-Z0-9]/g, '')}`;
-  const [status, setStatus] = useState<Status>('loading');
   const query = phrase.trim();
   const fallbackUrl = `https://youglish.com/pronounce/${encodeURIComponent(query)}/english/us`;
 
@@ -72,44 +25,6 @@ export function YouGlishSheet({ phrase, onClose }: { phrase: string; onClose: ()
     };
   }, []);
 
-  useEffect(() => {
-    const box = widgetBox.current;
-    if (!box) return;
-    let cancelled = false;
-    let timer: number | undefined;
-    setStatus('loading');
-    loadYouGlish()
-      .then((YG) => {
-        if (cancelled) return;
-        const widget = new YG.Widget(boxId, {
-          width: Math.max(240, box.clientWidth),
-          components: COMPONENTS_CAPTION_ONLY,
-          events: {
-            onFetchDone: (e) => {
-              window.clearTimeout(timer);
-              if (!cancelled) setStatus(e.totalResult === 0 ? 'empty' : 'ready');
-            },
-            onError: () => {
-              window.clearTimeout(timer);
-              if (!cancelled) setStatus('error');
-            },
-          },
-        });
-        timer = window.setTimeout(() => {
-          if (!cancelled) setStatus('error');
-        }, FETCH_TIMEOUT_MS);
-        widget.fetch(query, 'english', 'us');
-      })
-      .catch(() => {
-        if (!cancelled) setStatus('error');
-      });
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-      box.replaceChildren();
-    };
-  }, [query, boxId]);
-
   function onKeyDown(e: React.KeyboardEvent) {
     if (e.key === 'Escape') {
       e.stopPropagation();
@@ -117,7 +32,7 @@ export function YouGlishSheet({ phrase, onClose }: { phrase: string; onClose: ()
       return;
     }
     if (e.key !== 'Tab' || !panelRef.current) return;
-    const items = panelRef.current.querySelectorAll<HTMLElement>('button, a[href]');
+    const items = panelRef.current.querySelectorAll<HTMLElement>('button, a[href], iframe');
     if (!items.length) return;
     const first = items[0];
     const last = items[items.length - 1];
@@ -160,17 +75,14 @@ export function YouGlishSheet({ phrase, onClose }: { phrase: string; onClose: ()
           </button>
         </div>
 
-        <div id={boxId} ref={widgetBox} className="mt-4 w-full overflow-hidden rounded-2xl" />
-
-        {status !== 'ready' && (
-          <div
-            className="mt-4 flex items-center gap-3 text-ink-soft"
-            role={status === 'loading' ? 'status' : undefined}
-          >
-            {status === 'loading' && <LoaderCircle size={20} className="shrink-0 animate-spin" aria-hidden />}
-            <p>{MESSAGES[status]}</p>
-          </div>
-        )}
+        <iframe
+          src={embedUrl(query)}
+          title={`원어민이 "${query}"를 말하는 영상`}
+          allow="autoplay; encrypted-media; picture-in-picture"
+          sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+          referrerPolicy="no-referrer"
+          className="mt-4 h-[min(480px,55dvh)] w-full rounded-2xl border border-line bg-paper"
+        />
 
         <a
           href={fallbackUrl}

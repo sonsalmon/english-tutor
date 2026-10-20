@@ -19,7 +19,7 @@ def transcript(started, mission="Ordering coffee", duration="2m 30s", completed=
     )
 
 
-class HistoryTest(unittest.TestCase):
+class HistoryDirs(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         root = Path(self._tmp.name)
@@ -41,6 +41,8 @@ class HistoryTest(unittest.TestCase):
     def add_call(self, stem, started, **kwargs):
         (self.sessions / f"{stem}.md").write_text(transcript(started, **kwargs), encoding="utf-8")
 
+
+class HistoryTest(HistoryDirs):
     def test_list_parses_fields(self):
         self.add_call("2026-10-20-090000", "2026-10-20 09:00", duration="2m 30s", completed="no")
 
@@ -132,6 +134,31 @@ class HistoryTest(unittest.TestCase):
     def test_load_call_unknown_stem(self):
         with self.assertRaises(FileNotFoundError):
             history.load_call("2026-10-20-090000")
+
+
+class CallsHttpTest(HistoryDirs):
+    def setUp(self):
+        super().setUp()
+        from fastapi.testclient import TestClient
+
+        from server import main
+
+        self.client = TestClient(main.app)
+
+    def test_list_and_detail_over_http(self):
+        self.add_call("2026-10-20-090000", "2026-10-20 09:00")
+
+        listing = self.client.get("/api/calls")
+        detail = self.client.get("/api/calls/2026-10-20-090000")
+
+        self.assertEqual(listing.status_code, 200)
+        self.assertEqual(listing.json()["totals"]["calls"], 1)
+        self.assertEqual(detail.status_code, 200)
+        self.assertIsNone(detail.json()["tutoring"])
+
+    def test_bad_stem_is_400_and_unknown_stem_is_404_not_the_spa_page(self):
+        self.assertEqual(self.client.get("/api/calls/not-a-stem").status_code, 400)
+        self.assertEqual(self.client.get("/api/calls/2026-01-01-000000").status_code, 404)
 
 
 if __name__ == "__main__":
