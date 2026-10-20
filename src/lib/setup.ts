@@ -1,3 +1,4 @@
+import type { PartnerMemory } from './api';
 import type { CallMode, EndReason, MissionResult } from './useCall';
 import {
   freeTalkInstruction,
@@ -17,8 +18,8 @@ import { isPark, partnerById } from './partners';
 // partner는 대화 상대 id다. 없으면 Ms. Park. Teach-back은 언제나 Ms. Park이다.
 export type CallSetup =
   | { kind: 'mission'; mission: Mission; retry?: Retry | null; partner?: string }
-  | { kind: 'freetalk'; topic: string; retry?: Retry | null; partner?: string }
-  | { kind: 'smalltalk'; retry?: Retry | null; partner?: string }
+  | { kind: 'freetalk'; topic: string; retry?: Retry | null; partner?: string; chip?: string }
+  | { kind: 'smalltalk'; retry?: Retry | null; partner?: string; chip?: string }
   | { kind: 'teachback'; lessonDate: string; dayTitle?: string; sections: LessonSection[]; seniorMode: SeniorMode; retry?: Retry | null };
 
 export type FinishedCall = {
@@ -50,12 +51,12 @@ export function callTitle(setup: CallSetup): string {
   return setup.topic ? freeTalkTitle(setup.topic) : 'Ms. Park과 자유 대화';
 }
 
-export function buildInstruction(setup: CallSetup, brief: string, words: PracticeWord[] = [], interests: string[] = []): string {
+export function buildInstruction(setup: CallSetup, brief: string, words: PracticeWord[] = [], interests: string[] = [], memory: PartnerMemory | null = null): string {
   const partner = setupPartner(setup);
   if (setup.kind === 'mission') return missionInstruction(setup.mission, brief, setup.retry, words, partner, interests);
-  if (setup.kind === 'smalltalk') return smallTalkInstruction(brief, words, partner, interests);
+  if (setup.kind === 'smalltalk') return smallTalkInstruction(brief, words, partner, interests, memory, setup.chip);
   if (setup.kind === 'teachback') return teachbackInstruction(setup.sections, setup.seniorMode, setup.retry, brief);
-  return freeTalkInstruction(setup.topic, brief, setup.retry, words, partner, interests);
+  return freeTalkInstruction(setup.topic, brief, setup.retry, words, partner, interests, memory, setup.chip);
 }
 
 // Teach-back은 수업 내용에 집중하도록 readgloss 단어를 넣지 않는다.

@@ -1,15 +1,19 @@
 import { Captions, CaptionsOff, Mic, MicOff, Pause, Phone, PhoneOff, Play, Volume2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { FriendMemory, type MemoryState } from '../components/FriendMemory';
 import { PartnerPicker } from '../components/PartnerPicker';
 import { TalkingPortrait } from '../components/TalkingPortrait';
+import { TopicChips, type TopicChip } from '../components/TopicChips';
 import { QuietButton, useWide } from '../components/ui';
 import { WordText } from '../components/WordText';
-import { serverNow } from '../lib/api';
+import { getPartnerMemory, serverNow, type PartnerMemory } from '../lib/api';
 import { go } from '../lib/router';
 import { cleanInterests, type PracticeWord } from '../lib/instructions';
 import { isPark, loadPartnerId, partnerById, PARK_ID, savePartnerId } from '../lib/partners';
 import { buildInstruction, callMode, callTitle, practiceWordsFor, type CallSetup, type FinishedCall } from '../lib/setup';
 import { useCall } from '../lib/useCall';
+
+const NO_CHIP = 'none';
 
 function clock(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
@@ -53,11 +57,47 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, timeLi
   const wide = useWide();
   const [partnerId, setPartnerId] = useState(() => (baseSetup.kind === 'teachback' ? PARK_ID : baseSetup.partner ?? loadPartnerId()));
   const partner = partnerById(partnerId);
-  const setup = useMemo<CallSetup>(() => (baseSetup.kind === 'teachback' ? baseSetup : { ...baseSetup, partner: partnerId }), [baseSetup, partnerId]);
+  const wantsMemory = baseSetup.kind !== 'teachback' && !isPark(partner);
+  const [loaded, setLoaded] = useState<{ id: string; state: MemoryState }>({ id: partnerId, state: { status: 'loading' } });
+  const memoryState: MemoryState = loaded.id === partnerId ? loaded.state : { status: 'loading' };
+  const [chosenChip, setChosenChip] = useState({ partnerId, id: NO_CHIP });
+  const chips = useMemo<TopicChip[]>(() => {
+    if (baseSetup.kind !== 'smalltalk') return [];
+    const threads = wantsMemory && memoryState.status === 'ready' && memoryState.memory ? memoryState.memory.threads : [];
+    return [
+      { id: NO_CHIP, label: '그냥 시작' },
+      ...threads.map((t, i) => ({ id: `thread:${i}`, label: t.ko, value: t.text })),
+      ...cleanInterests(interests).map((text, i) => ({ id: `interest:${i}`, label: text, value: text })),
+    ];
+  }, [baseSetup.kind, wantsMemory, memoryState, interests]);
+  const chip = chips.find((c) => c.id === (chosenChip.partnerId === partnerId ? chosenChip.id : NO_CHIP)) ?? chips[0];
+  const chipValue = chip?.value;
+  const setup = useMemo<CallSetup>(() => {
+    if (baseSetup.kind === 'teachback') return baseSetup;
+    if (baseSetup.kind === 'smalltalk') return { ...baseSetup, partner: partnerId, chip: chipValue };
+    return { ...baseSetup, partner: partnerId };
+  }, [baseSetup, partnerId, chipValue]);
   const choosePartner = (id: string) => {
     setPartnerId(id);
     savePartnerId(id);
   };
+  const showPicker = (call.status === 'ready' || call.status === 'error') && baseSetup.kind !== 'teachback';
+
+  useEffect(() => {
+    if (!showPicker || !wantsMemory) return;
+    const controller = new AbortController();
+    getPartnerMemory(partnerId, controller.signal).then(
+      (memory) => setLoaded({ id: partnerId, state: { status: 'ready', memory } }),
+      (e: unknown) => {
+        if (e instanceof DOMException && e.name === 'AbortError') return;
+        setLoaded({ id: partnerId, state: { status: 'failed' } });
+      },
+    );
+    return () => controller.abort();
+  }, [showPicker, wantsMemory, partnerId]);
+
+  const changeMemory = (id: string, memory: PartnerMemory | null) =>
+    setLoaded((prev) => (prev.id === id ? { id, state: { status: 'ready', memory } } : prev));
   const [captions, setCaptions] = useState(true);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -133,10 +173,30 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, timeLi
     captionsEnd.current?.scrollIntoView({ block: 'end' });
   }, [call.lines]);
 
-  const dial = () => {
-    setStartedAt(serverNow());
-    setNow(Date.now());
-    void call.start(buildInstruction(setup, brief, practiceWordsFor(setup, practiceWords), cleanInterests(interests)), callMode(setup), partner.voice);
+  const dialing = useRef(false);
+  const dial = async () => {
+    if (dialing.current) return;
+    dialing.current = true;
+    try {
+      let memory: PartnerMemory | null = null;
+      if (wantsMemory) {
+        try {
+          memory = await getPartnerMemory(partnerId, AbortSignal.timeout(4000));
+        } catch {
+          memory = null;
+        }
+      }
+      setStartedAt(serverNow());
+      setNow(Date.now());
+      await call.start(
+        buildInstruction(setup, brief, practiceWordsFor(setup, practiceWords), cleanInterests(interests), memory),
+        callMode(setup),
+        partner.voice,
+        wantsMemory ? partnerId : undefined,
+      );
+    } finally {
+      dialing.current = false;
+    }
   };
 
   // 남은 시간 = 제한 - (지금 - 시작 - 멈춰 있던 시간 합계). 일시정지 중에는 '지금'을 멈춘 시각으로 고정한다.
@@ -146,7 +206,6 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, timeLi
     call.resume();
     setNow(Date.now());
   };
-  const showPicker = (call.status === 'ready' || call.status === 'error') && setup.kind !== 'teachback';
   const speakingLabel = setup.kind === 'teachback' ? '학생이 말하는 중' : isPark(partner) ? 'Ms. Park이 말하는 중' : `${partner.name}님이 말하는 중`;
   const status =
     call.status === 'ready'
@@ -202,6 +261,16 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, timeLi
       {showPicker && (
         <section className="mt-4 min-h-0 flex-1 overflow-y-auto lg:col-start-2 lg:row-span-3 lg:row-start-1 lg:mt-0 lg:max-h-full lg:flex-none lg:self-center">
           <PartnerPicker value={partnerId} onChange={choosePartner} />
+          {wantsMemory && (
+            <FriendMemory
+              key={partnerId}
+              partnerId={partnerId}
+              name={partner.name}
+              state={memoryState}
+              onChange={(memory) => changeMemory(partnerId, memory)}
+            />
+          )}
+          {chips.length > 0 && <TopicChips chips={chips} value={chip?.id ?? NO_CHIP} onChange={(id) => setChosenChip({ partnerId, id })} />}
         </section>
       )}
 
@@ -233,7 +302,7 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, timeLi
       <footer className="pt-4 lg:col-start-1 lg:row-start-3">
         {call.status === 'ready' || call.status === 'error' ? (
           <div className="flex flex-col items-center gap-4">
-            <RoundButton label={call.status === 'error' ? '다시 걸기' : '통화'} tone="call" onClick={dial}>
+            <RoundButton label={call.status === 'error' ? '다시 걸기' : '통화'} tone="call" onClick={() => void dial()}>
               <Phone size={30} aria-hidden />
             </RoundButton>
             <QuietButton onClick={() => go('home')}>홈으로</QuietButton>

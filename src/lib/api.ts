@@ -46,6 +46,7 @@ export type CallSummary = {
   has_tutoring: boolean;
   kind: 'teachback' | 'smalltalk' | 'call';
   voice?: string | null;
+  partner?: string | null;
   cost?: Cost | null;
 };
 export type CallTotals = { calls: number; minutes: number; days: number; week: number };
@@ -78,6 +79,16 @@ export function formatUsd(n: number): string {
 export function formatUsdShort(n: number): string {
   return `$${n.toFixed(n >= 0.01 ? 2 : 3)}`;
 }
+
+export type PartnerMemoryFact = { text: string; last_seen: string };
+export type PartnerMemoryThread = { text: string; ko: string; last_seen: string };
+export type PartnerMemory = {
+  partner: string;
+  updated: string;
+  facts: PartnerMemoryFact[];
+  threads: PartnerMemoryThread[];
+};
+export type PartnerMemoryKind = 'facts' | 'threads';
 
 export type WordInfo = { word: string; lemma: string; gloss: string; senses: string[]; pos?: string };
 
@@ -117,6 +128,54 @@ export async function getLearnerProfile(): Promise<LearnerProfile> {
   } catch {
     return { ...EMPTY_PROFILE, load_failed: true };
   }
+}
+
+// 친구가 기억하는 내용. 기억이 없으면 null이다.
+export async function getPartnerMemory(id: string, signal?: AbortSignal): Promise<PartnerMemory | null> {
+  let res: Response;
+  try {
+    res = await fetch(`/api/partners/${encodeURIComponent(id)}/memory`, { signal });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') throw e;
+    throw new Error('친구의 기억을 불러오지 못했어요.');
+  }
+  if (!res.ok) throw new Error(await errorMessage(res, '친구의 기억을 불러오지 못했어요.'));
+  const data = await res.json();
+  if (data?.status !== 'ok' || !data.memory) return null;
+  return {
+    partner: String(data.memory.partner ?? id),
+    updated: String(data.memory.updated ?? ''),
+    facts: Array.isArray(data.memory.facts) ? data.memory.facts : [],
+    threads: Array.isArray(data.memory.threads) ? data.memory.threads : [],
+  };
+}
+
+export async function clearPartnerMemory(id: string): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch(`/api/partners/${encodeURIComponent(id)}/memory`, { method: 'DELETE' });
+  } catch {
+    throw new Error('기억을 지우지 못했어요.');
+  }
+  if (!res.ok) throw new Error(await errorMessage(res, '기억을 지우지 못했어요.'));
+}
+
+// 기억 한 줄을 지우고 남은 기억을 돌려준다.
+export async function forgetPartnerMemoryItem(id: string, kind: PartnerMemoryKind, index: number): Promise<PartnerMemory> {
+  let res: Response;
+  try {
+    res = await fetch(`/api/partners/${encodeURIComponent(id)}/memory/${kind}/${index}`, { method: 'DELETE' });
+  } catch {
+    throw new Error('기억을 지우지 못했어요.');
+  }
+  if (!res.ok) throw new Error(await errorMessage(res, '기억을 지우지 못했어요.'));
+  const data = await res.json();
+  return {
+    partner: String(data?.memory?.partner ?? id),
+    updated: String(data?.memory?.updated ?? ''),
+    facts: Array.isArray(data?.memory?.facts) ? data.memory.facts : [],
+    threads: Array.isArray(data?.memory?.threads) ? data.memory.threads : [],
+  };
 }
 
 export async function getTimeLimits(): Promise<TimeLimits> {

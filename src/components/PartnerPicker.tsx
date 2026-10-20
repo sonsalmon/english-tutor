@@ -17,15 +17,17 @@ export function PartnerPicker({ value, onChange }: { value: string; onChange: (i
               onChange={() => onChange(p.id)}
               className="peer sr-only"
             />
-            <span className="flex h-full cursor-pointer flex-col gap-2 rounded-2xl border border-line bg-surface p-3 peer-checked:border-ink peer-checked:ring-2 peer-checked:ring-ink peer-focus-visible:outline-3 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-ink/45 lg:flex-row lg:items-start lg:gap-3 lg:p-4">
-              <span className="size-16 shrink-0 overflow-hidden rounded-full bg-line">
+            <span className="flex h-full cursor-pointer flex-col gap-2 rounded-2xl border border-line bg-surface p-3 peer-checked:border-ink peer-checked:ring-2 peer-checked:ring-ink peer-focus-visible:outline-3 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-ink/45 lg:flex-row lg:items-start lg:gap-3 lg:p-3 lg:[&_.more]:hidden lg:peer-checked:[&_.more]:block">
+              <span className="size-16 shrink-0 overflow-hidden rounded-full bg-line lg:size-14">
                 <img src={p.portrait} alt="" width={64} height={64} className={`size-full object-cover ${isPark(p) ? '' : 'scale-[1.15]'}`} />
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block font-bold">{p.name}</span>
                 <span className="block text-sm text-ink-soft">{partnerMeta(p)}</span>
-                <span className="mt-1 block text-sm">{p.intro}</span>
-                <span className="mt-1 block text-sm text-ink-soft">말 속도: {p.paceKo}</span>
+                <span className="more">
+                  <span className="mt-1 block text-sm">{p.intro}</span>
+                  <span className="mt-1 block text-sm text-ink-soft">말 속도: {p.paceKo}</span>
+                </span>
               </span>
               {value === p.id && (
                 <span className="absolute top-2 right-2 grid size-6 place-items-center rounded-full bg-ink text-white" aria-hidden>
