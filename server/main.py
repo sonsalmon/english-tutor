@@ -330,7 +330,11 @@ async def offer(raw: Request, background_tasks: BackgroundTasks):
 
 @app.patch("/api/offer")
 async def ice_candidate(request: SmallWebRTCPatchRequest):
-    await _webrtc.handle_patch_request(request)
+    try:
+        await _webrtc.handle_patch_request(request)
+    except (AssertionError, ValueError, IndexError) as e:
+        # 모르는 pc_id는 pipecat이 이미 404를 준다. 형식이 틀린 ICE 후보는 aiortc candidate_from_sdp가 이 예외들을 내서 500이 됐다.
+        raise HTTPException(status_code=400, detail="ICE 후보 형식이 틀렸습니다.") from e
     return {"status": "success"}
 
 
