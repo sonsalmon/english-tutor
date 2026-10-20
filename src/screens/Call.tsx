@@ -1,6 +1,7 @@
 import { Captions, CaptionsOff, Mic, MicOff, Phone, PhoneOff } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Portrait, QuietButton } from '../components/ui';
+import { TalkingPortrait } from '../components/TalkingPortrait';
+import { QuietButton } from '../components/ui';
 import { serverNow } from '../lib/api';
 import { go } from '../lib/router';
 import { buildInstruction, callMode, callTitle, type CallSetup, type FinishedCall } from '../lib/setup';
@@ -100,7 +101,7 @@ export function Call({ setup, brief, timeLimit, onFinished }: {
       </header>
 
       <section className="flex flex-col items-center pt-6 text-center">
-        <Portrait size={call.status === 'live' ? 168 : 200} level={call.botLevel} active={call.botSpeaking} />
+        <TalkingPortrait size={call.status === 'live' ? 168 : 200} level={call.botLevel} active={call.botSpeaking} />
         <h1 className="mt-4 text-2xl font-bold">Ms. Park</h1>
         <p className={`mt-1 min-h-6 ${call.status === 'error' ? 'text-end-press' : 'text-ink-soft'}`} role="status">
           {status}
