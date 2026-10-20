@@ -22,6 +22,12 @@ export type Lesson = {
 export type Cost = { live: number | null; tutoring: number | null; total: number | null };
 // 한국어 표현과 영어 표현의 생각 방식 차이. word=단어를 몰랐음, framing=말하는 틀이 다름.
 export type ThinkingGap = { korean: string; english: string; kind: 'word' | 'framing'; note: string };
+// 통화 뒤 대화 상대가 보내는 메시지. 이번 통화에서 나온 표현만 담긴다.
+export type FriendMessage = {
+  opening: string;
+  phrases: { phrase: string; note: string }[];
+  next_time: string;
+};
 export type Tutoring = {
   corrections: { said: string; better: string; why: string }[];
   good: { said: string; note: string }[];
@@ -33,6 +39,7 @@ export type Tutoring = {
   readgloss?: { saved: number } | null;
   cost?: Cost | null;
   thinking_gaps?: ThinkingGap[];
+  friend_message?: FriendMessage | null;
   // 서버가 이 분석에 쓴 통화 기록의 stem. 옛 응답에는 없다.
   stem?: string | null;
 };
@@ -251,6 +258,17 @@ export async function getLesson(date?: string, signal?: AbortSignal): Promise<Le
   };
 }
 
+function toFriendMessage(v: unknown): FriendMessage | null {
+  if (!v || typeof v !== 'object') return null;
+  const m = v as Record<string, unknown>;
+  const text = (x: unknown) => (typeof x === 'string' ? x : '');
+  const phrases = (Array.isArray(m.phrases) ? m.phrases : [])
+    .filter((p): p is Record<string, unknown> => !!p && typeof p === 'object' && typeof (p as Record<string, unknown>).phrase === 'string')
+    .map((p) => ({ phrase: text(p.phrase), note: text(p.note) }))
+    .filter((p) => p.phrase.trim());
+  return phrases.length ? { opening: text(m.opening), phrases, next_time: text(m.next_time) } : null;
+}
+
 function toTutoring(data: Record<string, unknown>): Tutoring {
   const list = (v: unknown) => (Array.isArray(v) ? v : []);
   return {
@@ -266,6 +284,7 @@ function toTutoring(data: Record<string, unknown>): Tutoring {
     thinking_gaps: list(data.thinking_gaps).filter(
       (g): g is ThinkingGap => !!g && (g.kind === 'word' || g.kind === 'framing') && typeof g.korean === 'string' && typeof g.english === 'string',
     ),
+    friend_message: toFriendMessage(data.friend_message),
     stem: typeof data.stem === 'string' && data.stem ? data.stem : null,
   };
 }
@@ -357,4 +376,17 @@ export async function getCallCulture(stem: string, signal?: AbortSignal): Promis
     bank: Array.isArray(data?.bank) ? data.bank : [],
     attribution: typeof data?.attribution === 'string' ? data.attribution : '',
   };
+}
+
+// 응답 속도 측정 결과를 통화 기록에 붙인다(서버가 <stem>.latency.json으로 저장).
+export async function postCallLatency(
+  stem: string,
+  body: { turns_ms: number[]; first_audio_ms: number | null },
+): Promise<void> {
+  const res = await fetch(`/api/calls/${encodeURIComponent(stem)}/latency`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res, '응답 속도를 저장하지 못했어요.'));
 }

@@ -1,6 +1,7 @@
 import { PipecatClient } from '@pipecat-ai/client-js';
 import { SmallWebRTCTransport } from '@pipecat-ai/small-webrtc-transport';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { LatencyMeter, clearPendingLatency, stashLatency } from './latency';
 
 export type CallMode = 'mission' | 'freetalk' | 'teachback' | 'smalltalk';
 export type CallStatus = 'ready' | 'connecting' | 'live' | 'ended' | 'error';
@@ -39,6 +40,7 @@ export function useCall() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const reasonRef = useRef<EndReason | null>(null);
   const liveRef = useRef(false);
+  const meterRef = useRef<LatencyMeter | null>(null);
   const [liveAt, setLiveAt] = useState<number | null>(null);
   const lineId = useRef(0);
 
@@ -57,6 +59,12 @@ export function useCall() {
   const release = useCallback(() => {
     const client = clientRef.current;
     clientRef.current = null;
+    const meter = meterRef.current;
+    meterRef.current = null;
+    if (meter) {
+      const measured = meter.stop();
+      if (liveRef.current) stashLatency(measured);
+    }
     if (client) void client.disconnect();
     if (audioRef.current) {
       audioRef.current.srcObject = null;
@@ -100,6 +108,9 @@ export function useCall() {
       setAudioBlocked(false);
       reasonRef.current = null;
       liveRef.current = false;
+      clearPendingLatency();
+      meterRef.current?.stop();
+      meterRef.current = new LatencyMeter(performance.now());
 
       if (!audioRef.current) {
         audioRef.current = new Audio();
@@ -115,10 +126,16 @@ export function useCall() {
         callbacks: {
           onBotReady: () => {
             liveRef.current = true;
+            const mic = clientRef.current?.tracks().local.audio;
+            if (mic) meterRef.current?.attachMic(mic);
             setLiveAt(Date.now());
             setStatus('live');
           },
           onTrackStarted: (track, participant) => {
+            if (track.kind === 'audio') {
+              if (participant?.local) meterRef.current?.attachMic(track);
+              else meterRef.current?.attachBot(track);
+            }
             // SmallWebRTCTransport는 원격(Ms. Park) 트랙에 participant를 넘기지 않는다. local이 아니면 원격으로 본다.
             if (track.kind === 'audio' && !participant?.local && audioRef.current) {
               audioRef.current.srcObject = new MediaStream([track]);
@@ -193,6 +210,7 @@ export function useCall() {
     micBeforePauseRef.current = client.isMicEnabled;
     client.enableMic(false);
     if (audioRef.current) audioRef.current.muted = true;
+    meterRef.current?.setPaused(true);
     pausedAtRef.current = Date.now();
     setPausedAt(pausedAtRef.current);
     client.sendClientMessage('pause');
@@ -204,6 +222,7 @@ export function useCall() {
     if (!client || since === null) return;
     client.enableMic(micBeforePauseRef.current);
     if (audioRef.current) audioRef.current.muted = false;
+    meterRef.current?.setPaused(false);
     pausedAtRef.current = null;
     setPausedTotal((total) => total + (Date.now() - since));
     setPausedAt(null);
@@ -222,6 +241,8 @@ export function useCall() {
     () => () => {
       const client = clientRef.current;
       clientRef.current = null;
+      meterRef.current?.stop();
+      meterRef.current = null;
       if (client) void client.disconnect();
     },
     [],

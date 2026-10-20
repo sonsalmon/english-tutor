@@ -1,16 +1,18 @@
 import { Check, LoaderCircle, Phone, RotateCcw } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ClipList } from '../components/ClipList';
 import { CostLine, TutoringBlocks } from '../components/TutoringBlocks';
 import { CultureNotes } from '../components/CultureNotes';
+import { FriendMessage } from '../components/FriendMessage';
 import { ThinkingGaps } from '../components/ThinkingGaps';
 import { ReplayButton, TranscriptView } from '../components/TranscriptView';
 import { WordText } from '../components/WordText';
 import { CallButton, QuietButton, Screen } from '../components/ui';
-import { getCall, requestTutoring, TutoringError, type CallDetail, type Tutoring } from '../lib/api';
+import { getCall, postCallLatency, requestTutoring, TutoringError, type CallDetail, type Tutoring } from '../lib/api';
 import type { Retry } from '../lib/instructions';
+import { latencyText, summarizeLatency, type LatencyResult, type CallLatency } from '../lib/latency';
 import { go } from '../lib/router';
-import { callTitle, type FinishedCall } from '../lib/setup';
+import { callTitle, setupPartner, type FinishedCall } from '../lib/setup';
 
 const LEVELS: Record<number, { name: string; desc: string }> = {
   1: { name: 'Tiro', desc: '도움을 많이 받았어요' },
@@ -91,13 +93,27 @@ function duration(ms: number): string {
   return s >= 60 ? `${Math.floor(s / 60)}분 ${s % 60}초` : `${s}초`;
 }
 
+function reportLatency(stem: string | null, measured: LatencyResult | null | undefined, show: (l: CallLatency) => void) {
+  if (!stem || !measured) return;
+  show(summarizeLatency(measured));
+  void postCallLatency(stem, measured).catch(() => undefined);
+}
+
 export function Summary({ call, onRetry }: { call: FinishedCall; onRetry: (retry: Retry) => void }) {
   const [tutoring, setTutoring] = useState<Tutoring | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [stem, setStem] = useState<string | null>(null);
+  const [latency, setLatency] = useState<CallLatency | null>(null);
+  // 이 통화(call)의 측정값은 한 번만 보낸다. 다시 분석을 요청해도, 다른 통화가 와도 이전 값을 쓰지 않는다.
+  const postedFor = useRef<FinishedCall | null>(null);
   const isTeachback = call.setup.kind === 'teachback';
 
   const load = useCallback(() => {
+    const takeLatency = (stem: string | null) => {
+      if (!stem || postedFor.current === call) return null;
+      postedFor.current = call;
+      return call.latency;
+    };
     setError(null);
     setTutoring(null);
     setStem(null);
@@ -110,9 +126,13 @@ export function Summary({ call, onRetry }: { call: FinishedCall; onRetry: (retry
       .then((t) => {
         setTutoring(t);
         setStem(t.stem ?? null);
+        reportLatency(t.stem ?? null, takeLatency(t.stem ?? null), setLatency);
       })
       .catch((e: unknown) => {
-        if (e instanceof TutoringError) setStem(e.stem);
+        if (e instanceof TutoringError) {
+          setStem(e.stem);
+          reportLatency(e.stem, takeLatency(e.stem), setLatency);
+        }
         setError(e instanceof Error ? e.message : '튜터링 분석에 실패했어요.');
       });
   }, [call]);
@@ -136,6 +156,7 @@ export function Summary({ call, onRetry }: { call: FinishedCall; onRetry: (retry
       <p className="mt-1 text-ink-soft">
         <WordText text={callTitle(call.setup)} />, {duration(call.endedAt - call.startedAt - call.pausedMs)}
       </p>
+      {latencyText(latency) && <p className="mt-1 text-sm text-ink-soft">{latencyText(latency)}</p>}
       {!error && <CostLine cost={tutoring?.cost} pending={!tutoring} className="mt-2" />}
       {call.endReason === 'time_limit' && <p className="mt-2 text-sm text-ink-soft">통화 시간이 다 되어 자동으로 끊었어요.</p>}
       {call.endReason === 'pause_limit' && <p className="mt-2 text-sm text-ink-soft">일시정지가 오래 이어져 통화를 끝냈어요.</p>}
@@ -181,6 +202,7 @@ export function Summary({ call, onRetry }: { call: FinishedCall; onRetry: (retry
         </div>
       )}
 
+      {tutoring && <FriendMessage message={tutoring.friend_message} partnerId={setupPartner(call.setup).id} />}
       {tutoring && (
         <>
           <h2 className="mt-10 text-[22px] leading-snug font-bold">Ms. Park의 정리</h2>

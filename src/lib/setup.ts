@@ -22,6 +22,8 @@ export type CallSetup =
   | { kind: 'smalltalk'; retry?: Retry | null; partner?: string; chip?: string }
   | { kind: 'teachback'; lessonDate: string; dayTitle?: string; sections: LessonSection[]; seniorMode: SeniorMode; retry?: Retry | null };
 
+import type { LatencyResult } from './latency';
+
 export type FinishedCall = {
   setup: CallSetup;
   startedAt: number;
@@ -31,6 +33,8 @@ export type FinishedCall = {
   result: MissionResult | null;
   endReason: EndReason | null;
   practiceWords: string[];
+  /** 이 통화의 응답 속도 측정값. Summary가 서버로 보낸 뒤에는 다시 쓰지 않는다. */
+  latency?: LatencyResult | null;
 };
 
 export function callMode(setup: CallSetup): CallMode {

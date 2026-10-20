@@ -2,11 +2,13 @@ import { useEffect, useState } from 'react';
 import { List, RowLink, Screen, TopBar, useWide } from '../components/ui';
 import { ClipList } from '../components/ClipList';
 import { CultureNotes } from '../components/CultureNotes';
+import { FriendMessage } from '../components/FriendMessage';
 import { ThinkingGaps } from '../components/ThinkingGaps';
 import { CostLine, TutoringBlocks } from '../components/TutoringBlocks';
 import { ReplayButton, TranscriptView } from '../components/TranscriptView';
 import { WordText } from '../components/WordText';
 import { formatUsdShort, getCall, getCalls, type CallDetail, type CallSummary, type CallTotals } from '../lib/api';
+import { latencyText, type CallLatency } from '../lib/latency';
 import { go } from '../lib/router';
 
 type Loaded<T> = { data: T | null; error: string | null };
@@ -165,10 +167,14 @@ function CallDetailBody({ stem }: { stem: string }) {
               {formatWhen(data.call.started_at)}, {formatDuration(data.call.duration_sec)}
               {data.call.completed ? '' : ', 중간에 마쳤어요'}
             </p>
+            {latencyText((data.call as { latency?: CallLatency | null }).latency) && (
+              <p className="mt-1 text-sm text-ink-soft">{latencyText((data.call as { latency?: CallLatency | null }).latency)}</p>
+            )}
             <CostLine cost={data.call.cost ?? data.tutoring?.cost} className="mt-1" />
           </header>
           {data.tutoring ? (
             <>
+              <FriendMessage message={data.tutoring.friend_message} partnerId={data.call.partner} />
               <TutoringBlocks tutoring={data.tutoring} isTeachback={data.call.kind === 'teachback'} />
               <ThinkingGaps gaps={data.tutoring.thinking_gaps} />
             </>

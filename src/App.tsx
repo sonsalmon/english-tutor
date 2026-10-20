@@ -2,6 +2,7 @@ import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { AppShell } from './components/AppShell';
 import { getCalls, getLearnerProfile, getTimeLimits, type CallTotals, type LearnerProfile, type TimeLimits } from './lib/api';
 import type { Retry } from './lib/instructions';
+import { takePendingLatency } from './lib/latency';
 import { go, useRoute, useRouteParam } from './lib/router';
 import type { CallSetup, FinishedCall } from './lib/setup';
 import { CallHistory } from './screens/History';
@@ -75,7 +76,7 @@ export function App() {
   }, []);
 
   const onFinished = useCallback((call: FinishedCall) => {
-    setFinished(call);
+    setFinished({ ...call, latency: takePendingLatency() });
     go('summary', true);
   }, []);
 
