@@ -12,35 +12,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import base64
 import asyncio
-import json
 import os
-import re
 import logging
 import time
-import uuid
+from contextlib import asynccontextmanager
 from typing import Dict, Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, Depends
+from fastapi import BackgroundTasks, FastAPI, Request, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
 from dotenv import load_dotenv
-from server.gemini_live import GeminiLive
-from server.config_utils import get_project_id
-from server.transcript_store import (
-    save_transcript,
-    get_transcript_dir,
-    save_call_audio,
-    transcript_stem,
+from pipecat.transports.smallwebrtc.request_handler import (
+    SmallWebRTCPatchRequest,
+    SmallWebRTCRequest,
+    SmallWebRTCRequestHandler,
 )
+
+from server.call_bot import parse_call_config, run_bot
 from server.lesson import (
     LessonError,
     get_lesson,
     lesson_text,
-    session_time_limit_from_env,
 )
 from server.learner_profile import ProfileError, load_profile, profile_brief, update_profile
 from server.tutor import (
@@ -61,13 +56,18 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-# Configuration
-PROJECT_ID = get_project_id()
-LOCATION = os.getenv("LOCATION", "us-central1")
-MODEL = os.getenv("MODEL", "gemini-live-2.5-flash-native-audio")
 
-# Initialize FastAPI
-app = FastAPI()
+# 통화 연결(WebRTC offer/answer)을 맡는 Pipecat 처리기. 서버가 꺼질 때 열린 연결을 닫는다.
+_webrtc = SmallWebRTCRequestHandler()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    await _webrtc.close()
+
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -85,22 +85,6 @@ if os.path.exists("dist/assets"):
     app.mount("/assets", StaticFiles(directory="dist/assets"), name="assets")
 if os.path.exists("dist/audio-processors"):
     app.mount("/audio-processors", StaticFiles(directory="dist/audio-processors"), name="audio-processors")
-# In-memory storage for valid session tokens.
-# token -> {"created": epoch sec, "limit": 세션 제한 시간(초)}
-valid_tokens: Dict[str, dict] = {}
-TOKEN_EXPIRY_SECONDS = 30
-
-def cleanup_tokens():
-    """Remove expired tokens."""
-    current_time = time.time()
-    expired = [
-        token
-        for token, info in valid_tokens.items()
-        if current_time - info.get("created", 0) > TOKEN_EXPIRY_SECONDS
-    ]
-    for token in expired:
-        del valid_tokens[token]
-
 @app.get("/api/status")
 async def get_status():
     """혼자 쓰는 로컬 앱이라 배포용 설정(reCAPTCHA·Redis)이 없다. 화면 경고를 띄우지 않는다."""
@@ -256,6 +240,29 @@ async def tutor_endpoint(request: Request):
 
     return JSONResponse(data)
 
+@app.post("/api/offer")
+async def offer(request: SmallWebRTCRequest, background_tasks: BackgroundTasks):
+    """브라우저의 WebRTC offer를 받아 answer를 돌려주고, 새 연결이면 통화 봇을 띄운다."""
+    try:
+        config = parse_call_config(request.request_data) if not request.pc_id else None
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    async def on_new_connection(connection):
+        background_tasks.add_task(run_bot, connection, config or parse_call_config(request.request_data))
+
+    answer = await _webrtc.handle_web_request(request=request, webrtc_connection_callback=on_new_connection)
+    if answer is None:
+        raise HTTPException(status_code=500, detail="WebRTC 연결을 만들지 못했습니다.")
+    return answer
+
+
+@app.patch("/api/offer")
+async def ice_candidate(request: SmallWebRTCPatchRequest):
+    await _webrtc.handle_patch_request(request)
+    return {"status": "success"}
+
+
 @app.get("/{full_path:path}")
 async def serve_spa(full_path: str):
     dist_dir = os.path.realpath("dist")
@@ -264,226 +271,6 @@ async def serve_spa(full_path: str):
         return FileResponse(file_path)
 
     return FileResponse("dist/index.html")
-
-@app.post("/api/auth")
-async def authenticate(request: Request):
-    """
-    Issues a temporary one-time session token for the WebSocket connection.
-    """
-    try:
-        data = await request.json()
-        if not isinstance(data, dict):
-            data = {}
-        mode = data.get("mode")
-
-        session_token = str(uuid.uuid4())
-        cleanup_tokens()
-        # teach-back이면 더 긴 제한 시간을 이 토큰에 묶는다(웹소켓 타임아웃에 씀).
-        # 환경변수에서 읽는 로직은 lesson.session_time_limit_from_env 한 곳에 모은다.
-        time_limit = session_time_limit_from_env(mode)
-        valid_tokens[session_token] = {"created": time.time(), "limit": time_limit}
-
-        return {"session_token": session_token, "session_time_limit": time_limit}
-        
-    except Exception as e:
-        logger.error(f"Auth error: {e}")
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = None):
-    """
-    WebSocket endpoint for Gemini Live.
-    Requires a valid session token generated via /api/auth.
-    """
-    await websocket.accept()
-    
-    # Validate Token
-    token_info = valid_tokens.get(token) if token else None
-    if not token or token_info is None:
-        logger.warning("Invalid or missing session token")
-        await websocket.close(code=4003, reason="Unauthorized")
-        return
-
-    # Remove token (one-time use)
-    del valid_tokens[token]
-
-    # /api/auth가 토큰에 묶어 둔 세션 제한 시간을 쓴다(teach-back은 더 길다).
-    default_time_limit = session_time_limit_from_env(None)
-    try:
-        token_time_limit = int(token_info.get("limit", default_time_limit))
-    except (TypeError, ValueError, AttributeError):
-        token_time_limit = default_time_limit
-    
-    logger.info("WebSocket connection accepted and authenticated")
-
-    # Wait for initial setup message
-    setup_config = None
-    try:
-        # We expect the first message to be the setup JSON
-        message = await websocket.receive_text()
-        initial_data = json.loads(message)
-        if "setup" in initial_data:
-            setup_config = initial_data["setup"]
-            logger.info("Received setup configuration from client")
-    except Exception as e:
-        logger.warning(f"Error receiving setup config: {e}")
-
-    # Call start time and mission title (if present in the system instruction).
-    session_start = time.time()
-    mission = None
-    if setup_config:
-        try:
-            instruction = setup_config.get("system_instruction", {}).get("parts", [{}])[0].get("text", "")
-            match = re.search(r'trying to:\s*"([^"]+)"', instruction or "")
-            if match:
-                mission = match.group(1)
-        except (AttributeError, IndexError, TypeError):
-            pass
-
-    audio_input_queue = asyncio.Queue()
-    video_input_queue = asyncio.Queue()
-    text_input_queue = asyncio.Queue()
-
-    async def audio_output_callback(data):
-        await websocket.send_bytes(data)
-
-    async def audio_interrupt_callback():
-        # The event queue handles the JSON message, but we might want to do something else here
-        pass
-
-    gemini_client = GeminiLive(
-        project_id=PROJECT_ID,
-        location=LOCATION,
-        model=MODEL,
-        input_sample_rate=16000
-    )
-
-    # 마이크 원음(16kHz·16bit·mono PCM)을 모은다. 상한 30분.
-    mic_pcm = bytearray()
-    mic_pcm_max = 16000 * 2 * 60 * 30
-
-    async def receive_from_client():
-        try:
-            while True:
-                message = await websocket.receive()
-                
-                if "bytes" in message and message["bytes"]:
-                    if len(mic_pcm) < mic_pcm_max:
-                        mic_pcm.extend(message["bytes"])
-                    await audio_input_queue.put(message["bytes"])
-                elif "text" in message and message["text"]:
-                    text = message["text"]
-                    try:
-                        payload = json.loads(text)
-                        if isinstance(payload, dict) and payload.get("type") == "image":
-                            # Handle base64 image
-                            image_data = base64.b64decode(payload["data"])
-                            await video_input_queue.put(image_data)
-                            continue
-                        elif isinstance(payload, dict) and "realtime_input" in payload:
-                             # Forward realtime input (audio/video chunks)
-                             # The SDK JS sends 'realtime_input' for generic media chunks
-                             # For now we handle simpler case or adapt GeminiLive class
-                             pass
-                    except json.JSONDecodeError:
-                        pass
-                    
-                    await text_input_queue.put(text)
-        except WebSocketDisconnect:
-            logger.info("WebSocket disconnected")
-        except Exception as e:
-            logger.error(f"Error receiving from client: {e}")
-
-    async def run_session():
-        async for event in gemini_client.start_session(
-            audio_input_queue=audio_input_queue,
-            video_input_queue=video_input_queue,
-            text_input_queue=text_input_queue,
-            audio_output_callback=audio_output_callback,
-            audio_interrupt_callback=audio_interrupt_callback,
-            setup_config=setup_config
-        ):
-            if event:
-                # Forward events (transcriptions, etc) to client
-                await websocket.send_json(event)
-
-    receive_task = asyncio.create_task(receive_from_client())
-    session_task = asyncio.create_task(run_session())
-
-    try:
-        done, _pending = await asyncio.wait(
-            {session_task, receive_task},
-            timeout=token_time_limit,
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if not done:
-            # Neither task finished: session time limit reached.
-            logger.info("Session time limit reached")
-            await websocket.close(code=1000, reason="Session time limit reached")
-            session_task.cancel()
-            try:
-                await session_task
-            except asyncio.CancelledError:
-                pass
-        elif receive_task in done and not session_task.done():
-            # Client hung up first: cancel the Gemini session instead of
-            # letting it run until the time limit.
-            session_task.cancel()
-            try:
-                await session_task
-            except asyncio.CancelledError:
-                pass
-            except Exception as e:
-                logger.error(f"Error in Gemini session: {e}")
-        else:
-            # The Gemini session ended first; surface any error.
-            try:
-                session_task.result()
-            except asyncio.CancelledError:
-                pass
-            except Exception as e:
-                logger.error(f"Error in Gemini session: {e}")
-    finally:
-        receive_task.cancel()
-        # End of the actual call: record the end time now so the saved
-        # transcript duration reflects the real conversation length.
-        session_end = time.time()
-        started_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(session_start))
-        # 마이크 원음 WAV는 전문(.md)보다 먼저 쓴다. /api/tutor는 .md가 생기면
-        # 곧바로 분석을 시작하므로, 순서가 반대면 wav를 못 찾는 경합이 생긴다.
-        # stem은 save_transcript와 같은 규칙(transcript_stem)으로 미리 계산한다.
-        try:
-            if mic_pcm:
-                audio_path = save_call_audio(bytes(mic_pcm), transcript_stem(started_str))
-                if audio_path:
-                    logger.info(f"🎙️ Call audio saved: {audio_path}")
-        except Exception as e:
-            logger.error(f"Call audio save failed: {e}")
-        # Save the full conversation as a markdown file (best effort).
-        try:
-            transcript_dir = get_transcript_dir()
-            saved_path = save_transcript(
-                gemini_client.transcript_chunks,
-                {
-                    "started_at": started_str,
-                    "duration_sec": int(session_end - session_start),
-                    "model": MODEL,
-                    "mission": mission,
-                    "completed": gemini_client.mission_completed,
-                },
-                transcript_dir,
-            )
-            if saved_path:
-                logger.info(f"💾 Transcript saved: {saved_path}")
-        except Exception as e:
-            logger.error(f"Transcript save failed: {e}")
-        # Ensure websocket is closed if not already
-        try:
-            await websocket.close()
-        except:
-            pass
 
 if __name__ == "__main__":
     import uvicorn

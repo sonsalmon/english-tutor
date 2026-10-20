@@ -117,4 +117,34 @@ Teach-back 수업 모드는 코드를 그대로 가져오고 이번 범위에서
 | 4. 실제 통화 | 정범이 미션 통화 1회 + 자유 대화 1회 | 9절 3·4번 |
 | 5. 검증 | 새 문맥 검증자 대조 | 9절 5번 |
 
+## 11. Pipecat 전환 (2026-10-20 사용자 결정)
+
+통화 연결 부분만 Pipecat 1.13으로 바꾼다. 학습자 카드, 튜터링, Ms. Park 지시문, 전문 저장 형식, Teach-back은 그대로 둔다. 화면 개편은 12절에서 다룬다.
+
+```
+[브라우저] PipecatClient + SmallWebRTCTransport
+   │  POST /api/offer (request_data: 지시문·모드·제한 시간)
+   ▼
+[서버] SmallWebRTCTransport.input → 원음 녹음(AudioBufferProcessor)
+        → user aggregator → GeminiLiveVertexLLMService → transport.output → assistant aggregator
+   │  턴 이벤트 → 전문 조각, complete_mission → 브라우저에 서버 메시지
+   ▼
+[통화 끝] sessions/*.md + 원음 WAV → 기존 /api/tutor → 학습자 카드
+```
+
+- 없어지는 것: `/api/auth`, `/ws`, `server/gemini_live.py`, `src/lib/gemini-live/*`, 브라우저 오디오 워크릿.
+- 새로 생기는 것: `server/call_bot.py`(파이프라인), `POST/PATCH /api/offer`, `src/lib/call-client.js`(브라우저 연결).
+
+| 결정 | 이유 | 틀리면 드는 비용 |
+|---|---|---|
+| 지시문은 지금처럼 브라우저가 만들어 `/api/offer`의 `request_data`로 보낸다 | `ms-park.js`와 미션·Teach-back 조립 코드를 재사용한다 | 서버로 옮길 때 한 번 이동 |
+| 말 차례는 기본으로 Gemini 서버 VAD(10-16 조정값: 시작 민감, 1.2초 침묵)를 쓴다. `TURN_MODE=smart`이면 로컬 Silero VAD + Smart Turn v3.2로 판단한다 | 처음에는 검증된 설정으로 통화하고, Smart Turn은 비교 시험으로 켠다 | Smart Turn이 더 낫으면 기본값만 바꾼다 |
+| 세션 재개·컨텍스트 압축은 Pipecat 내장 기능을 쓰고 자체 재연결 코드는 지운다 | 같은 기능을 두 번 갖지 않는다 | 없음 |
+| 미션 완료(`complete_mission`)는 서버 함수가 받고 브라우저에 서버 메시지로 알린다 | 전문 머리의 `completed`를 서버가 바로 기록한다 | 없음 |
+| 튜터가 먼저 말하는 신호는 서버가 연결 직후 넣는다(Teach-back 제외) | 브라우저 텍스트 경로가 없어진다 | 없음 |
+| google-genai를 2.x로 올린다(Pipecat 요구) | 기존 시험 26개가 2.31에서 통과한다 | 없음 |
+| 자동 통화 시험: aiortc로 만든 가짜 브라우저가 녹음 음성을 보내고 튜터 음성을 받는다 | 마이크 없이 통화 경로 전체를 확인한다 | 시험 1회에 Vertex 몇 센트 |
+
+완료 조건: 단위 시험, 오프라인 검사 2개, `npm run build`, 자동 통화 시험 1회(튜터가 먼저 말함, `sessions/`에 미션 제목이 들어간 전문, 원음 WAV), 새 문맥 검증.
+
 다음 명세 후보(이번 범위 밖): 아바타 1단계(정지 이미지 + 소리 크기 입 움직임), Teach-back에 기억 붙이기, YouGlish 위젯으로 표현 검색.

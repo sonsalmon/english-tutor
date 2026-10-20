@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 Chunk = Tuple[str, str]
 Turn = Tuple[str, str]
 
-LEARNER_SPEAKER = "Me"  # gemini_live.py: 학습자(입력 전사) 쪽 라벨
+LEARNER_SPEAKER = "Me"  # call_bot.py: 학습자(입력 전사) 쪽 라벨
 _COACH_RE = re.compile(r"\b(?:coach|hint)\b", re.IGNORECASE)
 
 _WHITESPACE = (" ", "\t", "\n", "\r")
