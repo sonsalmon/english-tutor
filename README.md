@@ -34,6 +34,10 @@
 - 학습자 카드: `~/dev/learning/english/learner-profile.json` (바꾸기 전 카드는 `learner-profile-history/`)
 - 첫 카드 다시 만들기: `.venv/bin/python scripts/build_learner_profile.py` (미리보기), 저장은 `--write`
 
+## readgloss 연결 (선택)
+
+readgloss 다리(`127.0.0.1:47831`)가 켜져 있으면 홈에 "읽다가 찾아본 단어"가 뜨고, 통화 튜터링의 새 단어·고친 표현이 readgloss 단어장(복습)에 들어간다. 다리가 꺼져 있으면 이 부분만 빠지고 나머지는 그대로다. 토큰 파일은 `~/dev/readgloss/data/token`을 읽는다(바꿀 때 `READGLOSS_URL`·`READGLOSS_TOKEN_FILE`). 명세 14절.
+
 ## 검사
 
 - 단위 시험: `cd server && ../.venv/bin/python -m unittest test_call_bot test_main_wiring test_learner_profile test_transcript_store`
