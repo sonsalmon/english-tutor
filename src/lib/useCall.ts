@@ -147,7 +147,7 @@ export function useCall() {
         await client.connect({
           webrtcRequestParams: {
             endpoint: '/api/offer',
-            requestData: { system_instruction: systemInstruction, mode, voice: 'Puck' },
+            requestData: { system_instruction: systemInstruction, mode, voice: 'Kore' },
           },
         });
       } catch (e) {
