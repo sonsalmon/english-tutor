@@ -139,7 +139,7 @@ class IceCandidateTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ctx.exception.status_code, 404)
 
 
-EMPTY_PROFILE = {"brief": "", "updated": None, "weak_points": [], "next_goal": "", "practice_words": []}
+EMPTY_PROFILE = {"load_failed": False, "brief": "", "updated": None, "weak_points": [], "next_goal": "", "practice_words": []}
 
 
 class LearnerProfileEndpointTest(unittest.IsolatedAsyncioTestCase):
@@ -167,9 +167,9 @@ class LearnerProfileEndpointTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(body["practice_words"], [{"lemma": "mitigate", "gloss": "완화하다", "source": "lookup"}])
 
-    async def test_broken_card_gives_empty_brief(self):
+    async def test_broken_card_gives_empty_brief_marked_as_failed(self):
         with mock.patch.object(main, "load_profile", side_effect=main.ProfileError("broken")):
-            self.assertEqual(await main.learner_profile_endpoint(), EMPTY_PROFILE)
+            self.assertEqual(await main.learner_profile_endpoint(), {**EMPTY_PROFILE, "load_failed": True})
 
     async def test_missing_card_gives_empty_brief(self):
         with mock.patch.object(main, "load_profile", return_value=None):

@@ -97,8 +97,18 @@ export function Call({ setup, brief, practiceWords, timeLimit, onFinished }: {
       };
       if (pushedRef.current) {
         // 끊기 버튼·미션 완료 등으로 끝난 경우: 쌓아 둔 항목을 먼저 걷어 낸 뒤 요약으로 이동한다.
+        // popstate가 오지 않는 브라우저에서도 요약을 잃지 않게 0.8초 뒤에는 그냥 넘어간다(한 번만).
         pushedRef.current = false;
-        window.addEventListener('popstate', () => onFinished(finished), { once: true });
+        let sent = false;
+        const finish = () => {
+          if (sent) return;
+          sent = true;
+          window.removeEventListener('popstate', finish);
+          window.clearTimeout(fallback);
+          onFinished(finished);
+        };
+        const fallback = window.setTimeout(finish, 800);
+        window.addEventListener('popstate', finish);
         window.history.back();
       } else {
         onFinished(finished);
