@@ -54,7 +54,7 @@ class NormalizeTest(unittest.TestCase):
         self.assertEqual(len(out["threads"]), 5)
         self.assertTrue(all(len(f["text"]) <= 120 for f in out["facts"]))
         self.assertTrue(all(t["last_seen"] == "2026-10-20" for t in out["threads"]))
-        self.assertEqual(set(out), {"partner", "updated", "facts", "threads"})
+        self.assertEqual(set(out), {"partner", "updated", "facts", "threads", "self_story", "jokes", "episodes"})
         self.assertEqual(out["partner"], "priya")
         self.assertEqual(out["updated"], "2026-10-20T21:00:00+0900")
 
@@ -274,6 +274,95 @@ class EndpointTest(MemoryDirCase):
         (self.dir / "jake.json").write_text("{broken", encoding="utf-8")
 
         self.assertEqual(self.client.get("/api/partners/jake/memory").status_code, 500)
+
+
+def v2(**extra):
+    return {
+        **good(),
+        "self_story": [{"story": "Flatmate and the missing milk", "progress": "Her flatmate keeps drinking her milk; she left a note.", "last_seen": "2026-10-20"}],
+        "jokes": [{"text": "Calling the flatmate the milk bandit", "last_seen": "2026-10-20"}],
+        "episode": "Talked about the learner's jazz concert and the flatmate milk saga; cheerful.",
+        **extra,
+    }
+
+
+class V2Test(MemoryDirCase):
+    def test_v1_file_loads_with_empty_new_lists(self):
+        self.dir.mkdir(parents=True)
+        v1 = {"partner": "priya", "updated": "2026-10-01T00:00:00+0900", "facts": [{"text": "Likes tea", "last_seen": "2026-10-01"}], "threads": []}
+        (self.dir / "priya.json").write_text(json.dumps(v1), encoding="utf-8")
+
+        memory = pm.load_memory("priya")
+
+        self.assertEqual(memory["facts"][0]["text"], "Likes tea")
+        for key in ("self_story", "jokes", "episodes"):
+            self.assertEqual(memory[key], [])
+
+    def test_caps_and_length_limits(self):
+        data = {
+            "self_story": [{"story": f"s{i}", "progress": "p"} for i in range(10)]
+            + [{"story": "x" * 61, "progress": "p"}, {"story": "ok", "progress": "y" * 161}, {"story": "np", "progress": ""}],
+            "jokes": [{"text": f"j{i}"} for i in range(8)] + [{"text": "j" * 101}],
+            "episodes": [{"date": f"2026-10-{i + 1:02d}", "mode": "call", "summary": f"e{i}"} for i in range(15)]
+            + [{"date": "2026-10-20", "mode": "email", "summary": "bad mode"}, {"date": "2026-10-20", "mode": "chat", "summary": "z" * 201}],
+        }
+
+        out = pm.normalize(data, "priya", NOW)
+
+        self.assertEqual((len(out["self_story"]), len(out["jokes"]), len(out["episodes"])), (8, 5, 12))
+        self.assertEqual(out["episodes"][0]["date"], "2026-10-15")  # 최신순
+
+    def test_update_call_adds_story_joke_and_episode(self):
+        seen = []
+        self.assertTrue(pm.update("priya", TURNS, lambda p: seen.append(p) or json.dumps(v2()), NOW))
+
+        memory = pm.load_memory("priya")
+        self.assertEqual(memory["self_story"][0]["story"], "Flatmate and the missing milk")
+        self.assertEqual(memory["jokes"][0]["text"], "Calling the flatmate the milk bandit")
+        self.assertEqual(memory["episodes"], [{"date": "2026-10-20", "mode": "call", "summary": v2()["episode"]}])
+        self.assertIn("phone call", seen[0])
+        self.assertIn("self_story", seen[0])
+
+    def test_update_chat_adds_chat_episode_and_keeps_older_episodes(self):
+        pm.update("priya", TURNS, lambda p: json.dumps(v2()), NOW)
+        seen = []
+        ok = pm.update("priya", TURNS, lambda p: seen.append(p) or json.dumps(v2(episode="Texted about weekend plans.")), NOW + timedelta(days=1), mode="chat")
+
+        self.assertTrue(ok)
+        self.assertIn("text chat", seen[0])
+        episodes = pm.load_memory("priya")["episodes"]
+        self.assertEqual([(e["date"], e["mode"]) for e in episodes], [("2026-10-21", "chat"), ("2026-10-20", "call")])
+
+    def test_overlong_episode_is_trimmed_not_dropped(self):
+        long = "word " * 60
+        self.assertTrue(pm.update("priya", TURNS, lambda p: json.dumps(v2(episode=long)), NOW))
+
+        summary = pm.load_memory("priya")["episodes"][0]["summary"]
+        self.assertTrue(0 < len(summary) <= 200)
+
+    def test_bad_mode_and_missing_episode(self):
+        self.assertFalse(pm.update("priya", TURNS, lambda p: json.dumps(v2()), NOW, mode="email"))
+        self.assertFalse((self.dir / "priya.json").exists())
+        self.assertTrue(pm.update("priya", TURNS, lambda p: json.dumps(good()), NOW, mode="chat"))
+        self.assertEqual(pm.load_memory("priya")["episodes"], [])
+
+    def test_forget_new_kinds_with_text_check(self):
+        pm.update("priya", TURNS, lambda p: json.dumps(v2()), NOW)
+        client = TestClient(main.app)
+        base = "/api/partners/priya/memory"
+        texts = {
+            "self_story": "Her flatmate keeps drinking her milk; she left a note.",
+            "jokes": "Calling the flatmate the milk bandit",
+            "episodes": v2()["episode"],
+        }
+
+        for kind, text in texts.items():
+            res = client.delete(f"{base}/{kind}/0", params={"text": "other"})
+            self.assertEqual(res.status_code, 409, kind)
+            self.assertEqual(len(pm.load_memory("priya")[kind]), 1)
+            res = client.delete(f"{base}/{kind}/0", params={"text": text})
+            self.assertEqual((res.status_code, res.json()["memory"][kind]), (200, []), kind)
+        self.assertEqual(client.delete(f"{base}/jokes/0").status_code, 404)
 
 
 if __name__ == "__main__":
