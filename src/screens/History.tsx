@@ -53,6 +53,14 @@ function Totals({ totals }: { totals: CallTotals }) {
   );
 }
 
+function WeekLine({ week }: { week: number }) {
+  return (
+    <p className="mt-3 text-center text-ink-soft">
+      {week > 0 ? `이번 주에 ${week}번 통화했어요.` : '이번 주에는 아직 통화하지 않았어요.'}
+    </p>
+  );
+}
+
 function SummaryChip() {
   return <span className="shrink-0 rounded-full bg-paper px-2.5 py-1 text-xs font-semibold">요약 있음</span>;
 }
@@ -69,6 +77,7 @@ function CallList() {
       ) : (
         <>
           <Totals totals={data.totals} />
+          <WeekLine week={data.totals.week} />
           <div className="mt-6">
             {data.calls.length === 0 ? (
               <p className="leading-relaxed text-ink-soft">아직 저장된 통화가 없어요. 첫 통화가 끝나면 여기에 쌓여요.</p>
