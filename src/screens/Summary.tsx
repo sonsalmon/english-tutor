@@ -1,4 +1,4 @@
-import { LoaderCircle, Phone, RotateCcw } from 'lucide-react';
+import { Check, LoaderCircle, Phone, RotateCcw } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { TutoringBlocks } from '../components/TutoringBlocks';
 import { CallButton, QuietButton, Screen } from '../components/ui';
@@ -12,6 +12,49 @@ const LEVELS: Record<number, { name: string; desc: string }> = {
   2: { name: 'Proficiens', desc: '조금 도움을 받았어요' },
   3: { name: 'Peritus', desc: '도움 없이 자연스러웠어요' },
 };
+
+function ReadingWords({ words, used, saved }: { words: string[]; used: string[]; saved: number }) {
+  if (!words.length && !saved) return null;
+  return (
+    <section className="mt-8">
+      <h2 className="text-lg font-bold">읽다가 찾아본 단어</h2>
+      {words.length > 0 && (
+        <>
+          <p className="mt-1 text-ink-soft">
+            {used.length
+              ? `${words.length}개 중 ${used.length}개를 통화에서 썼어요.`
+              : '이번 통화에서는 아직 못 썼어요. 다음 통화에서 써 봐요.'}
+          </p>
+          <ul className="mt-3 flex flex-wrap gap-2">
+            {words.map((w) => {
+              const ok = used.includes(w);
+              return (
+                <li
+                  key={w}
+                  lang="en"
+                  className={`flex items-center gap-1 rounded-full border px-3 py-1.5 text-[15px] ${ok ? 'border-call bg-call/10 font-semibold' : 'border-line bg-surface text-ink-soft'}`}
+                >
+                  {ok && <Check size={14} aria-hidden />}
+                  {w}
+                  {ok && (
+                    <span lang="ko" className="sr-only">
+                      {' '}(썼어요)
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
+      {saved > 0 && (
+        <p className="mt-3 text-sm leading-relaxed text-ink-soft">
+          이번 통화의 새 단어와 고친 표현 {saved}개를 readgloss 단어장에 넣었어요. 읽을 때 복습에 나와요.
+        </p>
+      )}
+    </section>
+  );
+}
 
 function duration(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -28,7 +71,9 @@ export function Summary({ call, onRetry }: { call: FinishedCall; onRetry: (retry
     setTutoring(null);
     requestTutoring({
       started_at: call.startedAt,
-      ...(call.setup.kind === 'teachback' ? { mode: 'teachback' as const, lesson_date: call.setup.lessonDate } : {}),
+      ...(call.setup.kind === 'teachback'
+        ? { mode: 'teachback' as const, lesson_date: call.setup.lessonDate }
+        : { practice_words: call.practiceWords }),
     })
       .then(setTutoring)
       .catch((e: unknown) => setError(e instanceof Error ? e.message : '튜터링 분석에 실패했어요.'));
@@ -97,6 +142,9 @@ export function Summary({ call, onRetry }: { call: FinishedCall; onRetry: (retry
       )}
 
       {tutoring && <TutoringBlocks tutoring={tutoring} isTeachback={isTeachback} />}
+      {tutoring && (
+        <ReadingWords words={call.practiceWords} used={tutoring.practice_used ?? []} saved={tutoring.readgloss?.saved ?? 0} />
+      )}
 
       <div className="mt-auto space-y-3 pt-10">
         {canRetry && retry && (

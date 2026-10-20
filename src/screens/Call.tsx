@@ -4,7 +4,8 @@ import { TalkingPortrait } from '../components/TalkingPortrait';
 import { QuietButton } from '../components/ui';
 import { serverNow } from '../lib/api';
 import { go } from '../lib/router';
-import { buildInstruction, callMode, callTitle, type CallSetup, type FinishedCall } from '../lib/setup';
+import type { PracticeWord } from '../lib/instructions';
+import { buildInstruction, callMode, callTitle, practiceWordsFor, type CallSetup, type FinishedCall } from '../lib/setup';
 import { useCall } from '../lib/useCall';
 
 function clock(seconds: number): string {
@@ -37,9 +38,10 @@ function RoundButton({ label, onClick, tone = 'plain', children }: {
   );
 }
 
-export function Call({ setup, brief, timeLimit, onFinished }: {
+export function Call({ setup, brief, practiceWords, timeLimit, onFinished }: {
   setup: CallSetup;
   brief: string;
+  practiceWords: PracticeWord[];
   timeLimit: number;
   onFinished: (call: FinishedCall) => void;
 }) {
@@ -60,9 +62,16 @@ export function Call({ setup, brief, timeLimit, onFinished }: {
   useEffect(() => {
     if (call.status === 'ended' && startedAt && !reported.current) {
       reported.current = true;
-      onFinished({ setup, startedAt, endedAt: serverNow(), result: call.result, endReason: call.endReason });
+      onFinished({
+        setup,
+        startedAt,
+        endedAt: serverNow(),
+        result: call.result,
+        endReason: call.endReason,
+        practiceWords: practiceWordsFor(setup, practiceWords).map((w) => w.lemma),
+      });
     }
-  }, [call.status, call.result, call.endReason, onFinished, setup, startedAt]);
+  }, [call.status, call.result, call.endReason, onFinished, setup, startedAt, practiceWords]);
 
   useEffect(() => {
     captionsEnd.current?.scrollIntoView({ block: 'end' });
@@ -71,7 +80,7 @@ export function Call({ setup, brief, timeLimit, onFinished }: {
   const dial = () => {
     setStartedAt(serverNow());
     setNow(Date.now());
-    void call.start(buildInstruction(setup, brief), callMode(setup));
+    void call.start(buildInstruction(setup, brief, practiceWordsFor(setup, practiceWords)), callMode(setup));
   };
 
   const remaining = call.liveAt ? Math.min(timeLimit, timeLimit - (now - call.liveAt) / 1000) : timeLimit;

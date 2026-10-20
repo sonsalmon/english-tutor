@@ -17,6 +17,7 @@ import os
 import logging
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Dict, Optional
 
 from fastapi import BackgroundTasks, FastAPI, Request, HTTPException
@@ -32,6 +33,8 @@ from pipecat.transports.smallwebrtc.request_handler import (
 
 from server.call_bot import parse_call_config, run_bot
 from server.history import list_calls, load_call, totals as call_totals
+from server.readgloss import LEMMA_RE, practice_words, push_tutoring, words_used
+from server.transcript_store import get_tutoring_dir
 from server.lesson import (
     LessonError,
     get_lesson,
@@ -106,7 +109,20 @@ async def learner_profile_endpoint():
             {"pattern": p["pattern"], "example": p["example"]} for p in (card["weak_points"][:3] if card else [])
         ],
         "next_goal": card["next_goal"] if card else "",
+        "practice_words": await _practice_words_within(PRACTICE_DEADLINE_SEC),
     }
+
+
+# 다리가 멈춰 있어도 홈 화면(기억 요약)이 오래 기다리지 않게 전체 시간을 자른다.
+PRACTICE_DEADLINE_SEC = 3.0
+
+
+async def _practice_words_within(seconds: float) -> list:
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(practice_words), timeout=seconds)
+    except asyncio.TimeoutError:
+        logger.info("readgloss practice words skipped: bridge too slow")
+        return []
 
 
 # 백그라운드 카드 갱신 작업. 참조를 안 잡으면 끝나기 전에 수거될 수 있다.
@@ -162,6 +178,26 @@ _TUTOR_CACHE_TTL_SEC = 10.0
 
 # 이미 학습자 카드 갱신을 걸어 둔 통화 전문 파일명.
 _PROFILE_UPDATED: "set[str]" = set()
+# 이미 readgloss 단어장에 넣은 통화 전문 파일명.
+_READGLOSS_PUSHED: "set[str]" = set()
+
+
+def _verbatim_text(path: Path) -> str:
+    """튜터링이 원음을 받아써 둔 글(없으면 빈 글)."""
+    verbatim = get_tutoring_dir() / f"{path.stem}.verbatim.txt"
+    return verbatim.read_text(encoding="utf-8") if verbatim.is_file() else ""
+
+
+async def _push_to_readgloss(path: Path, tutoring: dict) -> Optional[dict]:
+    """통화당 한 번 튜터링의 새 단어·고친 표현을 readgloss 단어장에 넣는다. 다리가 꺼져 있으면 None(다음 요청 때 다시 시도)."""
+    if path.name in _READGLOSS_PUSHED:
+        return None
+    _READGLOSS_PUSHED.add(path.name)
+    saved = await asyncio.to_thread(push_tutoring, tutoring, f"English Tutor 통화 {path.stem[:10]}")
+    if saved is None:
+        _READGLOSS_PUSHED.discard(path.name)
+        return None
+    return {"saved": saved}
 
 
 @app.get("/api/lesson")
@@ -197,6 +233,10 @@ async def tutor_endpoint(request: Request):
     started_at = body.get("started_at")
     mode = body.get("mode")
     lesson_date = body.get("lesson_date")
+    raw_practice = body.get("practice_words")
+    practice = [
+        w for w in (raw_practice[:10] if isinstance(raw_practice, list) else []) if isinstance(w, str) and LEMMA_RE.fullmatch(w)
+    ]
 
     try:
         path = await asyncio.to_thread(_wait_and_resolve_transcript, filename, started_at)
@@ -215,12 +255,13 @@ async def tutor_endpoint(request: Request):
                 run_teachback, path, note_text, resolved_date
             )
             data["saved"] = saved
+            data["readgloss"] = await _push_to_readgloss(path, data)
             _TUTOR_CACHE[cache_key] = (time.time(), data)
             # 카드는 영어 교정만 반영한다. unanswered는 보안 지식 공백이라 제외.
             if path.name not in _PROFILE_UPDATED:
                 _PROFILE_UPDATED.add(path.name)
                 _schedule_profile_update(
-                    {k: v for k, v in data.items() if k not in ("saved", "lesson_date", "unanswered")}
+                    {k: v for k, v in data.items() if k not in ("saved", "lesson_date", "unanswered", "readgloss")}
                 )
             return JSONResponse(data)
 
@@ -230,11 +271,15 @@ async def tutor_endpoint(request: Request):
 
         data, saved = await asyncio.to_thread(run_tutoring, path)
         data["saved"] = saved
+        data["practice_used"] = (
+            words_used(path.read_text(encoding="utf-8"), practice, _verbatim_text(path)) if practice else []
+        )
+        data["readgloss"] = await _push_to_readgloss(path, data)
         _TUTOR_CACHE[path.name] = (time.time(), data)
         # 같은 통화를 다시 분석해도 카드는 한 번만 갱신한다(misses·count 중복 방지).
         if path.name not in _PROFILE_UPDATED:
             _PROFILE_UPDATED.add(path.name)
-            _schedule_profile_update({k: v for k, v in data.items() if k != "saved"})
+            _schedule_profile_update({k: v for k, v in data.items() if k not in ("saved", "practice_used", "readgloss")})
     except LessonError as e:
         logger.error(f"Lesson fetch failed: {e}")
         raise HTTPException(status_code=e.status_code, detail=str(e))
