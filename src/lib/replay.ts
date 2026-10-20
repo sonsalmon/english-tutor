@@ -5,7 +5,12 @@ import { PARK_ID, PARTNERS, partnerById, type Partner } from './partners';
 
 export type Correction = { said: string; better: string; why: string };
 
-export type PartnerStep = { kind: 'partner'; text: string };
+export type PartnerStep = {
+  kind: 'partner';
+  text: string;
+  /** TTS 한도(480자) 이하로 문장 경계에서 나눈 조각. 이어서 재생한다 */
+  chunks: string[];
+};
 export type LearnerStep = {
   kind: 'me';
   /** 통화 때 한 말(잡음 표시를 지운 것) */
@@ -16,6 +21,8 @@ export type LearnerStep = {
   why: string;
   /** 교정으로 바뀐 문장인지 */
   corrected: boolean;
+  /** 상대가 알려 준 표현(You can say ...)을 목표로 쓴 문장인지 */
+  offered: boolean;
   /** 영어로 따라 말할 수 있는 문장인지(한글이 섞였거나 영어 글자가 없으면 false) */
   speakable: boolean;
 };
@@ -47,6 +54,58 @@ export function cleanLine(text: string): string {
     .replace(/\{[^}]*\}|<[^>]*>|\[[^\]]*\]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+export const TTS_CHUNK_MAX = 480;
+
+/** 긴 말을 문장 경계에서 max자 이하 조각으로 나눈다. 낱말 중간은 자르지 않는다(낱말 하나가 max를 넘을 때만 예외). */
+export function splitForTts(text: string, max = TTS_CHUNK_MAX): string[] {
+  const clean = text.replace(/\s+/g, ' ').trim();
+  if (!clean) return [];
+  if (clean.length <= max) return [clean];
+  const pieces: string[] = [];
+  for (const sentence of clean.split(/(?<=[.!?…])\s+/)) {
+    if (sentence.length <= max) {
+      pieces.push(sentence);
+      continue;
+    }
+    let cur = '';
+    for (const word of sentence.split(' ')) {
+      if (cur && cur.length + 1 + word.length > max) {
+        pieces.push(cur);
+        cur = '';
+      }
+      let w = word;
+      while (w.length > max) {
+        pieces.push(w.slice(0, max));
+        w = w.slice(max);
+      }
+      cur = cur ? `${cur} ${w}` : w;
+    }
+    if (cur) pieces.push(cur);
+  }
+  const chunks: string[] = [];
+  let cur = '';
+  for (const p of pieces) {
+    if (cur && cur.length + 1 + p.length > max) {
+      chunks.push(cur);
+      cur = p;
+    } else {
+      cur = cur ? `${cur} ${p}` : p;
+    }
+  }
+  if (cur) chunks.push(cur);
+  return chunks;
+}
+
+const OFFER_QUOTED = /\byou\s+(?:can|could)\s+say\s*[:,]?\s*["“”]\s*([^"“”]+?)\s*["“”]/i;
+const OFFER_PLAIN = /\byou\s+(?:can|could)\s+say\s*:\s*([^.!?"“”]+[.!?]?)/i;
+
+/** 상대 말에서 You can say "X" / You can say: X 꼴로 알려 준 첫 표현 X. 없으면 null. */
+export function findOffer(text: string): string | null {
+  const m = text.match(OFFER_QUOTED) ?? text.match(OFFER_PLAIN);
+  const offer = m ? cleanLine(m[1]) : '';
+  return offer && LATIN.test(offer) && !HANGUL.test(offer) ? offer : null;
 }
 
 function overlap(said: string, turn: string): { score: number; tie: number } {
@@ -86,20 +145,26 @@ function replaceFragment(turn: string, said: string, better: string): string | n
 }
 
 /** 통화 전문과 튜터링 교정으로 단계를 만든다. 순수 함수. */
-export function buildSteps(transcript: { speaker: string; text: string }[], corrections: Correction[]): ReplayStep[] {
+export function buildSteps(
+  transcript: { speaker: string; text: string }[],
+  corrections: Correction[],
+  partnerName = 'Ms. Park',
+): ReplayStep[] {
   const used = new Set<number>();
   const steps: ReplayStep[] = [];
-  for (const turn of transcript) {
-    const text = cleanLine(turn.text);
-    if (!text) continue;
+  const lines = transcript.map((t) => ({ speaker: t.speaker, text: cleanLine(t.text) })).filter((t) => t.text);
+  for (let ti = 0; ti < lines.length; ti++) {
+    const turn = lines[ti];
+    const text = turn.text;
     if (turn.speaker !== 'me') {
-      steps.push({ kind: 'partner', text });
+      steps.push({ kind: 'partner', text, chunks: splitForTts(text) });
       continue;
     }
     const pick = pickCorrection(text, corrections, used);
     let target = text;
     let why = '';
     let corrected = false;
+    let offered = false;
     if (pick !== null) {
       used.add(pick);
       const c = corrections[pick];
@@ -114,12 +179,23 @@ export function buildSteps(transcript: { speaker: string; text: string }[], corr
         corrected = true;
       }
     }
+    if (!corrected) {
+      // 교정이 없으면 바로 다음 상대 말이 알려 준 표현을 목표로 쓴다.
+      const next = lines.slice(ti + 1).find((l) => l.speaker !== 'me');
+      const offer = next ? findOffer(next.text) : null;
+      if (offer) {
+        target = offer;
+        why = `통화 중에 알려 준 표현이에요 (${partnerName})`;
+        offered = true;
+      }
+    }
     steps.push({
       kind: 'me',
       original: text,
       target,
       why,
       corrected,
+      offered,
       speakable: LATIN.test(target) && !HANGUL.test(target),
     });
   }
@@ -197,7 +273,7 @@ export function buildReplay(data: unknown, stem: string): ReplayData {
     mission: typeof d.call?.mission === 'string' ? d.call.mission : '',
     startedAt: typeof d.call?.started_at === 'string' ? d.call.started_at : '',
     voice: typeof d.call?.voice === 'string' && d.call.voice ? d.call.voice : null,
-    steps: buildSteps(transcript, corrections),
+    steps: buildSteps(transcript, corrections, partnerForVoice(typeof d.call?.voice === 'string' ? d.call.voice : null).name),
   };
 }
 

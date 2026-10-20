@@ -59,6 +59,7 @@ from server.tutor import (
     TutoringAnalysisError,
     latest_transcript_since,
     make_generate_text,
+    normalize_clip_query,
     resolve_transcript,
     run_teachback,
     run_tutoring,
@@ -258,6 +259,14 @@ async def tutor_endpoint(request: Request):
         w for w in (raw_practice[:10] if isinstance(raw_practice, list) else []) if isinstance(w, str) and LEMMA_RE.fullmatch(w)
     ]
 
+    path = None
+
+    def fail(status: int, detail: str):
+        # 전문 경로가 정해진 뒤의 실패는 stem을 함께 알려 화면이 전문을 계속 보여 줄 수 있게 한다.
+        if path is None:
+            raise HTTPException(status_code=status, detail=detail)
+        return JSONResponse({"detail": detail, "stem": path.stem}, status_code=status)
+
     try:
         path = await asyncio.to_thread(_wait_and_resolve_transcript, filename, started_at)
 
@@ -269,12 +278,13 @@ async def tutor_endpoint(request: Request):
             cache_key = f"teachback:{path.name}:{resolved_date}"
             cached = _TUTOR_CACHE.get(cache_key)
             if cached and time.time() - cached[0] < _TUTOR_CACHE_TTL_SEC:
-                return JSONResponse(cached[1])
+                return JSONResponse({**cached[1], "stem": path.stem})
 
             data, saved = await asyncio.to_thread(
                 run_teachback, path, note_text, resolved_date
             )
             data["saved"] = saved
+            data["stem"] = path.stem
             data["readgloss"] = await _push_to_readgloss(path, data)
             data["cost"] = combine_cost(await asyncio.to_thread(live_cost_of, path), data.get("cost_usd"))
             _TUTOR_CACHE[cache_key] = (time.time(), data)
@@ -282,16 +292,17 @@ async def tutor_endpoint(request: Request):
             if path.name not in _PROFILE_UPDATED:
                 _PROFILE_UPDATED.add(path.name)
                 _schedule_profile_update(
-                    {k: v for k, v in data.items() if k not in ("saved", "lesson_date", "unanswered", "readgloss", "cost", "cost_usd")}
+                    {k: v for k, v in data.items() if k not in ("saved", "stem", "lesson_date", "unanswered", "readgloss", "cost", "cost_usd")}
                 )
             return JSONResponse(data)
 
         cached = _TUTOR_CACHE.get(path.name)
         if cached and time.time() - cached[0] < _TUTOR_CACHE_TTL_SEC:
-            return JSONResponse(cached[1])
+            return JSONResponse({**cached[1], "stem": path.stem})
 
         data, saved = await asyncio.to_thread(run_tutoring, path)
         data["saved"] = saved
+        data["stem"] = path.stem
         data["practice_used"] = (
             words_used(path.read_text(encoding="utf-8"), practice, _verbatim_text(path)) if practice else []
         )
@@ -302,24 +313,23 @@ async def tutor_endpoint(request: Request):
         if path.name not in _PROFILE_UPDATED:
             _PROFILE_UPDATED.add(path.name)
             _schedule_profile_update(
-                {k: v for k, v in data.items() if k not in ("saved", "practice_used", "readgloss", "cost", "cost_usd")}
+                {k: v for k, v in data.items() if k not in ("saved", "stem", "practice_used", "readgloss", "cost", "cost_usd")}
             )
     except LessonError as e:
         logger.error(f"Lesson fetch failed: {e}")
-        raise HTTPException(status_code=e.status_code, detail=str(e))
+        return fail(e.status_code, str(e))
     except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        return fail(404, str(e))
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        return fail(400, str(e))
     except TutoringAnalysisError as e:
         logger.error(f"Tutoring failed: {e}")
-        raise HTTPException(
-            status_code=502,
-            detail="튜터링 분석에 실패했습니다. 잠시 후 다시 시도해 주세요.",
-        )
+        return fail(502, "튜터링 분석에 실패했습니다. 잠시 후 다시 시도해 주세요.")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Tutoring failed: {e}")
-        raise HTTPException(status_code=500, detail="Tutoring failed")
+        return fail(500, "Tutoring failed")
 
     return JSONResponse(data)
 
@@ -387,7 +397,7 @@ DB_CLIPS_ENOUGH = 3
 
 
 def _clip_phrases(tutoring: dict) -> list:
-    """자막 DB에서 찾아볼 문구: 단어장 단어(2자 이상) → 다음 목표 문구 → 짧은 교정(6낱말 이하)."""
+    """자막 DB에서 찾아볼 문구: 다음 목표 문구 → 짧은 교정(2~6낱말) → 단어장 단어(2자 이상)."""
     out: list = []
 
     def add(value) -> None:
@@ -396,17 +406,17 @@ def _clip_phrases(tutoring: dict) -> list:
             if v and v.lower() not in {p.lower() for p in out}:
                 out.append(v)
 
-    for row in tutoring.get("vocab") or []:
-        w = row.get("word") if isinstance(row, dict) else None
-        if isinstance(w, str) and len(w.strip()) >= 2:
-            add(w)
     retry = tutoring.get("retry")
     for p in (retry.get("target_phrases") if isinstance(retry, dict) else None) or []:
         add(p)
     for row in tutoring.get("corrections") or []:
         b = row.get("better") if isinstance(row, dict) else None
-        if isinstance(b, str) and 0 < len(b.split()) <= 6:
+        if isinstance(b, str) and 2 <= len(b.split()) <= 6:
             add(b)
+    for row in tutoring.get("vocab") or []:
+        w = row.get("word") if isinstance(row, dict) else None
+        if isinstance(w, str) and len(w.strip()) >= 2:
+            add(w)
     return out
 
 
@@ -417,16 +427,28 @@ def _db_clips(tutoring: dict):
     seen: set = set()
     if not clipdb.available():
         return clips, used
-    for phrase in _clip_phrases(tutoring):
-        if len(clips) >= MAX_CLIPS:
-            break
-        added = False
-        for hit in clipdb.search(phrase, limit=2):
-            vid = hit.get("video_id")
-            if not vid or vid in seen or len(clips) >= MAX_CLIPS:
+    phrases = _clip_phrases(tutoring)
+    hits: dict = {}
+    # 라운드 로빈: 모든 문구가 한 건씩 받은 뒤에야 둘째 건을 받는다.
+    for _round in range(2):
+        for phrase in phrases:
+            if len(clips) >= MAX_CLIPS:
+                break
+            hit = None
+            if phrase not in hits:
+                hits[phrase] = list(clipdb.search(phrase, limit=2))
+            while hits[phrase]:
+                cand = hits[phrase].pop(0)
+                vid = cand.get("video_id")
+                if vid and vid not in seen:
+                    hit = cand
+                    break
+            if hit is None:
                 continue
+            vid = hit["video_id"]
             seen.add(vid)
-            added = True
+            if phrase not in used:
+                used.append(phrase)
             clips.append(
                 {
                     "id": vid,
@@ -439,8 +461,6 @@ def _db_clips(tutoring: dict):
                     "source": "db",
                 }
             )
-        if added:
-            used.append(phrase)
     return clips, used
 
 
@@ -455,7 +475,7 @@ async def call_clips_endpoint(stem: str):
         raise HTTPException(status_code=404, detail=str(e))
     tutoring = call.get("tutoring") or {}
     raw_query = tutoring.get("clip_query")
-    query = raw_query.strip() if isinstance(raw_query, str) else ""
+    query = normalize_clip_query(raw_query)
 
     db_clips, phrases = await asyncio.to_thread(_db_clips, tutoring)
     if len(db_clips) >= DB_CLIPS_ENOUGH:
@@ -488,6 +508,9 @@ async def call_clips_endpoint(stem: str):
     return {"query": query, "clips": clips, "status": "ok", "source": "mixed" if db_clips else "search"}
 
 
+ALLOWED_TTS_VOICES = frozenset({"Kore", "Leda", "Charon", "Iapetus", "Sulafat", "Fenrir", "Zephyr"})
+
+
 @app.post("/api/tts")
 async def tts_endpoint(raw: Request):
     """파트너 문장을 Gemini 목소리로 읽은 WAV. JSON이 아니면 415, 문장·목소리가 틀리면 400, 모델이 실패하면 502."""
@@ -495,6 +518,8 @@ async def tts_endpoint(raw: Request):
     text, voice = body.get("text"), body.get("voice")
     if not isinstance(text, str) or not isinstance(voice, str):
         raise HTTPException(status_code=400, detail="text와 voice가 필요해요.")
+    if voice not in ALLOWED_TTS_VOICES:
+        raise HTTPException(status_code=400, detail="지원하지 않는 목소리예요.")
     try:
         tts.validate(text, voice)
     except ValueError as e:

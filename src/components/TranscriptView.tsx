@@ -7,6 +7,8 @@ import { WordText } from './WordText';
 const COLLAPSED_TURNS = 6;
 
 function partnerName(voice: string | null | undefined): string {
+  // 목소리 헤더가 없는 옛 통화는 Ms. Park(Kore)였다. 다시 연습 화면과 같은 이름을 쓴다.
+  if (!voice) return 'Ms. Park';
   return PARTNERS.find((p) => p.voice === voice)?.name ?? '상대';
 }
 
@@ -61,7 +63,7 @@ export function TranscriptView({ turns, verbatim, voice }: { turns: Turn[]; verb
             <ChevronDown size={18} className="shrink-0 text-ink-soft transition-transform group-open:rotate-180" aria-hidden />
           </summary>
           <p lang="en" className="border-t border-line px-4 py-3 leading-relaxed break-words whitespace-pre-wrap text-ink-soft">
-            {verbatim.trim()}
+            <WordText text={verbatim.trim()} />
           </p>
         </details>
       )}

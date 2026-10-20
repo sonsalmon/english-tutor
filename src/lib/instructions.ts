@@ -85,7 +85,7 @@ ${openingStep(hasMemory, 'practice that point in the mission below')}
 
 export const EXPRESSION_HELP = `
 
-EXPRESSION HELP: If the learner mixes Korean into a sentence, or asks how to say something (in Korean like '이건 어떻게 말해?' / '어떻게 표현해?' or in English like 'How do I say ...?'), help right away, even in the middle of a role-play: say the natural English for what they meant in ONE short, easy sentence, for example 'You can say: "I have a lot on my plate this week."'. This example only shows the format. Build your answer from what THIS learner meant; never reuse the example sentence. Then invite them to try it or simply continue the conversation. Do this only when they mix in Korean or ask how to say something. Speak English only, and never translate the rest of the conversation into Korean.`;
+EXPRESSION HELP: If the learner mixes Korean into a sentence, or asks how to say something (in Korean like '이건 어떻게 말해?' / '어떻게 표현해?' or in English like 'How do I say ...?'), help right away, even in the middle of a role-play: say the natural English for what they meant in ONE short, easy sentence, in this format: 'You can say: "<what they meant, in natural English>"'. Build your answer from what THIS learner meant. Then invite them to try it or simply continue the conversation. Do this only when they mix in Korean or ask how to say something. Speak English only, and never translate the rest of the conversation into Korean.`;
 
 const NATURAL_RECAST = `
 

@@ -89,6 +89,42 @@ class TutorEndpointWiringTest(unittest.IsolatedAsyncioTestCase):
         self.mocks["schedule"].assert_called_once()
 
 
+    async def test_every_success_branch_returns_stem(self):
+        first = json.loads((await main.tutor_endpoint(FakeRequest({}))).body)
+        cached = json.loads((await main.tutor_endpoint(FakeRequest({}))).body)
+        self.assertEqual(self.mocks["run"].call_count, 1)
+        self.assertEqual(first["stem"], TRANSCRIPT.stem)
+        self.assertEqual(cached["stem"], TRANSCRIPT.stem)
+        self.mocks["schedule"].assert_called_once_with(TUTORING)
+
+    async def test_error_after_path_known_carries_stem(self):
+        for exc, status in [(main.TutoringAnalysisError("빈 결과"), 502), (RuntimeError("boom"), 500)]:
+            main._TUTOR_CACHE.clear()
+            self.mocks["run"].side_effect = exc
+            res = await main.tutor_endpoint(FakeRequest({}))
+            self.assertEqual(res.status_code, status)
+            body = json.loads(res.body)
+            self.assertEqual(body["stem"], TRANSCRIPT.stem)
+            self.assertTrue(body["detail"])
+        self.mocks["schedule"].assert_not_called()
+
+    async def test_error_before_path_known_has_no_stem(self):
+        self.mocks["resolve"].side_effect = FileNotFoundError("저장된 통화 기록이 없습니다")
+        with self.assertRaises(main.HTTPException) as ctx:
+            await main.tutor_endpoint(FakeRequest({}))
+        self.assertEqual(ctx.exception.status_code, 404)
+
+    async def test_teachback_returns_stem_fresh_and_cached(self):
+        result = {"corrections": [], "lesson_date": "2026-10-13"}
+        with mock.patch.object(main, "get_lesson", return_value={"date": "2026-10-13", "sections": []}), \
+                mock.patch.object(main, "lesson_text", return_value=""), \
+                mock.patch.object(main, "run_teachback", side_effect=lambda *a: (dict(result), True)):
+            first = json.loads((await main.tutor_endpoint(FakeRequest({"mode": "teachback"}))).body)
+            cached = json.loads((await main.tutor_endpoint(FakeRequest({"mode": "teachback"}))).body)
+        self.assertEqual(first["stem"], TRANSCRIPT.stem)
+        self.assertEqual(cached["stem"], TRANSCRIPT.stem)
+
+
 class ReadglossWiringTest(unittest.IsolatedAsyncioTestCase):
     setUp = TutorEndpointWiringTest.setUp
 
@@ -472,18 +508,49 @@ class ClipsAndTtsEndpointsTest(unittest.TestCase):
         body = res.json()
         self.assertEqual(body["status"], "ok")
         self.assertEqual(body["source"], "db")
-        self.assertEqual(body["query"], "wrap up, touch base, heads up")
-        self.assertEqual([c["id"] for c in body["clips"]], ["v1", "v2", "v3", "v4"])
+        self.assertEqual(body["query"], "heads up, wrap up, touch base")
+        self.assertEqual([c["id"] for c in body["clips"]], ["v4", "v1", "v3", "v2"])
         self.assertEqual(
-            body["clips"][0],
+            body["clips"][1],
             {
                 "id": "v1", "title": "Tv1", "channel": "Ch", "thumbnail": "https://i.ytimg.com/vi/v1/mqdefault.jpg",
                 "start": 12, "text": "let's wrap up", "phrase": "wrap up", "source": "db",
             },
         )
         clips.assert_not_called()
-        self.assertEqual([p for p, _ in calls], ["wrap up", "touch base", "heads up", "I would like to reschedule"])
+        self.assertEqual([p for p, _ in calls], ["heads up", "I would like to reschedule", "wrap up", "touch base"])
         self.assertTrue(all(limit == 2 for _, limit in calls))
+
+    def test_clip_phrases_order_phrases_before_words(self):
+        tutoring = {
+            "vocab": [{"word": "leverage"}, {"word": "wrap up"}],
+            "retry": {"target_phrases": ["heads up"]},
+            "corrections": [{"better": "Could you send it"}, {"better": "Yes"}],
+        }
+        self.assertEqual(main._clip_phrases(tutoring), ["heads up", "Could you send it", "leverage", "wrap up"])
+
+    def test_clips_db_round_robin_one_per_phrase_first(self):
+        hits = {
+            "heads up": [self.hit("a1", "x"), self.hit("a2", "x")],
+            "touch base": [self.hit("b1", "x"), self.hit("b2", "x")],
+            "leverage": [self.hit("c1", "x")],
+        }
+        tutoring = {"retry": {"target_phrases": ["heads up", "touch base"]}, "vocab": [{"word": "leverage"}]}
+        res, _, _ = self.db_clips(tutoring, hits)
+        self.assertEqual([c["id"] for c in res.json()["clips"]], ["a1", "b1", "c1", "a2", "b2"])
+
+    def test_clip_query_normalized_before_search(self):
+        for raw, expected in [
+            ("Anna's café trip, to Seoul!", "Anna's caf trip to Seoul"),
+            ("one", ""),
+            ("a b c d e f g h i j k", ""),
+            ("한국어 only", ""),
+            ("x" * 120, ""),
+        ]:
+            self.assertEqual(main.normalize_clip_query(raw), expected, raw)
+        self.assertLessEqual(len(main.normalize_clip_query(" ".join(["abcdefghij"] * 9))), 100)
+        res, clips = self.clips({"clip_query": "small talk <script> now"}, return_value=[{"id": "a"}])
+        clips.assert_called_once_with("2026-10-20-120000", "small talk script now")
 
     def test_clips_db_caps_at_five(self):
         hits = {f"w{i}": [self.hit(f"v{i}", "x")] for i in range(8)}
@@ -494,18 +561,18 @@ class ClipsAndTtsEndpointsTest(unittest.TestCase):
     def test_clips_db_few_fills_from_search(self):
         hits = {"wrap up": [self.hit("v1", "wrap up")]}
         res, clips, _ = self.db_clips(
-            {"clip_query": "q", "vocab": [{"word": "wrap up"}]},
+            {"clip_query": "small talk", "vocab": [{"word": "wrap up"}]},
             hits,
             return_value=[{"id": "v1", "title": "dup"}, {"id": "s2", "title": "S"}],
         )
         body = res.json()
-        self.assertEqual((body["status"], body["source"], body["query"]), ("ok", "mixed", "q"))
+        self.assertEqual((body["status"], body["source"], body["query"]), ("ok", "mixed", "small talk"))
         self.assertEqual([(c["id"], c["source"]) for c in body["clips"]], [("v1", "db"), ("s2", "search")])
 
     def test_clips_db_few_and_search_fails_keeps_db(self):
         hits = {"wrap up": [self.hit("v1", "wrap up")]}
         res, _, _ = self.db_clips(
-            {"clip_query": "q", "vocab": [{"word": "wrap up"}]}, hits, side_effect=main.youtube.YouTubeKeyMissing("x")
+            {"clip_query": "small talk", "vocab": [{"word": "wrap up"}]}, hits, side_effect=main.youtube.YouTubeKeyMissing("x")
         )
         body = res.json()
         self.assertEqual((body["status"], body["source"], len(body["clips"])), ("ok", "db", 1))
@@ -529,12 +596,12 @@ class ClipsAndTtsEndpointsTest(unittest.TestCase):
             clips.assert_not_called()
 
     def test_clips_no_key(self):
-        res, _ = self.clips({"clip_query": "q"}, side_effect=main.youtube.YouTubeKeyMissing("x"))
-        self.assertEqual((res.status_code, res.json()), (200, {"query": "q", "clips": [], "status": "no_key"}))
+        res, _ = self.clips({"clip_query": "small talk"}, side_effect=main.youtube.YouTubeKeyMissing("x"))
+        self.assertEqual((res.status_code, res.json()), (200, {"query": "small talk", "clips": [], "status": "no_key"}))
 
     def test_clips_search_error_is_200_error(self):
-        res, _ = self.clips({"clip_query": "q"}, side_effect=main.youtube.YouTubeQuotaError("quota"))
-        self.assertEqual((res.status_code, res.json()), (200, {"query": "q", "clips": [], "status": "error"}))
+        res, _ = self.clips({"clip_query": "small talk"}, side_effect=main.youtube.YouTubeQuotaError("quota"))
+        self.assertEqual((res.status_code, res.json()), (200, {"query": "small talk", "clips": [], "status": "error"}))
 
     def test_clips_bad_and_unknown_stem(self):
         with mock.patch.object(main, "load_call", side_effect=ValueError("bad")):
@@ -556,6 +623,16 @@ class ClipsAndTtsEndpointsTest(unittest.TestCase):
                 with self.subTest(body=str(body)[:30]):
                     self.assertEqual(self.client.post("/api/tts", json=body).status_code, 400)
         syn.assert_not_called()
+
+    def test_tts_rejects_unknown_voice_without_model_call(self):
+        with mock.patch.object(main.tts, "synthesize") as syn:
+            for voice in ("Nobody", "kore", "Puck"):
+                res = self.client.post("/api/tts", json={"text": "Hi", "voice": voice})
+                self.assertEqual(res.status_code, 400, voice)
+            syn.assert_not_called()
+        for voice in ("Kore", "Leda", "Charon", "Iapetus", "Sulafat", "Fenrir", "Zephyr"):
+            with mock.patch.object(main.tts, "synthesize", return_value=b"RIFFxx"):
+                self.assertEqual(self.client.post("/api/tts", json={"text": "Hi", "voice": voice}).status_code, 200)
 
     def test_tts_model_failure_is_502(self):
         with mock.patch.object(main.tts, "synthesize", side_effect=main.tts.TTSError("boom")):

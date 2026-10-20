@@ -157,6 +157,19 @@ def _rows(data: Dict[str, Any], key: str, fields: List[str], limit: int) -> List
     return rows
 
 
+_CLIP_QUERY_BAD_RE = re.compile(r"[^A-Za-z0-9' -]")
+
+
+def normalize_clip_query(value: Any) -> str:
+    """구글로 나가는 검색어 정리: 영문·숫자·공백·'·-만 남기고 2~10낱말, 100자 이하가 아니면 ""."""
+    if not isinstance(value, str):
+        return ""
+    text = " ".join(_CLIP_QUERY_BAD_RE.sub(" ", value).split())
+    if len(text) > MAX_CLIP_QUERY:
+        text = text[:MAX_CLIP_QUERY].rstrip()
+    return text if 2 <= len(text.split()) <= 10 else ""
+
+
 def normalize_tutor_json(raw: Any) -> Dict[str, Any]:
     """모델 출력을 고정 계약 모양으로 정리한다(누락 키 기본값, 개수 제한)."""
     data = extract_json(raw)
@@ -169,7 +182,7 @@ def normalize_tutor_json(raw: Any) -> Dict[str, Any]:
     ][:MAX_PHRASES]
 
     return {
-        "clip_query": _clean_str(data.get("clip_query"))[:MAX_CLIP_QUERY],
+        "clip_query": normalize_clip_query(_clean_str(data.get("clip_query"))),
         "corrections": _rows(data, "corrections", ["said", "better", "why"], MAX_CORRECTIONS),
         "good": _rows(data, "good", ["said", "note"], MAX_GOOD),
         "vocab": _rows(data, "vocab", ["word", "meaning_ko", "example", "etymology"], MAX_VOCAB),
@@ -664,6 +677,8 @@ if __name__ == "__main__":
             "extra": "ignored",
         }
     )
+    assert normalize_clip_query("coworkers small talk, weekend!") == "coworkers small talk weekend"
+    assert normalize_clip_query("Seoul") == "" and normalize_clip_query("a " * 11) == ""
     _out = analyze_transcript("Me: I am agree", generate_text=lambda _prompt: _fake)
     assert set(_out) == {"corrections", "good", "vocab", "pragmatics", "retry", "clip_query"}, _out
     assert _out["clip_query"] == "", _out

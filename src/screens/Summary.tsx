@@ -5,7 +5,7 @@ import { CostLine, TutoringBlocks } from '../components/TutoringBlocks';
 import { ReplayButton, TranscriptView } from '../components/TranscriptView';
 import { WordText } from '../components/WordText';
 import { CallButton, QuietButton, Screen } from '../components/ui';
-import { findFinishedStem, getCall, requestTutoring, type CallDetail, type Tutoring } from '../lib/api';
+import { getCall, requestTutoring, TutoringError, type CallDetail, type Tutoring } from '../lib/api';
 import type { Retry } from '../lib/instructions';
 import { go } from '../lib/router';
 import { callTitle, type FinishedCall } from '../lib/setup';
@@ -59,32 +59,24 @@ function ReadingWords({ words, used, saved }: { words: string[]; used: string[];
   );
 }
 
-// 튜터링이 끝난 통화의 전문·영상·다시 연습. stem을 못 찾으면 아무것도 보이지 않는다.
-function CallExtras({ startedAt }: { startedAt: number }) {
-  const [stem, setStem] = useState<string | null>(null);
+// 서버가 알려 준 stem의 통화 전문·영상·다시 연습. 튜터링 성공 여부와 무관하게 stem만 알면 보인다.
+function CallExtras({ stem }: { stem: string }) {
   const [detail, setDetail] = useState<CallDetail | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
-    setStem(null);
     setDetail(null);
-    findFinishedStem(startedAt, controller.signal)
-      .then(async (found) => {
-        if (!found) return;
-        const loaded = await getCall(found, controller.signal);
-        setStem(found);
-        setDetail(loaded);
-      })
+    getCall(stem, controller.signal)
+      .then(setDetail)
       .catch(() => {
-        // 못 찾으면 이 구역만 숨긴다. 요약 자체는 그대로 보인다.
+        // 전문을 못 읽으면 전문 구역만 숨긴다. 요약 자체는 그대로 보인다.
       });
     return () => controller.abort();
-  }, [startedAt]);
+  }, [stem]);
 
-  if (!stem || !detail) return null;
   return (
     <>
-      <TranscriptView turns={detail.transcript} verbatim={detail.verbatim} voice={detail.call.voice} />
+      {detail && <TranscriptView turns={detail.transcript} verbatim={detail.verbatim} voice={detail.call.voice} />}
       <ClipList stem={stem} />
       <ReplayButton stem={stem} />
     </>
@@ -99,19 +91,27 @@ function duration(ms: number): string {
 export function Summary({ call, onRetry }: { call: FinishedCall; onRetry: (retry: Retry) => void }) {
   const [tutoring, setTutoring] = useState<Tutoring | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [stem, setStem] = useState<string | null>(null);
   const isTeachback = call.setup.kind === 'teachback';
 
   const load = useCallback(() => {
     setError(null);
     setTutoring(null);
+    setStem(null);
     requestTutoring({
       started_at: call.startedAt,
       ...(call.setup.kind === 'teachback'
         ? { mode: 'teachback' as const, lesson_date: call.setup.lessonDate }
         : { practice_words: call.practiceWords }),
     })
-      .then(setTutoring)
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : '튜터링 분석에 실패했어요.'));
+      .then((t) => {
+        setTutoring(t);
+        setStem(t.stem ?? null);
+      })
+      .catch((e: unknown) => {
+        if (e instanceof TutoringError) setStem(e.stem);
+        setError(e instanceof Error ? e.message : '튜터링 분석에 실패했어요.');
+      });
   }, [call]);
 
   useEffect(load, [load]);
@@ -187,7 +187,7 @@ export function Summary({ call, onRetry }: { call: FinishedCall; onRetry: (retry
       {tutoring && (
         <ReadingWords words={call.practiceWords} used={tutoring.practice_used ?? []} saved={tutoring.readgloss?.saved ?? 0} />
       )}
-      {tutoring && <CallExtras startedAt={call.startedAt} />}
+      {stem && <CallExtras stem={stem} />}
 
       <div className="mt-auto space-y-3 pt-10 lg:flex lg:space-y-0 lg:gap-3">
         {canRetry && retry && (

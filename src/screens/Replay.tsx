@@ -98,6 +98,7 @@ function DiffSummary({ ops }: { ops: DiffOp[] }) {
 
 function PartnerView({
   text,
+  chunks,
   getAudio,
   onSpeaking,
   onNext,
@@ -105,6 +106,7 @@ function PartnerView({
   speaker,
 }: {
   text: string;
+  chunks: string[];
   getAudio: (text: string) => Promise<Blob>;
   onSpeaking: (speaking: boolean) => void;
   onNext: () => void;
@@ -112,6 +114,8 @@ function PartnerView({
   speaker: string;
 }) {
   const audio = useRef<HTMLAudioElement>(null);
+  const urls = useRef<string[]>([]);
+  const at = useRef(0);
   const [status, setStatus] = useState<'loading' | 'playing' | 'ended' | 'blocked' | 'error'>('loading');
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
@@ -119,14 +123,15 @@ function PartnerView({
   useEffect(() => {
     const el = audio.current;
     let cancelled = false;
-    let url = '';
+    urls.current = [];
+    at.current = 0;
     setStatus('loading');
     setError('');
-    getAudio(text).then(
-      async (blob) => {
+    Promise.all(chunks.map((c) => getAudio(c))).then(
+      async (blobs) => {
         if (cancelled || !el) return;
-        url = URL.createObjectURL(blob);
-        el.src = url;
+        urls.current = blobs.map((b) => URL.createObjectURL(b));
+        el.src = urls.current[0];
         try {
           await el.play();
         } catch (e) {
@@ -147,10 +152,30 @@ function PartnerView({
     return () => {
       cancelled = true;
       el?.pause();
-      if (url) URL.revokeObjectURL(url);
+      urls.current.forEach((u) => URL.revokeObjectURL(u));
+      urls.current = [];
       onSpeaking(false);
     };
-  }, [text, getAudio, attempt, onSpeaking]);
+  }, [chunks, getAudio, attempt, onSpeaking]);
+
+  // 긴 말은 조각을 이어서 재생한다. 마지막 조각이 끝날 때만 '다 들었어요'가 된다.
+  const onChunkEnded = async () => {
+    const el = audio.current;
+    if (el && at.current + 1 < urls.current.length) {
+      at.current += 1;
+      el.src = urls.current[at.current];
+      try {
+        await el.play();
+      } catch {
+        setStatus('error');
+        setError('소리를 재생하지 못했어요.');
+        onSpeaking(false);
+      }
+      return;
+    }
+    setStatus('ended');
+    onSpeaking(false);
+  };
 
   const press = async () => {
     const el = audio.current;
@@ -158,8 +183,9 @@ function PartnerView({
       setAttempt((a) => a + 1);
       return;
     }
-    if (!el || !el.src) return;
-    el.currentTime = 0;
+    if (!el || !urls.current.length) return;
+    at.current = 0;
+    el.src = urls.current[0];
     try {
       await el.play();
     } catch {
@@ -195,10 +221,7 @@ function PartnerView({
             setStatus('playing');
             onSpeaking(true);
           }}
-          onEnded={() => {
-            setStatus('ended');
-            onSpeaking(false);
-          }}
+          onEnded={() => void onChunkEnded()}
         />
       </section>
       <section className="mt-6 flex flex-col gap-3" aria-live="polite">
@@ -315,7 +338,7 @@ function LearnerView({ step, onDone }: { step: LearnerStep; onDone: (result: Tur
     <>
       <section className="mt-6 rounded-2xl border border-line bg-surface p-6 lg:p-8">
         <div className="flex items-center justify-between gap-3">
-          <Chip>내 차례{step.corrected ? ' · 고친 문장' : ''}</Chip>
+          <Chip>내 차례{step.corrected ? ' · 고친 문장' : step.offered ? ' · 알려 준 표현' : ''}</Chip>
           {step.speakable && phase !== 'done' && (
             <button
               type="button"
@@ -345,10 +368,10 @@ function LearnerView({ step, onDone }: { step: LearnerStep; onDone: (result: Tur
           </p>
         )}
 
-        {step.corrected && step.why && <p className="mt-4 text-[15px] leading-relaxed">{step.why}</p>}
+        {(step.corrected || step.offered) && step.why && <p className="mt-4 text-[15px] leading-relaxed">{step.why}</p>}
         <p className="mt-4 text-sm leading-relaxed text-ink-soft" data-replay-original>
           통화 때 한 말: <span lang="en">{step.original}</span>
-          {!step.corrected && ' (고칠 곳이 없던 문장이에요)'}
+          {!step.corrected && !step.offered && ' (고칠 곳이 없던 문장이에요)'}
         </p>
       </section>
 
@@ -444,7 +467,9 @@ function Finished({ data, results, onRestart, onHistory }: { data: ReplayData; r
       <section className="mt-6 rounded-2xl border border-line bg-surface p-6 lg:p-8" data-replay-finished>
         <Chip>끝까지 했어요</Chip>
         <p className="mt-4 text-[26px] leading-snug font-bold lg:text-[34px]">
-          내 차례 {learner.length - skipped}번 중 {matched}번을 똑같이 말했어요
+          {learner.length - skipped === 0
+            ? '이번에는 연습한 문장이 없어요.'
+            : `내 차례 ${learner.length - skipped}번 중 ${matched}번을 똑같이 말했어요`}
         </p>
         {skipped > 0 && <p className="mt-2 text-ink-soft">건너뛴 문장 {skipped}개는 세지 않았어요.</p>}
       </section>
@@ -507,7 +532,7 @@ function Run({ data }: { data: ReplayData }) {
   useEffect(() => {
     const next = data.steps.findIndex((s, i) => i > index && s.kind === 'partner');
     const step = next >= 0 ? data.steps[next] : null;
-    if (step?.kind === 'partner') getAudio(step.text).catch(() => {});
+    if (step?.kind === 'partner') step.chunks.forEach((c) => getAudio(c).catch(() => {}));
   }, [index, data.steps, getAudio]);
 
   const advance = (result?: TurnResult) => {
@@ -552,6 +577,7 @@ function Run({ data }: { data: ReplayData }) {
         <PartnerView
           key={`${round}-${index}`}
           text={step.text}
+          chunks={step.chunks}
           getAudio={getAudio}
           onSpeaking={setSpeaking}
           onNext={() => advance()}

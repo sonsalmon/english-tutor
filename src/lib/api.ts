@@ -30,6 +30,8 @@ export type Tutoring = {
   practice_used?: string[];
   readgloss?: { saved: number } | null;
   cost?: Cost | null;
+  // 서버가 이 분석에 쓴 통화 기록의 stem. 옛 응답에는 없다.
+  stem?: string | null;
 };
 
 export type CallSummary = {
@@ -185,7 +187,18 @@ function toTutoring(data: Record<string, unknown>): Tutoring {
     practice_used: list(data.practice_used),
     readgloss: (data.readgloss as Tutoring['readgloss']) ?? null,
     cost: (data.cost as Cost | null | undefined) ?? null,
+    stem: typeof data.stem === 'string' && data.stem ? data.stem : null,
   };
+}
+
+// 튜터링이 실패해도 서버가 stem을 알려 주면 담아 둔다. 없으면 null.
+export class TutoringError extends Error {
+  stem: string | null;
+  constructor(message: string, stem: string | null = null) {
+    super(message);
+    this.name = 'TutoringError';
+    this.stem = stem;
+  }
 }
 
 export async function requestTutoring(body: {
@@ -199,7 +212,18 @@ export async function requestTutoring(body: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(await errorMessage(res, '튜터링 분석에 실패했어요.'));
+  if (!res.ok) {
+    let stem: string | null = null;
+    let detail: string | undefined;
+    try {
+      const body = await res.json();
+      if (typeof body?.stem === 'string' && body.stem) stem = body.stem;
+      if (body?.detail) detail = String(body.detail);
+    } catch {
+      // 본문이 JSON이 아니면 기본 문구를 쓴다.
+    }
+    throw new TutoringError(detail ?? '튜터링 분석에 실패했어요.', stem);
+  }
   return toTutoring(await res.json());
 }
 
@@ -240,16 +264,4 @@ export async function getCallClips(stem: string, signal?: AbortSignal): Promise<
     clips: Array.isArray(data?.clips) ? data.clips : [],
     status,
   };
-}
-
-// 방금 끝난 통화의 stem. /api/tutor 응답에는 stem이 없어서, 튜터링이 끝난 뒤 통화 목록에서
-// startedAt 이후에 저장된 가장 최근 통화를 찾는다. 시계·시간대가 어긋나 못 찾으면 null.
-export async function findFinishedStem(startedAt: number, signal?: AbortSignal): Promise<string | null> {
-  const { calls } = await getCalls(5, signal);
-  const latest = calls[0];
-  const m = latest?.stem.match(/^(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})(\d{2})$/);
-  if (!m) return null;
-  const [y, mo, d, h, mi, s] = m.slice(1).map(Number);
-  const savedAt = new Date(y, mo - 1, d, h, mi, s).getTime();
-  return savedAt >= startedAt - 60_000 ? latest.stem : null;
 }

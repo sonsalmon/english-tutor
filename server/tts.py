@@ -92,13 +92,14 @@ def synthesize(text: str, voice: str, client: Optional[Any] = None) -> bytes:
     validate(text, voice)
     global TTS_MODEL
     cache_dir = get_tts_dir()
-    path = cache_dir / f"{cache_key(TTS_MODEL, voice, text)}.wav"
-    if path.is_file():
-        return path.read_bytes()
-
     models = [TTS_MODEL]
     if not os.getenv(TTS_MODEL_ENV):
         models += [m for m in (DEFAULT_TTS_MODEL, *FALLBACK_MODELS) if m != TTS_MODEL]
+    # 모델을 부르기 전에 후보 모델 키를 모두 조회한다(폴백 캐시가 재시작 뒤에도 쓰이게).
+    for model in models:
+        cached = cache_dir / f"{cache_key(model, voice, text)}.wav"
+        if cached.is_file():
+            return cached.read_bytes()
     client = client or _make_client()
     last: Optional[Exception] = None
     for model in models:

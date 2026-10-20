@@ -122,6 +122,26 @@ class ClipsForCallTest(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(len(http.urls), 1)
 
+    def test_empty_result_is_not_cached_and_cached_empty_is_a_miss(self):
+        empty = json.dumps({"items": []})
+        path = Path(self._tmp.name) / f"{STEM}.json"
+        self.assertEqual(youtube.clips_for_call(STEM, "q", key="K", http=FakeHttp(body=empty)), [])
+        self.assertFalse(path.exists())
+        path.write_text("[]\n", encoding="utf-8")  # 예전에 저장된 빈 캐시
+        http = FakeHttp()
+        got = youtube.clips_for_call(STEM, "q", key="K", http=http)
+        self.assertTrue(got)
+        self.assertEqual(len(http.urls), 1)
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8")), got)
+
+    def test_http_client_exceptions_become_youtube_http_error(self):
+        import http.client
+
+        for exc in (http.client.IncompleteRead(b"ab"), http.client.BadStatusLine("x")):
+            with mock.patch.object(youtube.urllib.request, "urlopen", side_effect=exc):
+                with self.assertRaises(youtube.YouTubeHttpError):
+                    youtube._default_http("https://example.invalid/?key=SECRET")
+
     def test_missing_key(self):
         http = FakeHttp()
         with mock.patch.dict(os.environ, {"YOUTUBE_API_KEY": ""}), mock.patch.object(

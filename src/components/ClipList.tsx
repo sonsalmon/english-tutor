@@ -82,18 +82,23 @@ function Skeleton() {
 function Player({ clip, onClose, onBlocked }: { clip: Clip; onClose: () => void; onBlocked: (id: string) => void }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [blocked, setBlocked] = useState(false);
+  const [slow, setSlow] = useState(false);
 
   useEffect(() => {
     setBlocked(false);
+    setSlow(false);
     let alive = true;
     let heard = false;
+    // 명시 오류(onError)만 플레이어를 바꾸고 기억한다. 응답이 늦는 것만으로는 iframe을 지우지 않는다.
     const giveUp = () => {
       if (!alive) return;
       alive = false;
       setBlocked(true);
       onBlocked(clip.id);
     };
-    const timer = window.setTimeout(giveUp, READY_TIMEOUT_MS);
+    const timer = window.setTimeout(() => {
+      if (alive && !heard) setSlow(true);
+    }, READY_TIMEOUT_MS);
     const listen = () => frame.current?.contentWindow?.postMessage(JSON.stringify({ event: 'listening', id: 1, channel: 'widget' }), 'https://www.youtube-nocookie.com');
     const poll = window.setInterval(() => {
       if (heard) window.clearInterval(poll);
@@ -113,6 +118,7 @@ function Player({ clip, onClose, onBlocked }: { clip: Clip; onClose: () => void;
       } else if (data.event === 'onReady' || data.event === 'infoDelivery' || data.event === 'initialDelivery') {
         heard = true;
         window.clearTimeout(timer);
+        setSlow(false);
       }
     };
     window.addEventListener('message', onMessage);
@@ -148,11 +154,24 @@ function Player({ clip, onClose, onBlocked }: { clip: Clip; onClose: () => void;
             ref={frame}
             src={embedUrl(clip)}
             title={clip.title}
-            allow="encrypted-media; picture-in-picture"
+            allow="autoplay; encrypted-media; picture-in-picture"
             allowFullScreen
             className="size-full border-0"
           />
         </div>
+      )}
+      {slow && !blocked && (
+        <p className="mt-2 text-sm text-ink-soft">
+          <a
+            href={watchUrl(clip)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex min-h-11 items-center gap-1.5 underline"
+          >
+            <ExternalLink size={16} aria-hidden />
+            안 나오면 YouTube에서 보기 ({mmss(startSec(clip))}부터)
+          </a>
+        </p>
       )}
       <div className="mt-2 flex items-start justify-between gap-3">
         <div className="min-w-0">

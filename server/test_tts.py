@@ -66,6 +66,15 @@ class TtsTest(unittest.TestCase):
         tts.synthesize("Hello there.", "Kore", client=client)
         self.assertEqual(len(client.models.calls), 2)
 
+    def test_fallback_cache_found_after_restart_before_any_model_call(self):
+        first = FakeClient(fail_models=("gemini-2.5-flash-tts",))
+        wav = tts.synthesize("Hi.", "Leda", client=first)
+        # 재시작: 전역 모델이 기본값으로 돌아온 상태에서 같은 문장을 요청한다.
+        with mock.patch.object(tts, "TTS_MODEL", tts.DEFAULT_TTS_MODEL):
+            second = FakeClient(fail_models=("gemini-2.5-flash-tts",))
+            self.assertEqual(tts.synthesize("Hi.", "Leda", client=second), wav)
+        self.assertEqual(second.models.calls, [])
+
     def test_validation(self):
         client = FakeClient()
         for text, voice in [("", "Leda"), ("x" * 501, "Leda"), ("hi", "Le da"), ("hi", ""), ("hi", "../x"), ("hi", "Leda1")]:

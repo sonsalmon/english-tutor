@@ -6,6 +6,7 @@
 """
 
 import html
+import http.client
 import json
 import logging
 import os
@@ -79,7 +80,7 @@ def _default_http(url: str) -> Tuple[int, str]:
             return resp.status, resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode("utf-8", errors="replace")
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
+    except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as e:
         # e의 문자열에 URL(키 포함)이 섞일 수 있어 종류만 남긴다.
         raise YouTubeHttpError(f"네트워크 오류({type(e).__name__})") from None
 
@@ -178,8 +179,8 @@ def clips_for_call(
     path = get_clips_dir() / f"{stem}.json"
     try:
         cached = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(cached, list):
-            return cached
+        if isinstance(cached, list) and cached:
+            return cached  # 빈 목록은 실패일 수 있어 다시 검색한다
     except (OSError, ValueError):
         pass
 
@@ -191,6 +192,8 @@ def clips_for_call(
         raise YouTubeKeyMissing("유튜브 API 키가 없습니다")
 
     clips = search(query, key=key, http=http)
+    if not clips:
+        return clips  # 빈 결과는 캐시하지 않는다
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(clips, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
