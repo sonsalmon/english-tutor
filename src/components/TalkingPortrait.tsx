@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef } from 'react';
+import { Portrait } from './ui';
 
 /*
  * Mouth geometry, measured on public/ms-park.webp (512x512).
@@ -42,7 +43,6 @@ function prefersReducedMotion(): boolean {
 }
 
 export function TalkingPortrait({ size, level = 0, active = false }: { size: number; level?: number; active?: boolean }) {
-  const ring = active ? 1.06 + Math.min(level, 1) * 0.14 : 1;
   const uid = useId();
   const clipId = `${uid}-mouth-clip`;
   const lipId = `${uid}-lip`;
@@ -104,23 +104,9 @@ export function TalkingPortrait({ size, level = 0, active = false }: { size: num
     return () => cancelAnimationFrame(frame);
   }, [active, reduced]);
 
-  const imageSize = size - 8;
   return (
-    <div className="relative grid shrink-0 place-items-center" style={{ width: size, height: size }}>
-      <span
-        aria-hidden
-        className="absolute inset-0 rounded-full bg-call/20 transition-[transform,opacity] duration-150 ease-out"
-        style={{ transform: `scale(${ring})`, opacity: active ? 1 : 0 }}
-      />
-      <div className="relative" style={{ width: imageSize, height: imageSize }}>
-        <img
-          src="/ms-park.webp"
-          alt="Ms. Park"
-          width={size}
-          height={size}
-          className="size-full rounded-full bg-line object-cover"
-        />
-        {!reduced && (
+    <Portrait size={size} level={level} active={active}>
+      {!reduced && (
           <svg
             aria-hidden
             viewBox={`${BOX.x} ${BOX.y} ${BOX.w} ${BOX.h}`}
@@ -148,8 +134,7 @@ export function TalkingPortrait({ size, level = 0, active = false }: { size: num
               <path ref={upperEdge} d="" fill="none" stroke={CORNER} strokeWidth="1.6" strokeLinecap="round" />
             </g>
           </svg>
-        )}
-      </div>
-    </div>
+      )}
+    </Portrait>
   );
 }
