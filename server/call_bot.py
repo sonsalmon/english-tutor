@@ -158,6 +158,23 @@ def finish_call(record: CallRecord, config: CallConfig, model: str, ended_at: Op
         return None
 
 
+def mission_tools(config: CallConfig):
+    """미션·자유 대화에만 complete_mission 도구를 준다. Teach-back은 점수·종료 도구 없이 수업한다(f05f290과 같음)."""
+    if config.mode == "teachback":
+        return None
+    from pipecat.adapters.schemas.function_schema import FunctionSchema
+    from pipecat.adapters.schemas.tools_schema import ToolsSchema
+
+    return ToolsSchema(standard_tools=[
+        FunctionSchema(
+            name="complete_mission",
+            description=COMPLETE_MISSION_DESCRIPTION,
+            properties=COMPLETE_MISSION_PROPERTIES,
+            required=["score", "feedback_pointers"],
+        )
+    ])
+
+
 def turn_settings():
     """TURN_MODE에 따라 (Gemini VAD 설정, 로컬 VAD·Smart Turn 사용자 설정)을 돌려준다."""
     from pipecat.processors.aggregators.llm_response_universal import LLMUserAggregatorParams
@@ -185,8 +202,6 @@ def turn_settings():
 
 
 async def run_bot(webrtc_connection, config: CallConfig) -> None:
-    from pipecat.adapters.schemas.function_schema import FunctionSchema
-    from pipecat.adapters.schemas.tools_schema import ToolsSchema
     from pipecat.frames.frames import EndFrame, LLMRunFrame
     from pipecat.pipeline.pipeline import Pipeline
     from pipecat.pipeline.worker import PipelineParams, PipelineWorker
@@ -215,14 +230,7 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
         ),
     )
 
-    tools = ToolsSchema(standard_tools=[
-        FunctionSchema(
-            name="complete_mission",
-            description=COMPLETE_MISSION_DESCRIPTION,
-            properties=COMPLETE_MISSION_PROPERTIES,
-            required=["score", "feedback_pointers"],
-        )
-    ])
+    tools = mission_tools(config)
 
     llm = GeminiLiveVertexLLMService(
         project_id=get_project_id(),
@@ -270,7 +278,8 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
         await worker.queue_frames([RTVIServerMessageFrame(data={"type": "mission_complete", "args": params.arguments})])
         await params.result_callback({"status": "recorded"})
 
-    llm.register_function("complete_mission", complete_mission)
+    if tools is not None:
+        llm.register_function("complete_mission", complete_mission)
 
     @user_aggregator.event_handler("on_user_turn_message_added")
     async def on_user_message(aggregator, message):

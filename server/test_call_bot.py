@@ -48,6 +48,16 @@ class ParseCallConfigTest(unittest.TestCase):
         self.assertIsNone(mission_title("no title here"))
 
 
+class MissionToolsTest(unittest.TestCase):
+    def test_teachback_gets_no_mission_tool(self):
+        self.assertIsNone(call_bot.mission_tools(CallConfig(system_instruction=INSTRUCTION, mode="teachback")))
+
+    def test_mission_and_free_talk_get_complete_mission(self):
+        for mode in ("mission", "freetalk"):
+            tools = call_bot.mission_tools(CallConfig(system_instruction=INSTRUCTION, mode=mode))
+            self.assertEqual([t.name for t in tools.standard_tools], ["complete_mission"])
+
+
 class CallRecordTest(unittest.TestCase):
     def test_blank_turns_are_skipped(self):
         record = CallRecord()
@@ -109,8 +119,9 @@ class FinishCallTest(unittest.TestCase):
 
 
 class FakeRequest:
-    def __init__(self, body):
+    def __init__(self, body, content_type="application/json"):
         self._body = body
+        self.headers = {"content-type": content_type}
 
     async def json(self):
         return self._body
@@ -127,6 +138,19 @@ class OfferEndpointTest(unittest.IsolatedAsyncioTestCase):
                 await main.offer(FakeRequest({"sdp": "v=0", "type": "offer", "requestData": {"mode": "mission"}}), BackgroundTasks())
 
         self.assertEqual(ctx.exception.status_code, 400)
+        handle.assert_not_called()
+
+    async def test_non_json_offer_from_other_pages_is_refused(self):
+        from fastapi import BackgroundTasks, HTTPException
+
+        from server import main
+
+        body = {"sdp": "v=0", "type": "offer", "requestData": {"system_instruction": INSTRUCTION}}
+        with mock.patch.object(main._webrtc, "handle_web_request") as handle:
+            with self.assertRaises(HTTPException) as ctx:
+                await main.offer(FakeRequest(body, content_type="text/plain"), BackgroundTasks())
+
+        self.assertEqual(ctx.exception.status_code, 415)
         handle.assert_not_called()
 
     async def test_browser_camel_case_request_data_starts_the_bot(self):

@@ -22,7 +22,6 @@ from typing import Dict, Optional
 from fastapi import BackgroundTasks, FastAPI, Request, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
 
 from dotenv import load_dotenv
 from pipecat.transports.smallwebrtc.request_handler import (
@@ -68,15 +67,9 @@ async def lifespan(app: FastAPI):
     await _webrtc.close()
 
 
+# CORS 미들웨어를 두지 않는다: 화면은 같은 출처에서만 부른다. 다른 웹 페이지가 이 서버로
+# 유료 통화(/api/offer)를 열거나 수업 기록(/api/lesson)을 읽지 못하게 한다.
 app = FastAPI(lifespan=lifespan)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Serve static files
 # app.mount("/static", StaticFiles(directory="frontend"), name="static")
@@ -261,6 +254,9 @@ async def offer(raw: Request, background_tasks: BackgroundTasks):
     브라우저 SDK는 통화 설정을 `requestData`(camelCase)로 보낸다. FastAPI 자동 해석은 이 이름을
     못 읽으므로 본문을 직접 읽어 Pipecat의 `from_dict`(두 이름 모두 허용)로 만든다.
     """
+    if "application/json" not in raw.headers.get("content-type", ""):
+        # 다른 페이지의 단순 요청(text/plain 등)은 사전 확인 없이 올 수 있어 JSON만 받는다.
+        raise HTTPException(status_code=415, detail="WebRTC offer는 JSON으로 보내야 합니다.")
     try:
         body = await raw.json()
         request = SmallWebRTCRequest.from_dict(body)
