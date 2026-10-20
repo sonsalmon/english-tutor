@@ -53,6 +53,15 @@ class CoachTest(unittest.TestCase):
         self.assertEqual(self.coach([("Me", "coaching hints coached")]), 0)
 
 
+class VoiceTest(unittest.TestCase):
+    def test_voice_line_follows_model(self):
+        lines = head([("Me", "hi")], voice="Kore")
+        self.assertEqual(lines[2:4], ["- model: m", "- voice: Kore"])
+
+    def test_no_voice_leaves_header_as_before(self):
+        self.assertFalse(any(l.startswith("- voice") for l in head([("Me", "hi")])))
+
+
 class OrderTest(unittest.TestCase):
     def test_header_order(self):
         lines = head([("Me", "hi")], completed=True)

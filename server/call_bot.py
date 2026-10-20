@@ -256,6 +256,7 @@ def finish_call(record: CallRecord, config: CallConfig, model: str, ended_at: Op
                 "started_at": started_str,
                 "duration_sec": max(0, int(ended_at - record.started_at - record.paused_sec)),
                 "model": model,
+                "voice": config.voice,
                 "mission": config.mission,
                 "completed": record.completed,
                 "cost_usd": None if record.usage.is_empty() else estimate_cost(model, record.usage),

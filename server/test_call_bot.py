@@ -208,6 +208,7 @@ class FinishCallTest(unittest.TestCase):
             meta = finish_call(record, config, "m", ended_at=1_792_450_100.0)
 
         self.assertEqual(meta["duration_sec"], 60)
+        self.assertEqual(meta["voice"], config.voice)
         save_md.assert_called_once()
 
     def test_audio_failure_does_not_block_transcript(self):

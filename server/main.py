@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from fastapi import BackgroundTasks, FastAPI, Request, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from dotenv import load_dotenv
@@ -31,7 +31,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCRequestHandler,
 )
 
-from server import pron
+from server import clipdb, pron, tts, youtube
 from server.call_bot import parse_call_config, run_bot, smalltalk_time_limit_from_env
 from server.history import list_calls, live_cost_of, load_call, totals as call_totals
 from server.pricing import combine_cost
@@ -380,6 +380,131 @@ async def call_detail_endpoint(stem: str):
         raise HTTPException(status_code=400, detail=str(e))
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+MAX_CLIPS = 5
+DB_CLIPS_ENOUGH = 3
+
+
+def _clip_phrases(tutoring: dict) -> list:
+    """자막 DB에서 찾아볼 문구: 단어장 단어(2자 이상) → 다음 목표 문구 → 짧은 교정(6낱말 이하)."""
+    out: list = []
+
+    def add(value) -> None:
+        if isinstance(value, str):
+            v = " ".join(value.split())
+            if v and v.lower() not in {p.lower() for p in out}:
+                out.append(v)
+
+    for row in tutoring.get("vocab") or []:
+        w = row.get("word") if isinstance(row, dict) else None
+        if isinstance(w, str) and len(w.strip()) >= 2:
+            add(w)
+    retry = tutoring.get("retry")
+    for p in (retry.get("target_phrases") if isinstance(retry, dict) else None) or []:
+        add(p)
+    for row in tutoring.get("corrections") or []:
+        b = row.get("better") if isinstance(row, dict) else None
+        if isinstance(b, str) and 0 < len(b.split()) <= 6:
+            add(b)
+    return out
+
+
+def _db_clips(tutoring: dict):
+    """자막 DB에서 문구를 말하는 순간을 모은다. 영상은 겹치지 않게 최대 5개. (clips, 쓴 문구)."""
+    clips: list = []
+    used: list = []
+    seen: set = set()
+    if not clipdb.available():
+        return clips, used
+    for phrase in _clip_phrases(tutoring):
+        if len(clips) >= MAX_CLIPS:
+            break
+        added = False
+        for hit in clipdb.search(phrase, limit=2):
+            vid = hit.get("video_id")
+            if not vid or vid in seen or len(clips) >= MAX_CLIPS:
+                continue
+            seen.add(vid)
+            added = True
+            clips.append(
+                {
+                    "id": vid,
+                    "title": hit.get("title") or "",
+                    "channel": hit.get("channel") or "",
+                    "thumbnail": f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg",
+                    "start": int(hit.get("start") or 0),
+                    "text": hit.get("text") or "",
+                    "phrase": phrase,
+                    "source": "db",
+                }
+            )
+        if added:
+            used.append(phrase)
+    return clips, used
+
+
+@app.get("/api/calls/{stem}/clips")
+async def call_clips_endpoint(stem: str):
+    """통화 주제 YouTube 클립. 키·검색어가 없거나 검색이 실패해도 200에 status로 알린다. stem이 틀리면 400, 없으면 404."""
+    try:
+        call = await asyncio.to_thread(load_call, stem)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    tutoring = call.get("tutoring") or {}
+    raw_query = tutoring.get("clip_query")
+    query = raw_query.strip() if isinstance(raw_query, str) else ""
+
+    db_clips, phrases = await asyncio.to_thread(_db_clips, tutoring)
+    if len(db_clips) >= DB_CLIPS_ENOUGH:
+        return {"query": ", ".join(phrases), "clips": db_clips, "status": "ok", "source": "db"}
+
+    if not query:
+        if db_clips:
+            return {"query": ", ".join(phrases), "clips": db_clips, "status": "ok", "source": "db"}
+        return {"query": "", "clips": [], "status": "no_query"}
+    try:
+        found = await asyncio.to_thread(youtube.clips_for_call, stem, query)
+    except youtube.YouTubeKeyMissing:
+        if db_clips:
+            return {"query": ", ".join(phrases), "clips": db_clips, "status": "ok", "source": "db"}
+        return {"query": query, "clips": [], "status": "no_key"}
+    except youtube.YouTubeError as e:
+        logger.warning(f"clip search failed for {stem}: {type(e).__name__}: {e}")
+        if db_clips:
+            return {"query": ", ".join(phrases), "clips": db_clips, "status": "ok", "source": "db"}
+        return {"query": query, "clips": [], "status": "error"}
+    seen = {c["id"] for c in db_clips}
+    clips = list(db_clips)
+    for c in found:
+        if len(clips) >= MAX_CLIPS:
+            break
+        if c.get("id") in seen:
+            continue
+        seen.add(c.get("id"))
+        clips.append({**c, "source": "search"})
+    return {"query": query, "clips": clips, "status": "ok", "source": "mixed" if db_clips else "search"}
+
+
+@app.post("/api/tts")
+async def tts_endpoint(raw: Request):
+    """파트너 문장을 Gemini 목소리로 읽은 WAV. JSON이 아니면 415, 문장·목소리가 틀리면 400, 모델이 실패하면 502."""
+    body = await _json_object(raw)
+    text, voice = body.get("text"), body.get("voice")
+    if not isinstance(text, str) or not isinstance(voice, str):
+        raise HTTPException(status_code=400, detail="text와 voice가 필요해요.")
+    try:
+        tts.validate(text, voice)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    try:
+        wav = await asyncio.to_thread(tts.synthesize, text, voice)
+    except Exception as e:
+        logger.warning(f"tts failed: {type(e).__name__}")
+        raise HTTPException(status_code=502, detail="음성을 만들지 못했어요.")
+    return Response(content=wav, media_type="audio/wav")
 
 
 READGLOSS_OFF_DETAIL = "readgloss가 꺼져 있어 뜻을 찾지 못했어요."

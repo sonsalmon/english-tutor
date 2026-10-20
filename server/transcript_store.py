@@ -175,6 +175,7 @@ def format_transcript(chunks: Iterable[Chunk], meta: dict) -> str:
     started_display = started_at[:16] if len(started_at) >= 16 else started_at
     mission = meta.get("mission") or "unknown"
     model = meta.get("model") or "unknown"
+    voice = str(meta.get("voice") or "").strip()
 
     try:
         duration_sec = int(meta.get("duration_sec") or 0)
@@ -194,6 +195,7 @@ def format_transcript(chunks: Iterable[Chunk], meta: dict) -> str:
         f"# Call {started_display}",
         f"- mission: {mission}",
         f"- model: {model}",
+        *([f"- voice: {voice}"] if voice else []),
         f"- duration: {minutes}m {seconds}s",
         f"- completed: {completed}",
         f"- coach: {coach_count}",

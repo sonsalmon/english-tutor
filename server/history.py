@@ -12,6 +12,7 @@ from itertools import islice
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from server.call_bot import NOISE_MARK_RE
 from server.pricing import combine_cost
 from server.transcript_store import get_teachback_dir, get_transcript_dir, get_tutoring_dir
 
@@ -23,7 +24,9 @@ _DURATION_RE = re.compile(r"- duration: (\d+)m (\d+)s\s*", re.ASCII)
 _MISSION_RE = re.compile(r"- mission: (.*)")
 _COMPLETED_RE = re.compile(r"- completed: (yes|no)\s*", re.ASCII)
 _COST_RE = re.compile(r"- cost_usd: (\d+(?:\.\d+)?)\s*", re.ASCII)
-_HEADER_LINES = 9
+_VOICE_RE = re.compile(r"- voice: (\S+)\s*")
+_TURN_RE = re.compile(r"\*\*(Me|Partner):\*\*(?: (.*))?")
+_HEADER_LINES = 10
 # 클라이언트가 가벼운 대화 통화의 지시문에 넣는 미션 이름. 전문 머리글의 mission이 이 값이면 kind는 smalltalk.
 SMALLTALK_MISSION = "Small Talk"
 
@@ -49,7 +52,7 @@ def _parse_call(path: Path) -> Optional[Dict[str, Any]]:
     except ValueError:
         return None
 
-    duration = mission = completed = live_cost = None
+    duration = mission = completed = live_cost = voice = None
     for line in head[1:]:
         if duration is None and (m := _DURATION_RE.fullmatch(line)):
             duration = int(m.group(1)) * 60 + int(m.group(2))
@@ -59,6 +62,8 @@ def _parse_call(path: Path) -> Optional[Dict[str, Any]]:
             completed = m.group(1) == "yes"
         elif live_cost is None and (m := _COST_RE.fullmatch(line)):
             live_cost = float(m.group(1))
+        elif voice is None and (m := _VOICE_RE.fullmatch(line)):
+            voice = m.group(1)
     if duration is None:
         return None
 
@@ -71,6 +76,7 @@ def _parse_call(path: Path) -> Optional[Dict[str, Any]]:
         "mission": mission or "unknown",
         "duration_sec": duration,
         "completed": bool(completed),
+        "voice": voice,
         "has_tutoring": tutoring,
         "kind": "teachback" if teachback else "smalltalk" if mission == SMALLTALK_MISSION else "call",
         "cost": combine_cost(live_cost, None),
@@ -137,6 +143,31 @@ def _read_json(path: Path) -> Optional[Dict[str, Any]]:
     return data if isinstance(data, dict) else None
 
 
+def _read_transcript(path: Path) -> List[Dict[str, str]]:
+    """본문 턴을 순서대로. 이어지는 줄은 앞 턴에 붙이고, 잡음 표시를 지운 뒤 빈 턴은 버린다."""
+    try:
+        lines = path.read_text(encoding="utf-8").split("\n")
+    except (OSError, UnicodeDecodeError) as e:
+        logger.warning("통화 전문을 읽지 못했어요 %s: %s", path, e)
+        return []
+    raw: List[List[str]] = []
+    for line in lines[lines.index("") + 1 :] if "" in lines else []:
+        if m := _TURN_RE.fullmatch(line):
+            raw.append([m.group(1).lower(), m.group(2) or ""])
+        elif raw and line.strip():
+            raw[-1][1] += " " + line
+    turns = [{"speaker": s, "text": " ".join(NOISE_MARK_RE.sub(" ", t).split())} for s, t in raw]
+    return [t for t in turns if t["text"]]
+
+
+def _read_verbatim(path: Path) -> Optional[str]:
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    return text or None
+
+
 def load_call(stem: str) -> Dict[str, Any]:
     """통화 한 건과 저장된 튜터링(없으면 None). stem이 틀리면 ValueError, 없으면 FileNotFoundError."""
     if not _valid_stem(stem):
@@ -150,4 +181,9 @@ def load_call(stem: str) -> Dict[str, Any]:
     directory = get_teachback_dir() if call["kind"] == "teachback" else get_tutoring_dir()
     tutoring = _read_json(directory / f"{stem}.json") if call["has_tutoring"] else None
     call["cost"] = combine_cost(call["cost"]["live"], _number(tutoring.get("cost_usd")) if tutoring else None)
-    return {"call": call, "tutoring": tutoring}
+    return {
+        "call": call,
+        "tutoring": tutoring,
+        "transcript": _read_transcript(path),
+        "verbatim": _read_verbatim(directory / f"{stem}.verbatim.txt"),
+    }

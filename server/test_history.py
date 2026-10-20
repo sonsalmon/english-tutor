@@ -57,6 +57,7 @@ class HistoryTest(HistoryDirs):
                 "mission": "Ordering coffee",
                 "duration_sec": 150,
                 "completed": False,
+                "voice": None,
                 "has_tutoring": False,
                 "kind": "call",
                 "cost": {"live": None, "tutoring": None, "total": None},
@@ -168,6 +169,43 @@ class HistoryTest(HistoryDirs):
         self.add_call("2026-10-20-090000", "2026-10-20 09:00")
 
         self.assertIsNone(history.load_call("2026-10-20-090000")["tutoring"])
+
+    def test_voice_is_parsed_and_null_for_old_files(self):
+        stem = "2026-10-20-090000"
+        self.add_call(stem, "2026-10-20 09:00")
+        self.assertIsNone(history.load_call(stem)["call"]["voice"])
+        text = transcript("2026-10-20 09:00").replace("- model: test-model\n", "- model: test-model\n- voice: Kore\n")
+        (self.sessions / f"{stem}.md").write_text(text, encoding="utf-8")
+        self.assertEqual(history.load_call(stem)["call"]["voice"], "Kore")
+        self.assertEqual(history.list_calls()[0]["voice"], "Kore")
+
+    def test_transcript_order_speakers_noise_and_continuation(self):
+        stem = "2026-10-20-090000"
+        head = transcript("2026-10-20 09:00").split("\n**Me:**")[0]
+        body = (
+            "\n**Me:** Hello.\n**Partner:** Hi there.\nHow is your day?\n"
+            "**Me:** {}\n**Me:** ... {o} you keep going\n**Partner:** { }\n**Me:** Fine.\n"
+        )
+        (self.sessions / f"{stem}.md").write_text(head + "\n" + body, encoding="utf-8")
+
+        result = history.load_call(stem)["transcript"]
+
+        self.assertEqual(
+            result,
+            [
+                {"speaker": "me", "text": "Hello."},
+                {"speaker": "partner", "text": "Hi there. How is your day?"},
+                {"speaker": "me", "text": "... {o} you keep going"},
+                {"speaker": "me", "text": "Fine."},
+            ],
+        )
+
+    def test_verbatim_present_and_absent(self):
+        stem = "2026-10-20-090000"
+        self.add_call(stem, "2026-10-20 09:00")
+        self.assertIsNone(history.load_call(stem)["verbatim"])
+        (self.tutoring / f"{stem}.verbatim.txt").write_text("um, hello\n", encoding="utf-8")
+        self.assertEqual(history.load_call(stem)["verbatim"], "um, hello")
 
     def test_load_call_rejects_invalid_stem(self):
         self.add_call("2026-10-20-090000", "2026-10-20 09:00")

@@ -63,6 +63,7 @@ MAX_VOCAB = 6
 MAX_PRAGMATICS = 4
 MAX_PHRASES = 4
 MAX_UNANSWERED = 8
+MAX_CLIP_QUERY = 100
 
 # teach-back에서 "답하지 못한 질문"의 원인. 계약상 이 넷 중 하나로 고정한다.
 CAUSES = ("english", "understanding", "both", "unclear")
@@ -72,7 +73,8 @@ _CONTRACT_HINT = """{
   "good": [{"said": "...", "note": "왜 좋았는지 한 줄"}],
   "vocab": [{"word": "...", "meaning_ko": "...", "example": "...", "etymology": "어근이 있으면 한 줄, 없으면 빈 문자열"}],
   "pragmatics": [{"pattern": "...", "note": "미국 직장 화용 차이 한 줄(한국어)"}],
-  "retry": {"goal": "다음 통화에서 쓸 목표 한두 줄(영어)", "target_phrases": ["...", "..."]}
+  "retry": {"goal": "다음 통화에서 쓸 목표 한두 줄(영어)", "target_phrases": ["...", "..."]},
+  "clip_query": "3-8 word English YouTube search query"
 }"""
 
 _PROMPT_TEMPLATE = """You are an expert English speaking coach for a Korean learner of American workplace English.
@@ -90,6 +92,7 @@ Analysis rules:
 - Include corrections that the Partner already pointed out during the call.
 - retry.goal: 1-2 English sentences describing what to focus on in the next call of the same scene.
 - retry.target_phrases: 2-4 short English phrases the learner should try to use next time.
+- clip_query: a short English YouTube search query (3-8 words) for clips showing native speakers in the same topic or situation as this call, e.g. "coworkers small talk about weekend plans". Use only generic words: no personal names, addresses or company names.
 
 Return ONLY valid JSON with exactly this shape (no markdown fences, no commentary, no extra keys):
 {contract}
@@ -166,6 +169,7 @@ def normalize_tutor_json(raw: Any) -> Dict[str, Any]:
     ][:MAX_PHRASES]
 
     return {
+        "clip_query": _clean_str(data.get("clip_query"))[:MAX_CLIP_QUERY],
         "corrections": _rows(data, "corrections", ["said", "better", "why"], MAX_CORRECTIONS),
         "good": _rows(data, "good", ["said", "note"], MAX_GOOD),
         "vocab": _rows(data, "vocab", ["word", "meaning_ko", "example", "etymology"], MAX_VOCAB),
@@ -493,6 +497,7 @@ def normalize_teachback_json(raw: Any, *, max_unanswered: int = MAX_UNANSWERED) 
     """
     data = extract_json(raw)
     result = normalize_tutor_json(data)
+    result.pop("clip_query", None)  # teach-back 계약은 그대로 둔다
     result["unanswered"] = _unanswered_rows(data, max_unanswered)
     return result
 
@@ -660,7 +665,8 @@ if __name__ == "__main__":
         }
     )
     _out = analyze_transcript("Me: I am agree", generate_text=lambda _prompt: _fake)
-    assert set(_out) == {"corrections", "good", "vocab", "pragmatics", "retry"}, _out
+    assert set(_out) == {"corrections", "good", "vocab", "pragmatics", "retry", "clip_query"}, _out
+    assert _out["clip_query"] == "", _out
     assert len(_out["corrections"]) == 1 and _out["corrections"][0]["better"] == "I agree"
     assert _out["retry"]["target_phrases"] == ["Here's the bottom line"], _out["retry"]
 
