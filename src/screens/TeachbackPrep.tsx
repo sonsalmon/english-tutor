@@ -47,6 +47,16 @@ export function TeachbackPrep({ onStart }: { onStart: (lesson: Lesson, seniorMod
     }
   };
 
+  const options = ['during', 'after'] as const;
+  const onRadioKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
+    if (!step) return;
+    e.preventDefault();
+    const next = options[(options.indexOf(seniorMode) + step + options.length) % options.length];
+    chooseSenior(next);
+    e.currentTarget.querySelector<HTMLButtonElement>(`[data-value="${next}"]`)?.focus();
+  };
+
   const canStart = !!lesson && lesson.sections.length > 0;
 
   return (
@@ -99,8 +109,8 @@ export function TeachbackPrep({ onStart }: { onStart: (lesson: Lesson, seniorMod
       </section>
 
       <fieldset className="mt-6">
-        <legend className="font-semibold">Ms. Park은 언제 도와줄까요?</legend>
-        <div className="mt-2 grid grid-cols-2 gap-2" role="radiogroup">
+        <legend id="senior-legend" className="font-semibold">Ms. Park은 언제 도와줄까요?</legend>
+        <div className="mt-2 grid grid-cols-2 gap-2" role="radiogroup" aria-labelledby="senior-legend" onKeyDown={onRadioKey}>
           {([
             ['during', '수업 중에', '영어가 막히면 바로 한마디'],
             ['after', '수업 끝나고', '수업 중에는 조용히'],
@@ -112,6 +122,8 @@ export function TeachbackPrep({ onStart }: { onStart: (lesson: Lesson, seniorMod
                 type="button"
                 role="radio"
                 aria-checked={active}
+                data-value={value}
+                tabIndex={active ? 0 : -1}
                 onClick={() => chooseSenior(value)}
                 className={`min-h-16 rounded-2xl border p-3 text-left ${active ? 'border-ink bg-surface' : 'border-line bg-paper text-ink-soft'}`}
               >
