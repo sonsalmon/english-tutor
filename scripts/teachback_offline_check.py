@@ -399,9 +399,10 @@ def check_lesson_text_format() -> None:
 
 def check_prep_empty_sections_guard() -> None:
     """(h) 가르칠 절이 0개면 준비 화면이 Start를 막고 안내 문구를 보여 준다."""
-    src = (REPO_ROOT / "src" / "components" / "view-lesson-prep.js").read_text(encoding="utf-8")
+    src = (REPO_ROOT / "src" / "screens" / "TeachbackPrep.tsx").read_text(encoding="utf-8")
     assert "이 날짜는 보낼 수 있는 내용이 없어요(거름망에 모두 걸림)" in src, "빈 절 안내 문구가 없음"
-    assert "_setStartEnabled(sections.length > 0)" in src, "빈 절일 때 Start를 막는 코드가 없음"
+    assert "const canStart = !!lesson && lesson.sections.length > 0;" in src, "빈 절일 때 Start를 막는 코드가 없음"
+    assert "disabled={!canStart}" in src, "Start 버튼이 canStart를 쓰지 않음"
 
 
 def main() -> int:
