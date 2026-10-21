@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'bun:test';
-import { parseNative, rememberSeen } from './apiFeed';
+import { afterEach, describe, expect, test } from 'bun:test';
+import { parseNative, rememberSeen, reportBlockedVideo } from './apiFeed';
 import { filterWordbook } from './apiWords';
 
 describe('seen clip memory', () => {
@@ -47,5 +47,38 @@ describe('wordbook search', () => {
   test('empty query keeps everything and no match gives an empty list', () => {
     expect(filterWordbook(items, '   ', textOf)).toEqual(items);
     expect(filterWordbook(items, 'zzz', textOf)).toEqual([]);
+  });
+});
+
+describe('reporting a video the player could not embed', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  test('posts the video id as JSON to the blocked endpoint', async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    globalThis.fetch = (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response('{"status":"ok"}', { status: 200 });
+    }) as unknown as typeof fetch;
+
+    expect(await reportBlockedVideo('abc12345678')).toBe(true);
+
+    expect(calls.length).toBe(1);
+    expect(calls[0].url).toBe('/api/clips/blocked');
+    expect(calls[0].init.method).toBe('POST');
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ video_id: 'abc12345678' });
+    expect(new Headers(calls[0].init.headers).get('content-type')).toBe('application/json');
+  });
+
+  test('a rejected request or an error status is reported as false and never throws', async () => {
+    globalThis.fetch = (async () => new Response('{}', { status: 400 })) as unknown as typeof fetch;
+    expect(await reportBlockedVideo('abc12345678')).toBe(false);
+
+    globalThis.fetch = (async () => {
+      throw new TypeError('offline');
+    }) as unknown as typeof fetch;
+    expect(await reportBlockedVideo('abc12345678')).toBe(false);
   });
 });

@@ -197,15 +197,48 @@ class FinishAndTimerTest(ReviewTestBase):
         self.assertFalse(review.finish(STEM))
 
 
+def allow_all(ids):
+    return set(ids)
+
+
 class PhraseClipsTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        env = mock.patch.dict(os.environ, {"EMBED_CACHE_PATH": str(self.root / "embed.json"), "CLIPDB_PATH": str(self.root / "captions.db")})
+        env.start()
+        self.addCleanup(env.stop)
+        for patcher in (
+            mock.patch.object(review.embeds, "_http_get", side_effect=AssertionError("network")),
+            mock.patch.object(review.embeds.youtube, "api_key", return_value=None),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def make_db(self, rows):
+        conn = review.clipdb.connect(self.root / "captions.db")
+        self.addCleanup(conn.close)
+        review.clipdb.upsert_channel(conn, "@tv", "A Show", "tv")
+        review.clipdb.upsert_channel(conn, "@lec", "A Lecture Channel", "daily")
+        for vid, handle, text in rows:
+            review.clipdb.save_video(
+                conn,
+                {"id": vid, "channel_handle": handle, "title": f"title {vid}", "published": "2026-01-01T00:00:00Z", "duration_sec": 60},
+                "ok",
+                "auto",
+                [{"start": 3.0, "end": 6.0, "text": text}],
+                "2026-10-20T00:00:00+00:00",
+            )
+
     async def test_ok_returns_db_clips_with_the_matching_moment(self):
         hits = [{"video_id": "abc123", "title": "T", "channel": "C", "start": 12.7, "text": "so what do you do"}, {"title": "no id"}]
         with mock.patch.object(review.clipdb, "available", return_value=True), mock.patch.object(
             review.clipdb, "search", return_value=hits
-        ) as search:
+        ) as search, mock.patch.object(review.embeds, "playable", allow_all):
             res = await review.phrase_clips_endpoint("  So, what do you do?  ", 99)
 
-        search.assert_called_once_with("So, what do you do?", limit=review.MAX_PHRASE_CLIPS)
+        search.assert_called_once_with("So, what do you do?", limit=review.MAX_PHRASE_CLIPS * review.PHRASE_OVERFETCH, tier="preferred")
         self.assertEqual(res["status"], "ok")
         self.assertEqual(len(res["clips"]), 1)
         clip = res["clips"][0]
@@ -224,10 +257,85 @@ class PhraseClipsTest(unittest.IsolatedAsyncioTestCase):
     async def test_limit_is_clamped_to_at_least_one(self):
         with mock.patch.object(review.clipdb, "available", return_value=True), mock.patch.object(
             review.clipdb, "search", return_value=[]
-        ) as search:
+        ) as search, mock.patch.object(review.embeds, "playable", allow_all):
             await review.phrase_clips_endpoint("circle back", 0)
 
-        self.assertEqual(search.call_args.kwargs["limit"], 1)
+        self.assertEqual(search.call_args_list[0].kwargs["limit"], review.PHRASE_OVERFETCH)
+
+    async def test_only_captions_that_really_contain_the_phrase_come_back(self):
+        # FTS stems "university" and "universe" alike, so the second row is a false hit the endpoint must drop.
+        self.make_db(
+            [
+                ("vid-good1", "@tv", "I go to the university every day"),
+                ("vid-fake1", "@tv", "the universe is very big"),
+                ("vid-good2", "@tv", "she loves universities"),
+            ]
+        )
+        with mock.patch.object(review.embeds, "playable", allow_all):
+            res = await review.phrase_clips_endpoint("university", 5)
+
+        self.assertEqual(res["status"], "ok")
+        self.assertEqual({c["id"] for c in res["clips"]}, {"vid-good1", "vid-good2"})
+        for clip in res["clips"]:
+            self.assertTrue(review.clipdb.contains_phrase(clip["text"], "university"))
+
+    async def test_long_caption_is_cut_around_the_phrase_so_it_stays_visible(self):
+        self.make_db([("vid-show1", "@tv", "or a dog person I think I'm a dog person what do you do for work do you work from home or in an office")])
+        with mock.patch.object(review.embeds, "playable", allow_all):
+            res = await review.phrase_clips_endpoint("do you work from home", 3)
+
+        text = res["clips"][0]["text"]
+        self.assertTrue(review.clipdb.contains_phrase(text, "do you work from home"))
+        self.assertLess(len(text.split()), 16)
+
+    async def test_no_matching_caption_gives_an_empty_clip_list(self):
+        self.make_db([("vid-fake1", "@tv", "the universe is very big")])
+        with mock.patch.object(review.embeds, "playable", allow_all):
+            res = await review.phrase_clips_endpoint("university", 3)
+
+        self.assertEqual((res["status"], res["clips"]), ("ok", []))
+
+    async def test_lecture_channel_clips_only_when_no_other_channel_has_the_phrase(self):
+        self.make_db([("vid-lect1", "@lec", "do you work from home or not"), ("vid-show1", "@tv", "so do you work from home")])
+        with mock.patch.object(review.embeds, "playable", allow_all):
+            both = await review.phrase_clips_endpoint("do you work from home", 3)
+        self.assertEqual([c["id"] for c in both["clips"]], ["vid-show1"])
+
+        self.make_db([("vid-lect2", "@lec", "and then you take a long break")])
+        with mock.patch.object(review.embeds, "playable", allow_all):
+            only = await review.phrase_clips_endpoint("take a long break", 3)
+        self.assertEqual([c["id"] for c in only["clips"]], ["vid-lect2"])
+
+    async def test_blocked_videos_are_dropped_and_lecture_is_used_when_nothing_else_plays(self):
+        self.make_db(
+            [("vid-show1", "@tv", "so do you work from home"), ("vid-show2", "@tv", "hey do you work from home"), ("vid-lect1", "@lec", "do you work from home or not")]
+        )
+        with mock.patch.object(review.embeds, "playable", lambda ids: {i for i in ids if i != "vid-show1"}):
+            res = await review.phrase_clips_endpoint("do you work from home", 3)
+        self.assertEqual([c["id"] for c in res["clips"]], ["vid-show2"])
+
+        with mock.patch.object(review.embeds, "playable", lambda ids: {i for i in ids if i.startswith("vid-lect")}):
+            res = await review.phrase_clips_endpoint("do you work from home", 3)
+        self.assertEqual([c["id"] for c in res["clips"]], ["vid-lect1"])
+
+    async def test_client_blocked_video_is_left_out_of_the_next_request(self):
+        self.make_db([("vid-show1", "@tv", "so do you work from home"), ("vid-show2", "@tv", "hey do you work from home")])
+        res = await review.blocked_clip_endpoint(Req({"video_id": "vid-show1"}))
+        self.assertEqual(res, {"status": "ok"})
+
+        after = await review.phrase_clips_endpoint("do you work from home", 3)
+
+        self.assertEqual([c["id"] for c in after["clips"]], ["vid-show2"])
+
+    async def test_blocked_endpoint_rejects_bad_ids_and_non_json(self):
+        for body in ({}, {"video_id": ""}, {"video_id": 5}, {"video_id": "../../etc"}, {"video_id": "x" * 40}):
+            with self.assertRaises(HTTPException) as ctx:
+                await review.blocked_clip_endpoint(Req(body))
+            self.assertEqual(ctx.exception.status_code, 400, body)
+        with self.assertRaises(HTTPException) as ctx:
+            await review.blocked_clip_endpoint(Req({"video_id": "vid-show1"}, content_type="text/plain"))
+        self.assertEqual(ctx.exception.status_code, 415)
+        self.assertFalse((self.root / "embed.json").exists())
 
 
 class RouterWiringTest(unittest.TestCase):
@@ -236,7 +344,7 @@ class RouterWiringTest(unittest.TestCase):
 
         paths = {r.path for r in main.app.routes}
         self.assertTrue(
-            {"/api/review/flag", "/api/calls/{stem}/review", "/api/calls/{stem}/review/finish", "/api/clips/phrase"} <= paths
+            {"/api/review/flag", "/api/calls/{stem}/review", "/api/calls/{stem}/review/finish", "/api/clips/phrase", "/api/clips/blocked"} <= paths
         )
 
     def test_main_registers_the_card_update_hook(self):

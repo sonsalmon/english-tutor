@@ -15,7 +15,7 @@ import random
 import re
 import threading
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from server import known
 
@@ -30,6 +30,11 @@ FRIEND_POOL = 150
 LEARNER_LABEL = "**Me:**"
 TRANSCRIPT_FILES = 12
 TRANSCRIPT_MAX_CHARS = 80000
+# 피드 순서: 백만 낱말당 MID_MIN~MID_MAX번의 관용구·구동사가 앞, MID_MAX보다 흔한 기본 표현은 맨 뒤.
+MID_MIN = 2.0
+MID_MAX = 150.0
+MID_KINDS = ("idiom", "phrasal_verb")
+NGRAM_MAX = 8
 
 _TOKEN_RE = re.compile(r"[a-z]+(?:'[a-z]+)*")
 _IRREGULAR = {
@@ -200,15 +205,17 @@ def weighted_order(entries: Sequence[Dict[str, Any]], rng: random.Random) -> Lis
     return [e for _, e in keyed]
 
 
-def recent_learner_text(directory: Optional[Path] = None) -> str:
-    """최근 통화 전문에서 학습자(Me) 줄만 이어 붙인 글. 읽기 실패는 건너뛴다."""
+def _transcript_files(directory: Optional[Path]) -> List[Path]:
     from server.transcript_store import get_transcript_dir
 
     folder = Path(directory) if directory else get_transcript_dir()
     try:
-        files = sorted((f for f in folder.glob("*.md")), reverse=True)[:TRANSCRIPT_FILES]
+        return sorted(folder.glob("*.md"), reverse=True)
     except OSError:
-        return ""
+        return []
+
+
+def _learner_lines(files: Iterable[Path]) -> List[str]:
     lines: List[str] = []
     for path in files:
         try:
@@ -216,7 +223,58 @@ def recent_learner_text(directory: Optional[Path] = None) -> str:
         except OSError:
             continue
         lines += [ln[len(LEARNER_LABEL):].strip() for ln in text.splitlines() if ln.startswith(LEARNER_LABEL)]
-    return "\n".join(lines)[:TRANSCRIPT_MAX_CHARS]
+    return lines
+
+
+def recent_learner_text(directory: Optional[Path] = None) -> str:
+    """최근 통화 전문에서 학습자(Me) 줄만 이어 붙인 글. 읽기 실패는 건너뛴다."""
+    return "\n".join(_learner_lines(_transcript_files(directory)[:TRANSCRIPT_FILES]))[:TRANSCRIPT_MAX_CHARS]
+
+
+def ngrams(tokens_: Sequence[str], max_n: int = NGRAM_MAX) -> Set[Tuple[str, ...]]:
+    return {tuple(tokens_[i : i + n]) for n in range(1, max_n + 1) for i in range(len(tokens_) - n + 1)}
+
+
+_USED_CACHE: Dict[str, Any] = {"sig": None, "grams": set()}
+
+
+def learner_ngrams(directory: Optional[Path] = None) -> Set[Tuple[str, ...]]:
+    """모든 통화 전문의 학습자(Me) 줄에 나온 낱말 묶음(원형 통일, 1~NGRAM_MAX낱말). 파일이 바뀔 때만 다시 만든다."""
+    files = _transcript_files(directory)
+    try:
+        sig = tuple((str(f), f.stat().st_mtime_ns, f.stat().st_size) for f in files)
+    except OSError:
+        return set()
+    with _CACHE_LOCK:
+        if _USED_CACHE["sig"] == sig:
+            return _USED_CACHE["grams"]
+    grams: Set[Tuple[str, ...]] = set()
+    for line in _learner_lines(files):
+        grams |= ngrams(lemma_tokens(line))
+    with _CACHE_LOCK:
+        _USED_CACHE["sig"] = sig
+        _USED_CACHE["grams"] = grams
+    return grams
+
+
+def unused_by_learner(entries: Iterable[Dict[str, Any]], used: Set[Tuple[str, ...]]) -> List[Dict[str, Any]]:
+    """학습자가 자기 통화에서 이미 쓴 표현을 뺀다."""
+    return [e for e in entries if tuple(e["key"].split()) not in used]
+
+
+def native_tier(entry: Dict[str, Any]) -> int:
+    """0: 중간 빈도 관용구·구동사(앞), 1: 그 밖의 표현, 2: 너무 흔한 기본 표현(뒤)."""
+    if entry["per_million"] > MID_MAX:
+        return 2
+    return 0 if entry["kind"] in MID_KINDS and entry["per_million"] >= MID_MIN else 1
+
+
+def native_order(entries: Sequence[Dict[str, Any]], rng: random.Random) -> List[Dict[str, Any]]:
+    """tier 순서를 지키되 같은 tier 안에서는 빈도에 비례한 가중 섞기로 다양하게 낸다."""
+    ordered: List[Dict[str, Any]] = []
+    for tier in (0, 1, 2):
+        ordered += weighted_order([e for e in entries if native_tier(e) == tier], rng)
+    return ordered
 
 
 def _contains_key(haystack_tokens: Sequence[str], key: str) -> bool:

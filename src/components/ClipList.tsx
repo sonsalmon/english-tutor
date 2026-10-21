@@ -1,6 +1,7 @@
 import { ExternalLink, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { getCallClips, type Clip, type ClipResult } from '../lib/api';
+import { reportBlockedVideo } from '../lib/apiFeed';
 import { getPhraseClips } from '../lib/review';
 
 const MAX_CLIPS = 5;
@@ -37,6 +38,7 @@ function loadBlocked(): string[] {
 }
 
 function rememberBlocked(id: string): void {
+  void reportBlockedVideo(id);
   try {
     const next = [...loadBlocked().filter((v) => v !== id), id].slice(-MAX_BLOCKED);
     localStorage.setItem(BLOCKED_KEY, JSON.stringify(next));
@@ -51,7 +53,7 @@ function Matched({ clip }: { clip: Clip }) {
   if (clip.source !== 'db' || !clip.text) return null;
   return (
     <span className="mt-1 block text-sm break-words">
-      <span lang="en" className="line-clamp-2">“{clip.text}”</span>
+      <span lang="en" className="line-clamp-4">“{clip.text}”</span>
       <span className="text-ink-soft">{mmss(clip.start ?? 0)}부터</span>
     </span>
   );

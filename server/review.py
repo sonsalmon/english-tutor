@@ -16,7 +16,7 @@ from typing import Any, Callable, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 
-from server import clipdb, known
+from server import clipdb, embeds, known
 from server.tutor import resolve_transcript
 from server.transcript_store import get_tutoring_dir
 
@@ -32,6 +32,7 @@ MAX_TEXT = 300
 MAX_PHRASE_QUERY = 80
 DEFAULT_PHRASE_CLIPS = 3
 MAX_PHRASE_CLIPS = 5
+PHRASE_OVERFETCH = 4
 
 CARD_DELAY_SEC = 15 * 60
 
@@ -197,6 +198,26 @@ async def finish_endpoint(stem: str, raw: Request):
     return {"status": "scheduled" if finish(stem) else "nothing"}
 
 
+def _phrase_hits(query: str, limit: int) -> list:
+    """표현이 자막에 실제로 들어 있고 앱 안에서 틀 수 있는 장면. 드라마·팟캐스트·직장 채널이 먼저이고 강의 채널은 그게 하나도 없을 때만."""
+    for tier in (clipdb.TIER_PREFERRED, clipdb.TIER_LECTURE):
+        hits = clipdb.search(query, limit=limit * PHRASE_OVERFETCH, tier=tier)
+        ok = embeds.playable({h["video_id"] for h in hits if h.get("video_id")})
+        hits = [h for h in hits if h.get("video_id") in ok][:limit]
+        if hits:
+            return hits
+    return []
+
+
+@router.post("/api/clips/blocked")
+async def blocked_clip_endpoint(raw: Request):
+    """클라이언트 플레이어가 재생 오류를 낸 영상 id({"video_id": ...})를 받아 다음부터 피드·예시 클립에서 뺀다. id 모양이 틀리면 400."""
+    body = await _json_object(raw)
+    if not await asyncio.to_thread(embeds.mark_blocked, body.get("video_id")):
+        raise HTTPException(status_code=400, detail="영상 id가 틀렸어요.")
+    return {"status": "ok"}
+
+
 @router.get("/api/clips/phrase")
 async def phrase_clips_endpoint(q: str = "", limit: int = DEFAULT_PHRASE_CLIPS):
     """표현을 말하는 순간을 자막 DB에서 찾는다. 표현이 이상하면 no_query, DB가 없으면 no_db(둘 다 200)."""
@@ -205,7 +226,7 @@ async def phrase_clips_endpoint(q: str = "", limit: int = DEFAULT_PHRASE_CLIPS):
         return {"status": "no_query", "query": "", "clips": []}
     if not clipdb.available():
         return {"status": "no_db", "query": query, "clips": []}
-    hits = await asyncio.to_thread(clipdb.search, query, limit=max(1, min(limit, MAX_PHRASE_CLIPS)))
+    hits = await asyncio.to_thread(_phrase_hits, query, max(1, min(limit, MAX_PHRASE_CLIPS)))
     clips = [
         {
             "id": h["video_id"],
@@ -213,7 +234,7 @@ async def phrase_clips_endpoint(q: str = "", limit: int = DEFAULT_PHRASE_CLIPS):
             "channel": h.get("channel") or "",
             "thumbnail": f"https://i.ytimg.com/vi/{h['video_id']}/mqdefault.jpg",
             "start": int(h.get("start") or 0),
-            "text": h.get("text") or "",
+            "text": clipdb.excerpt(h.get("text") or "", query),
             "phrase": query,
             "source": "db",
         }

@@ -11,7 +11,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from server import clipdb, feed, known, main, readgloss
+from server import clipdb, embeds, feed, known, main, readgloss
 
 
 def seg(start, end, text):
@@ -128,6 +128,125 @@ class FeedEndpointTest(unittest.TestCase):
         state = {"phrases": {"a": {"text": "circle back", "ts": 2}, "b": {"text": "hello", "ts": 3}}}
         with mock.patch.object(readgloss, "bridge_snapshot", return_value=(state, None)):
             self.assertEqual(feed._saved_phrases(), ["circle back"])
+
+
+class FeedGenreAndEmbedTest(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        root = Path(self._tmp.name)
+        self.db = root / "captions.db"
+        self.conn = clipdb.connect(self.db)
+        self.addCleanup(self.conn.close)
+        clipdb.upsert_channel(self.conn, "@show", "Show", "tv")
+        clipdb.upsert_channel(self.conn, "@lec", "Lecture", "daily")
+        env = {"EMBED_CACHE_PATH": str(root / "embed.json"), "TUTORING_DIR": str(root), "KNOWN_EXPRESSIONS_PATH": str(root / "k.json"), "CLIPDB_PATH": str(self.db)}
+        patcher = mock.patch.dict(os.environ, env)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def add(self, vid, handle, text):
+        clipdb.save_video(
+            self.conn,
+            {"id": vid, "channel_handle": handle, "title": vid, "published": "2026-01-01T00:00:00Z", "duration_sec": 60},
+            "ok",
+            "auto",
+            [{"start": 1.0, "end": 4.0, "text": text}],
+            "2026-10-20T00:00:00+00:00",
+        )
+
+    def fill(self, tv, lec, phrase="figure out"):
+        for i in range(tv):
+            self.add(f"show-{i:03d}-v", "@show", f"so we need to {phrase} the plan number {i}")
+        for i in range(lec):
+            self.add(f"lect-{i:03d}-v", "@lec", f"today we learn to {phrase} the plan number {i}")
+
+    def test_lecture_channels_only_fill_in_when_nothing_else_is_left(self):
+        self.fill(tv=3, lec=5)
+        cards = feed.build_page(["figure out"], "mine", 6, set(), db_path=self.db, rng=random.Random(1))
+
+        ids = [c["video_id"] for c in cards]
+        self.assertEqual(len(cards), 6)
+        self.assertEqual([i for i in ids[:3] if i.startswith("show")], ids[:3])
+        self.assertTrue(all(i.startswith("lect") for i in ids[3:]))
+
+    def test_a_term_that_only_a_lecture_channel_says_loses_to_browse_scenes_from_other_channels(self):
+        for i in range(6):
+            self.add(f"show-{i:03d}-v", "@show", f"this is an ordinary sentence number {i} on tv")
+        self.add("lect-000-v", "@lec", "a rare gem of an expression for you today")
+        cards = feed.build_page(["rare gem of an expression"], "mine", 4, set(), db_path=self.db, rng=random.Random(2))
+
+        self.assertEqual(len(cards), 4)
+        self.assertTrue(all(c["video_id"].startswith("show") for c in cards))
+        self.assertTrue(all(c["source"] == "browse" for c in cards))
+
+        cards = feed.build_page(["rare gem of an expression"], "mine", 12, set(), db_path=self.db, rng=random.Random(2))
+        self.assertEqual(cards[-1]["video_id"], "lect-000-v")
+        self.assertEqual(cards[-1]["source"], "mine")
+
+    def test_browse_uses_lecture_scenes_only_when_the_other_channels_run_out(self):
+        self.fill(tv=2, lec=4)
+        cards = feed.build_page([], "browse", 5, set(), db_path=self.db, rng=random.Random(3))
+
+        ids = [c["video_id"] for c in cards]
+        self.assertEqual(len(ids), 5)
+        self.assertTrue(all(i.startswith("show") for i in ids[:2]))
+        self.assertTrue(all(i.startswith("lect") for i in ids[2:]))
+
+    def test_mine_cards_always_contain_their_expression(self):
+        self.add("show-aaa-v", "@show", "the universe is very big")
+        self.add("show-bbb-v", "@show", "I study at the university now")
+        cards = feed.build_page(["university"], "mine", 1, set(), db_path=self.db, rng=random.Random(1))
+
+        self.assertEqual([(c["video_id"], c["source"]) for c in cards], [("show-bbb-v", "mine")])
+
+    def test_blocked_videos_never_become_cards_and_cards_are_topped_up_from_the_overfetch(self):
+        self.fill(tv=9, lec=0)
+        calls = []
+
+        def playable(ids):
+            calls.append(set(ids))
+            return {i for i in ids if i != "show-000-v"}
+
+        cards = feed.build_page(["figure out"], "mine", 3, set(), db_path=self.db, rng=random.Random(4), playable=playable)
+        browse = feed.build_page([], "browse", 3, set(), db_path=self.db, rng=random.Random(4), playable=playable)
+
+        self.assertEqual(len(cards), 3)
+        self.assertEqual(len(browse), 3)
+        for card in cards + browse:
+            self.assertNotEqual(card["video_id"], "show-000-v")
+        self.assertEqual(len(calls), 2)
+
+    def test_page_filters_with_the_embed_cache_and_one_batch_per_request(self):
+        self.fill(tv=6, lec=0)
+        urls = []
+
+        def api(url):
+            urls.append(url)
+            ids = url.split("id=", 1)[1].split("&")[0].replace("%2C", ",").split(",")
+            items = [{"id": i, "status": {"embeddable": i != "show-000-v"}} for i in ids]
+            return 200, json.dumps({"items": items})
+
+        with mock.patch.object(embeds, "_http_get", api), mock.patch.object(embeds.youtube, "api_key", return_value="k"), mock.patch.object(
+            feed, "_saved_phrases", return_value=[]
+        ):
+            first = feed._page("browse", 6, set())
+            ids = {c["video_id"] for c in first["clips"]}
+            calls_after_first = len(urls)
+            second = feed._page("browse", 6, set())
+
+        self.assertNotIn("show-000-v", ids)
+        self.assertEqual(calls_after_first, 1)
+        self.assertEqual(len(urls), 1)
+        self.assertNotIn("show-000-v", {c["video_id"] for c in second["clips"]})
+
+    def test_blocked_video_reported_by_the_client_is_gone_from_the_next_page(self):
+        self.fill(tv=2, lec=0)
+        with mock.patch.object(embeds.youtube, "api_key", return_value=None), mock.patch.object(feed, "_saved_phrases", return_value=[]):
+            self.assertTrue(embeds.mark_blocked("show-000-v"))
+            page = feed._page("browse", 6, set())
+
+        self.assertEqual([c["video_id"] for c in page["clips"]], ["show-001-v"])
 
 
 if __name__ == "__main__":

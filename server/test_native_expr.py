@@ -9,7 +9,11 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from server import feed, known, native_expr
+from server import embeds, feed, known, native_expr
+
+
+def allow_all(ids):
+    return set(ids)
 
 
 def raw(expression, per_million=10.0, kind="phrasal_verb", register="casual", videos=("a", "b")):
@@ -186,22 +190,113 @@ class FeedSourceTest(unittest.TestCase):
         every = feed.build_native_page(self.entries, 10, set(), rng=random.Random(1), known_path=self.known)
         self.assertNotIn("end up", {c["term"] for c in every})
 
+    def page_env(self, path):
+        return {native_expr.PATH_ENV: str(path), known.KNOWN_PATH_ENV: str(self.known), "TRANSCRIPT_DIR": self._tmp.name}
+
     def test_page_reads_env_file_and_reports_count(self):
         path = Path(self._tmp.name) / "native.json"
         path.write_text(json.dumps({"expressions": [raw("figure out"), raw("end up")]}), encoding="utf-8")
-        env = {native_expr.PATH_ENV: str(path), known.KNOWN_PATH_ENV: str(self.known)}
-        with mock.patch.dict(os.environ, env):
+        with mock.patch.dict(os.environ, self.page_env(path)), mock.patch.object(embeds, "playable", allow_all):
             page = feed._page("native", 6, set())
         self.assertTrue(page["available"])
         self.assertEqual(page["native"], 2)
         self.assertEqual(len(page["clips"]), 2)
 
     def test_page_without_file_is_empty_not_error(self):
-        env = {native_expr.PATH_ENV: str(Path(self._tmp.name) / "none.json")}
-        with mock.patch.dict(os.environ, env):
+        with mock.patch.dict(os.environ, self.page_env(Path(self._tmp.name) / "none.json")), mock.patch.object(embeds, "playable", allow_all):
             page = feed._page("native", 6, set())
         self.assertEqual((page["clips"], page["native"]), ([], 0))
         self.assertIn("native", feed.FILTERS)
+
+    def test_page_leaves_out_expressions_the_learner_said_in_any_old_call(self):
+        folder = Path(self._tmp.name)
+        (folder / "2026-01-01-000000.md").write_text("**Me:** I figured out the answer\n", encoding="utf-8")
+        for day in range(2, 16):
+            (folder / f"2026-01-{day:02d}-000000.md").write_text("**Me:** hello\n", encoding="utf-8")
+        path = folder / "native.json"
+        path.write_text(json.dumps({"expressions": [raw("figure out"), raw("end up")]}), encoding="utf-8")
+        with mock.patch.dict(os.environ, self.page_env(path)), mock.patch.object(embeds, "playable", allow_all):
+            page = feed._page("native", 6, set())
+        self.assertEqual({c["term"] for c in page["clips"]}, {"end up"})
+
+    def test_blocked_videos_are_never_cards_and_the_next_clip_of_the_expression_is_used(self):
+        calls = []
+
+        def playable(ids):
+            calls.append(set(ids))
+            return {i for i in ids if not i.endswith("-a") and not i.startswith("touchbase")}
+
+        cards = feed.build_native_page(self.entries, 10, set(), rng=random.Random(1), known_path=self.known, playable=playable)
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual({c["term"] for c in cards}, {"figure out", "end up"})
+        self.assertEqual({c["video_id"] for c in cards}, {"figureout-b", "endup-b"})
+
+
+class NativeOrderTest(unittest.TestCase):
+    def test_mid_frequency_idioms_and_phrasal_verbs_first_and_basics_last(self):
+        entries = entries_of(
+            raw("you know", 3900.0, kind="discourse_marker"),
+            raw("of course", 290.0, kind="chunk"),
+            raw("figure out", 120.0, kind="phrasal_verb"),
+            raw("pull strings", 3.0, kind="idiom"),
+            raw("kind of weird", 20.0, kind="chunk"),
+            raw("rare idiom", 0.5, kind="idiom"),
+        )
+        for seed in range(20):
+            order = [e["expression"] for e in native_expr.native_order(entries, random.Random(seed))]
+            self.assertEqual(set(order[:2]), {"figure out", "pull strings"}, order)
+            self.assertEqual(set(order[2:4]), {"kind of weird", "rare idiom"}, order)
+            self.assertEqual(set(order[4:]), {"you know", "of course"}, order)
+
+    def test_demotion_starts_just_above_150_per_million(self):
+        entries = entries_of(raw("at the limit", 150.0, kind="idiom"), raw("over the limit", 150.5, kind="idiom"))
+        self.assertEqual([native_expr.native_tier(e) for e in entries], [0, 2])
+
+    def test_inside_the_mid_tier_the_first_card_still_varies(self):
+        entries = entries_of(*[raw(f"idiom number {n}", 10.0 + 10 * n, kind="idiom") for n in range(8)])
+        firsts = {native_expr.native_order(entries, random.Random(seed))[0]["expression"] for seed in range(40)}
+        self.assertGreaterEqual(len(firsts), 3)
+
+    def test_first_page_is_mid_frequency_even_when_basics_are_far_more_frequent(self):
+        entries = entries_of(
+            raw("you know", 3900.0, kind="discourse_marker"),
+            raw("excuse me", 120.0, kind="discourse_marker"),
+            raw("of course", 290.0, kind="chunk"),
+            raw("figure out", 100.0, kind="phrasal_verb"),
+            raw("pull strings", 3.0, kind="idiom"),
+        )
+        for seed in range(20):
+            cards = feed.build_native_page(entries, 2, set(), rng=random.Random(seed))
+            self.assertEqual({c["term"] for c in cards}, {"figure out", "pull strings"})
+
+
+class LearnerNgramsTest(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.folder = Path(self._tmp.name)
+
+    def test_covers_every_call_not_just_the_latest_twelve_and_only_learner_lines(self):
+        (self.folder / "2026-10-01-000000.md").write_text("**Partner:** touch base\n**Me:** we ended up late\n", encoding="utf-8")
+        for day in range(2, 16):
+            (self.folder / f"2026-10-{day:02d}-000000.md").write_text("**Me:** hello there\n", encoding="utf-8")
+
+        grams = native_expr.learner_ngrams(self.folder)
+
+        self.assertIn(("end", "up"), grams)
+        self.assertNotIn(("touch", "base"), grams)
+        self.assertNotIn("ended up", native_expr.recent_learner_text(self.folder))
+
+    def test_picks_up_a_new_call_after_the_files_change(self):
+        self.assertNotIn(("call", "it", "a", "day"), native_expr.learner_ngrams(self.folder))
+        (self.folder / "2026-10-02-000000.md").write_text("**Me:** let's call it a day\n", encoding="utf-8")
+        self.assertIn(("call", "it", "a", "day"), native_expr.learner_ngrams(self.folder))
+
+    def test_unused_by_learner_drops_inflected_uses_of_an_expression(self):
+        entries = entries_of(raw("end up"), raw("touch base"))
+        used = native_expr.ngrams(native_expr.lemma_tokens("We ended up late"))
+        self.assertEqual([e["expression"] for e in native_expr.unused_by_learner(entries, used)], ["touch base"])
 
 
 if __name__ == "__main__":

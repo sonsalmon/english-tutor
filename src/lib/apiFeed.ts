@@ -65,6 +65,21 @@ export function saveSeen(list: string[]): void {
   }
 }
 
+// 플레이어가 재생 오류를 낸 영상을 서버에 알려 다음부터 피드·예시 클립에서 빼게 한다. 실패해도 화면은 계속 쓴다.
+export async function reportBlockedVideo(videoId: string): Promise<boolean> {
+  try {
+    const res = await fetch('/api/clips/blocked', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ video_id: videoId }),
+      keepalive: true,
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function getFeed(filter: FeedFilter, seen: string[], signal?: AbortSignal): Promise<FeedPage> {
   const params = new URLSearchParams({ filter, limit: String(PAGE_SIZE), seen: seen.slice(-SEEN_CAP).join(',') });
   let res: Response;

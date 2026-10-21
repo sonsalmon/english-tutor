@@ -12,11 +12,11 @@ import json
 import logging
 import random
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 from fastapi import APIRouter
 
-from server import clipdb, known, native_expr, readgloss
+from server import clipdb, embeds, known, native_expr, readgloss
 from server.transcript_store import get_tutoring_dir
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,16 @@ TERMS_PER_PAGE = 12
 PER_TERM = 3
 TUTORING_FILES = 8
 FILTERS = ("mine", "browse", "native")
+OVERFETCH = 3
+
+Playable = Callable[[Iterable[str]], Set[str]]
+
+
+def _keep(hits: List[Dict[str, Any]], playable: Optional[Playable]) -> List[Dict[str, Any]]:
+    if playable is None:
+        return hits
+    ok = playable({h["video_id"] for h in hits})
+    return [h for h in hits if h["video_id"] in ok]
 
 
 def clip_id(hit: Dict[str, Any]) -> str:
@@ -95,29 +105,50 @@ def build_native_page(
     seen: set,
     rng: Optional[random.Random] = None,
     known_path: Optional[Path] = None,
+    learner_used: Optional[Set[Tuple[str, ...]]] = None,
+    playable: Optional[Playable] = None,
 ) -> List[Dict[str, Any]]:
-    """원어민 표현 카드 최대 limit장. 빈도에 비례해 섞고, 표현마다 아직 안 본 클립 한 장, 같은 영상은 한 장만."""
+    """원어민 표현 카드 최대 limit장.
+
+    알려 준 표현과 학습자가 자기 통화에서 이미 쓴 표현(learner_used)은 뺀다. 중간 빈도 관용구·구동사를 앞에 두고 같은 단계 안에서는
+    빈도에 비례해 섞는다. 표현마다 아직 안 본 클립 한 장, 같은 영상은 한 장만, 앱 안에서 틀 수 없는 영상(playable)은 내지 않는다.
+    """
     rng = rng or random.Random()
     used = {s.split(":")[0] for s in seen}
     cards: List[Dict[str, Any]] = []
-    for entry in native_expr.weighted_order(native_expr.eligible(entries, known_path), rng):
-        clip = next((c for c in entry["clips"] if clip_id(c) not in seen and c["video_id"] not in used), None)
-        if clip is None:
-            continue
-        used.add(clip["video_id"])
-        card = _card(clip, "native", entry["expression"])
-        card["native"] = {
-            "expression": entry["expression"],
-            "kind": entry["kind"],
-            "meaning_ko": entry["meaning_ko"],
-            "why_hard": entry["why_hard"],
-            "register": entry["register"],
-            "example": entry["example"],
-            "per_million": entry["per_million"],
-        }
-        cards.append(card)
-        if len(cards) >= limit:
-            break
+    pool = native_expr.eligible(entries, known_path)
+    if learner_used:
+        pool = native_expr.unused_by_learner(pool, learner_used)
+    ordered = native_expr.native_order(pool, rng)
+    window = max(1, limit) * OVERFETCH
+    for start in range(0, len(ordered), window):
+        chunk = ordered[start : start + window]
+        ok = playable({c["video_id"] for e in chunk for c in e["clips"]}) if playable else None
+        for entry in chunk:
+            clip = next(
+                (
+                    c
+                    for c in entry["clips"]
+                    if clip_id(c) not in seen and c["video_id"] not in used and (ok is None or c["video_id"] in ok)
+                ),
+                None,
+            )
+            if clip is None:
+                continue
+            used.add(clip["video_id"])
+            card = _card(clip, "native", entry["expression"])
+            card["native"] = {
+                "expression": entry["expression"],
+                "kind": entry["kind"],
+                "meaning_ko": entry["meaning_ko"],
+                "why_hard": entry["why_hard"],
+                "register": entry["register"],
+                "example": entry["example"],
+                "per_million": entry["per_million"],
+            }
+            cards.append(card)
+            if len(cards) >= limit:
+                return cards
     return cards
 
 
@@ -128,37 +159,56 @@ def build_page(
     seen: set,
     db_path: Optional[Path] = None,
     rng: Optional[random.Random] = None,
+    playable: Optional[Playable] = None,
 ) -> List[Dict[str, Any]]:
-    """카드 최대 limit장. 본 장면(seen)과 같은 영상은 다시 내지 않는다."""
+    """카드 최대 limit장. 본 장면(seen)과 같은 영상은 다시 내지 않는다.
+
+    드라마·팟캐스트·직장 채널 장면을 먼저(내 표현 → 무작위), 영어 강의 채널(daily) 장면은 그래도 모자랄 때만(내 표현 → 무작위)
+    채운다. playable이 있으면 앱 안에서 틀 수 없는 영상은 내지 않는다(단계마다 한 번에 묶어 확인).
+    """
     rng = rng or random.Random()
     cards: List[Dict[str, Any]] = []
     used = {s.split(":")[0] for s in seen}
+    picked = rng.sample(terms, min(len(terms), TERMS_PER_PAGE)) if mode == "mine" and terms else []
 
-    if mode == "mine" and terms:
-        picked = rng.sample(terms, min(len(terms), TERMS_PER_PAGE))
+    def mine(tier: str) -> None:
         depth = PER_TERM + 5
-        found = {t: clipdb.search(t, depth, path=db_path) for t in picked}
+        found = {t: clipdb.search(t, depth, path=db_path, tier=tier) for t in picked}
+        flat = [h for hits in found.values() for h in hits]
+        ok = {h["video_id"] for h in _keep(flat, playable)}
         cursor = {term: 0 for term in picked}
         progressed = True
-        while progressed:
+        while progressed and len(cards) < limit:
             progressed = False
             for term in picked:
                 hits = found[term]
                 while cursor[term] < len(hits):
                     hit = hits[cursor[term]]
                     cursor[term] += 1
-                    if clip_id(hit) in seen or hit["video_id"] in used:
+                    if clip_id(hit) in seen or hit["video_id"] in used or hit["video_id"] not in ok:
                         continue
                     used.add(hit["video_id"])
                     cards.append(_card(hit, "mine", term))
                     progressed = True
                     break
                 if len(cards) >= limit:
-                    return cards
+                    return
 
-    for hit in clipdb.random_segments(limit - len(cards), exclude_videos=used, path=db_path, rng=rng):
-        if clip_id(hit) not in seen:
-            cards.append(_card(hit, "browse"))
+    def browse(tier: str) -> None:
+        need = limit - len(cards)
+        want = need * OVERFETCH if playable else need
+        for hit in _keep(clipdb.random_segments(want, exclude_videos=used, path=db_path, rng=rng, tier=tier), playable):
+            if len(cards) >= limit:
+                return
+            if clip_id(hit) not in seen and hit["video_id"] not in used:
+                used.add(hit["video_id"])
+                cards.append(_card(hit, "browse"))
+
+    for tier in (clipdb.TIER_PREFERRED, clipdb.TIER_LECTURE):
+        if picked and len(cards) < limit:
+            mine(tier)
+        if len(cards) < limit:
+            browse(tier)
     return cards[:limit]
 
 
@@ -174,11 +224,12 @@ def _saved_phrases() -> List[str]:
 def _page(mode: str, limit: int, seen: set) -> Dict[str, Any]:
     if mode == "native":
         entries = native_expr.load()
-        return {"available": True, "clips": build_native_page(entries, limit, seen), "terms": 0, "native": len(entries)}
+        clips = build_native_page(entries, limit, seen, learner_used=native_expr.learner_ngrams(), playable=embeds.playable)
+        return {"available": True, "clips": clips, "terms": 0, "native": len(entries)}
     if not clipdb.available():
         return {"available": False, "clips": [], "terms": 0}
     terms = collect_terms(_saved_phrases()) if mode == "mine" else []
-    return {"available": True, "clips": build_page(terms, mode, limit, seen), "terms": len(terms)}
+    return {"available": True, "clips": build_page(terms, mode, limit, seen, playable=embeds.playable), "terms": len(terms)}
 
 
 @router.get("/api/feed")

@@ -2,7 +2,7 @@ import { ChevronDown, ExternalLink, Play, Volume2 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { StarButton } from '../components/StarButton';
 import { WordText } from '../components/WordText';
-import { getFeed, loadSeen, rememberSeen, saveSeen, type FeedClip, type FeedFilter, type NativeInfo } from '../lib/apiFeed';
+import { getFeed, loadSeen, rememberSeen, reportBlockedVideo, saveSeen, type FeedClip, type FeedFilter, type NativeInfo } from '../lib/apiFeed';
 
 type Load = { status: 'loading' | 'ready' | 'off' | 'error'; message?: string };
 
@@ -31,12 +31,15 @@ function embedUrl(clip: FeedClip, sound: boolean): string {
 }
 
 // 활성 카드의 영상. 움직임 줄이기를 켠 사람에게는 누를 때까지 재생하지 않고, 켜 있지 않으면 음소거로 자동 재생한다.
-function Video({ clip, active }: { clip: FeedClip; active: boolean }) {
+function Video({ clip, active, onBlocked }: { clip: FeedClip; active: boolean; onBlocked: () => void }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [started, setStarted] = useState(false);
   const [sound, setSound] = useState(false);
   const [blocked, setBlocked] = useState(false);
   const [replay, setReplay] = useState(0);
+  const blockedHandler = useRef(onBlocked);
+  blockedHandler.current = onBlocked;
+  const reported = useRef(false);
   const auto = active && !reducedMotion();
   const playing = active && (auto || started);
 
@@ -53,7 +56,13 @@ function Video({ clip, active }: { clip: FeedClip; active: boolean }) {
     const onMessage = (e: MessageEvent) => {
       if (!YT_ORIGINS.has(e.origin) || e.source !== frame.current?.contentWindow || typeof e.data !== 'string') return;
       try {
-        if ((JSON.parse(e.data) as { event?: unknown }).event === 'onError') setBlocked(true);
+        if ((JSON.parse(e.data) as { event?: unknown }).event === 'onError') {
+          setBlocked(true);
+          if (!reported.current) {
+            reported.current = true;
+            blockedHandler.current();
+          }
+        }
       } catch {
         // 영상 플레이어가 아닌 메시지는 무시한다.
       }
@@ -187,7 +196,7 @@ function NativePanel({ info }: { info: NativeInfo }) {
   );
 }
 
-function Card({ clip, index, count, active, last, loadingMore, onNext }: { clip: FeedClip; index: number; count: number; active: boolean; last: boolean; loadingMore: boolean; onNext: () => void }) {
+function Card({ clip, index, count, active, last, loadingMore, onNext, onBlocked }: { clip: FeedClip; index: number; count: number; active: boolean; last: boolean; loadingMore: boolean; onNext: () => void; onBlocked: () => void }) {
   const units = clip.term && clip.term.trim().split(/\s+/).length >= 2 ? [{ text: clip.term }] : undefined;
   return (
     <article
@@ -197,7 +206,7 @@ function Card({ clip, index, count, active, last, loadingMore, onNext }: { clip:
       className="relative flex h-full shrink-0 snap-start snap-always flex-col overflow-y-auto bg-ink px-5 pt-[4.75rem] pb-5 text-white"
     >
       <div className="flex min-h-[18rem] flex-1 flex-col justify-center gap-2">
-        <Video clip={clip} active={active} />
+        <Video clip={clip} active={active} onBlocked={onBlocked} />
         <p className="truncate text-sm text-white/70">
           {clip.channel}
           {clip.channel && clip.title ? ' · ' : ''}
@@ -303,6 +312,24 @@ export function Feed() {
     el.scrollTo({ top: next * el.clientHeight, behavior: reducedMotion() ? 'auto' : 'smooth' });
   }, []);
 
+  // 재생 오류가 난 영상은 서버에 알리고(다음부터 빠진다) 다음 카드로 넘긴다. 마지막 카드면 다음 묶음이 오는 대로 넘긴다.
+  const pendingAdvance = useRef<number | null>(null);
+  const onBlocked = useCallback(
+    (clip: FeedClip, at: number) => {
+      void reportBlockedVideo(clip.video_id);
+      if (at + 1 < clipsRef.current.length) goTo(at + 1);
+      else pendingAdvance.current = at;
+    },
+    [goTo],
+  );
+  useEffect(() => {
+    const at = pendingAdvance.current;
+    if (at !== null && clips.length > at + 1) {
+      pendingAdvance.current = null;
+      goTo(at + 1);
+    }
+  }, [clips, goTo]);
+
   const frame = useRef(0);
   const onScroll = () => {
     cancelAnimationFrame(frame.current);
@@ -390,6 +417,7 @@ export function Feed() {
               last={i === clips.length - 1}
               loadingMore={loadingMore}
               onNext={() => goTo(i + 1)}
+              onBlocked={() => onBlocked(clip, i)}
             />
           ))}
         </div>
