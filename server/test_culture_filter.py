@@ -47,7 +47,7 @@ class FilterFoundTest(unittest.TestCase):
 
     def test_notes_about_the_call_topic_stay(self):
         on_topic = bank("performance review", "workplace", "Americans expect direct feedback in a performance review.")
-        found = {"blend": [blend("How do people handle a deadline at work?")], "bank": [on_topic, bank("swimwear", "beach", "Beach clothes.")]}
+        found = {"blend": [blend("How do people handle a performance review at work?")], "bank": [on_topic, bank("swimwear", "beach", "Beach clothes.")]}
 
         out = cf.filter_found(found, WORK_CALL)
 
@@ -75,22 +75,52 @@ class FilterFoundTest(unittest.TestCase):
 
         self.assertEqual(cf.filter_found(found, {"clip_query": "breakfast rice"}), {"blend": [], "bank": []})
 
-    def test_results_are_capped_at_three_blend_and_two_bank_per_country(self):
+    def test_results_are_capped_at_two_blend_and_two_bank_per_country(self):
         found = {
-            "blend": [blend(f"What is a deadline number {n}?", bid=str(n)) for n in range(6)],
-            "bank": [bank("deadline", "work", f"US note {n}", "US") for n in range(4)] + [bank("deadline", "work", f"KR note {n}", "KR") for n in range(4)],
+            "blend": [blend(f"What is a performance review number {n}?", bid=str(n)) for n in range(6)],
+            "bank": [bank("performance review", "work", f"US note {n}", "US") for n in range(4)] + [bank("performance review", "work", f"KR note {n}", "KR") for n in range(4)],
         }
 
-        out = cf.filter_found(found, WORK_CALL)
-
-        self.assertEqual(len(out["blend"]), cf.MAX_BLEND)
-        self.assertEqual([b["country"] for b in out["bank"]], ["US", "US", "KR", "KR"])
+        out = cf.filter_found({"blend": [], "bank": found["bank"]}, WORK_CALL)
+        self.assertEqual(len(out["blend"]), 0)
+        self.assertEqual([b["country"] for b in out["bank"]], ["US", "US"])
+        self.assertEqual(len(cf.filter_found({"blend": found["blend"], "bank": []}, WORK_CALL)["blend"]), cf.MAX_BLEND)
 
     def test_missing_fields_do_not_crash(self):
         out = cf.filter_found({"blend": [{"id": "x"}], "bank": [{"country": "US"}]}, WORK_CALL)
 
         self.assertEqual(out, {"blend": [], "bank": []})
         self.assertEqual(cf.filter_found({}, WORK_CALL), {"blend": [], "bank": []})
+
+
+
+class StrictAnchorTest(unittest.TestCase):
+    OFFICE_CALL = {"topic_keywords": ["office"]}
+
+    def test_a_single_word_anchor_alone_is_not_enough_even_in_the_head(self):
+        notes = [bank("office", "workplace", "Long hours are common at the office."), bank("work hours", "office", "Americans leave on time.")]
+
+        self.assertEqual(cf.filter_found({"blend": [], "bank": notes}, self.OFFICE_CALL)["bank"], [])
+
+    def test_two_different_anchors_pass_and_so_does_a_whole_phrase_anchor(self):
+        two = bank("office hours", "workplace", "Everyone expects a deadline here.")
+        phrase = bank("performance review", "work", "Feedback is direct.")
+
+        self.assertEqual(cf.filter_found({"blend": [], "bank": [two]}, {"topic_keywords": ["office", "deadline"]})["bank"], [two])
+        self.assertEqual(cf.filter_found({"blend": [], "bank": [phrase]}, {"topic_keywords": ["performance review"]})["bank"], [phrase])
+
+    def test_at_most_two_notes_in_total(self):
+        call = {"topic_keywords": ["performance review"]}
+        found = {
+            "blend": [blend(f"What happens in a performance review {n}?", bid=str(n)) for n in range(5)],
+            "bank": [bank("performance review", "work", f"note {n}", "US") for n in range(3)],
+        }
+
+        out = cf.filter_found(found, call)
+
+        self.assertEqual((len(out["blend"]), len(out["bank"])), (2, 0))
+        out = cf.filter_found({"blend": [blend("What happens in a performance review?")], "bank": found["bank"]}, call)
+        self.assertEqual((len(out["blend"]), len(out["bank"])), (1, 1))
 
 
 if __name__ == "__main__":

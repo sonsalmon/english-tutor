@@ -11,6 +11,7 @@ import { CallButton, QuietButton, Screen } from '../components/ui';
 import { getCall, requestTutoring, TutoringError, type CallDetail, type Tutoring } from '../lib/api';
 import type { Retry } from '../lib/instructions';
 import { latencyText, summarizeLatency } from '../lib/latency';
+import { useFinishReview } from '../lib/review';
 import { go } from '../lib/router';
 import { callTitle, setupPartner, type FinishedCall } from '../lib/setup';
 
@@ -92,6 +93,7 @@ export function Summary({ call, onRetry, onHome }: { call: FinishedCall; onRetry
   const [tutoring, setTutoring] = useState<Tutoring | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [stem, setStem] = useState<string | null>(null);
+  useFinishReview(stem);
   // 측정값은 분석 요청 본문에 실어 서버가 저장한다. 화면 표시는 이 통화의 값만 쓴다.
   const latencyLine = useMemo(() => (call.latency ? latencyText(summarizeLatency(call.latency)) : null), [call]);
   const isTeachback = call.setup.kind === 'teachback';

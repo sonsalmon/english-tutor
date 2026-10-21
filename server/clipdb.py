@@ -12,7 +12,7 @@ import random
 import re
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from server.native_expr import lemma_tokens
 
@@ -324,6 +324,33 @@ def random_segments(
         logger.warning("clipdb random failed: %s", e)
         return []
     return hits
+
+
+def video_genres(video_ids: Iterable[str], path: Optional[Path] = None) -> Dict[str, Optional[str]]:
+    """영상 id마다 채널 장르(모르면 None). DB가 없거나 읽지 못하면 빈 딕셔너리(호출한 쪽은 장르를 모르는 것으로 본다)."""
+    ids = list(dict.fromkeys(v for v in video_ids if isinstance(v, str) and v))
+    p = Path(path) if path else db_path()
+    if not ids or not p.is_file():
+        return {}
+    out: Dict[str, Optional[str]] = {}
+    try:
+        conn = _open_ro(p)
+        try:
+            for start in range(0, len(ids), 500):
+                chunk = ids[start : start + 500]
+                rows = conn.execute(
+                    "SELECT v.id AS id, c.genre AS genre FROM videos v "
+                    "LEFT JOIN channels c ON c.handle = v.channel_handle "
+                    f"WHERE v.id IN ({','.join('?' * len(chunk))})",
+                    chunk,
+                ).fetchall()
+                out.update({r["id"]: r["genre"] for r in rows})
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        logger.warning("clipdb genres failed: %s", e)
+        return {}
+    return out
 
 
 def _fts_phrase(phrase: str) -> str:

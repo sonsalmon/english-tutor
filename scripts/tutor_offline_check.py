@@ -30,7 +30,7 @@ from server.tutor import (  # noqa: E402
 )
 
 _EMPTY_JSON = (
-    '{"corrections": [], "good": [], "vocab": [], "pragmatics": [], '
+    '{"corrections": [], "good": [], "vocab": [], "us_style": [], '
     '"retry": {"goal": "", "target_phrases": []}}'
 )
 _FAKE_JSON = json.dumps(
@@ -38,7 +38,7 @@ _FAKE_JSON = json.dumps(
         "corrections": [{"said": "I am agree", "better": "I agree", "why": "be동사 불필요"}],
         "good": [{"said": "I'll circle back.", "note": "자연스러움"}],
         "vocab": [{"word": "circle back", "meaning_ko": "재논의", "example": "Let's circle back.", "etymology": ""}],
-        "pragmatics": [{"pattern": "Bottom line first", "note": "결론 먼저"}],
+        "us_style": [{"said": "hi", "korean_way": "k", "natural": "Hey, what's up?", "why": "w"}],
         "retry": {"goal": "Lead with your bottom line.", "target_phrases": ["Here's the bottom line"]},
     }
 )
@@ -133,6 +133,7 @@ def check_save_status() -> None:
         try:
             data, saved = run_tutoring(transcript, generate_text=lambda _p: _FAKE_JSON)
             assert saved is True, saved
+            assert data["us_style"] and data["us_style"][0]["natural"] == "Hey, what's up?", data["us_style"]
             saved_file = tutoring / "2026-10-12-120000.json"
             assert saved_file.is_file(), saved_file
             assert json.loads(saved_file.read_text(encoding="utf-8")) == data

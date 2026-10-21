@@ -12,6 +12,7 @@ import { WordText } from '../components/WordText';
 import { formatUsdShort, getCall, getCalls, type CallDetail, type CallSummary, type CallTotals } from '../lib/api';
 import { formatDuration, formatWhen } from '../lib/callFormat';
 import { latencyText } from '../lib/latency';
+import { useFinishReview } from '../lib/review';
 import { PARK_ID, isPark, partnerById } from '../lib/partners';
 import { go } from '../lib/router';
 
@@ -170,6 +171,8 @@ function DetailTabs({ value, onChange }: { value: DetailTab; onChange: (tab: Det
 
 function CallDetailBody({ data, stem }: { data: CallDetail; stem: string }) {
   const [tab, setTab] = useState<DetailTab>('summary');
+  // 탭을 옮겨도 화면이 열려 있는 동안은 검토가 끝난 것이 아니다(요약 탭의 블록이 언마운트되어도 유지).
+  useFinishReview(stem);
   const latency = latencyText(data.call.latency);
   const partner = partnerById(data.call.partner);
   const hasTranscript = data.transcript.length > 0 || !!data.verbatim;

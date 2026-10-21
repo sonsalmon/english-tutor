@@ -249,5 +249,69 @@ class FeedGenreAndEmbedTest(unittest.TestCase):
         self.assertEqual([c["video_id"] for c in page["clips"]], ["show-001-v"])
 
 
+
+class NativeLectureSceneTest(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        root = Path(self._tmp.name)
+        self.db = root / "captions.db"
+        self.conn = clipdb.connect(self.db)
+        self.addCleanup(self.conn.close)
+        clipdb.upsert_channel(self.conn, "@show", "Show", "tv")
+        clipdb.upsert_channel(self.conn, "@lec", "Lecture", "daily")
+        for vid, handle in (("show-000-v", "@show"), ("lect-000-v", "@lec")):
+            clipdb.save_video(
+                self.conn,
+                {"id": vid, "channel_handle": handle, "title": vid, "published": "2026-01-01T00:00:00Z", "duration_sec": 60},
+                "ok",
+                "auto",
+                [{"start": 1.0, "end": 4.0, "text": "some line"}],
+                "2026-10-20T00:00:00+00:00",
+            )
+
+    def entry(self, expression, *video_ids):
+        return native_entry(expression, video_ids)
+
+    def test_video_genres_reads_the_channel_genre_and_skips_unknown_videos(self):
+        got = clipdb.video_genres(["show-000-v", "lect-000-v", "nope-000-v"], self.db)
+
+        self.assertEqual(got, {"show-000-v": "tv", "lect-000-v": "daily"})
+        self.assertEqual(clipdb.video_genres([], self.db), {})
+        self.assertEqual(clipdb.video_genres(["x"], self.db.with_name("missing.db")), {})
+
+    def test_native_cards_never_use_a_lecture_channel_scene(self):
+        genres = lambda ids: clipdb.video_genres(ids, self.db)
+        both = self.entry("give back", "lect-000-v", "show-000-v")
+        only_lecture = self.entry("turn out", "lect-000-v")
+
+        cards = feed.build_native_page([both, only_lecture], 5, set(), rng=random.Random(1), genres=genres)
+
+        self.assertEqual([(c["term"], c["video_id"]) for c in cards], [("give back", "show-000-v")])
+
+    def test_without_a_genre_lookup_nothing_is_filtered(self):
+        cards = feed.build_native_page([self.entry("turn out", "lect-000-v")], 5, set(), rng=random.Random(1))
+
+        self.assertEqual([c["video_id"] for c in cards], ["lect-000-v"])
+
+
+def native_entry(expression, video_ids):
+    from server import native_expr
+
+    return native_expr.clean_entry(
+        {
+            "expression": expression,
+            "kind": "phrasal_verb",
+            "meaning_ko": "\ub73b",
+            "why_hard": "x",
+            "register": "casual",
+            "example": "e",
+            "per_million": 20,
+            "count": 5,
+            "clips": [{"video_id": v, "start": 1.0, "end": 4.0, "text": f"so {expression} now", "title": v, "channel": "c"} for v in video_ids],
+        }
+    )
+
+
 if __name__ == "__main__":
     unittest.main()

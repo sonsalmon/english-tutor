@@ -288,11 +288,12 @@ def _spoken_words(transcript: str) -> set:
     return {w for line in _SPOKEN_LINE_RE.findall(transcript) for w in _long_words(line)}
 
 
-def normalize_friend_message(value: Any, transcript: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def normalize_friend_message(value: Any, transcript: Optional[str] = None, *, verbatim: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """friend_message 정리: 길이 상한, 빈 항목 제외, 최대 5개. 쓸 만한 phrase가 하나도 없으면 None.
 
     transcript가 있으면 phrase의 3글자 이상 단어 중 절반 미만이 전문(Me·Partner 줄)에 나오면 지어낸 표현으로 보고 버린다.
-    note는 확인하지 않는다."""
+    학습자가 이번 통화에서 직접 말한 표현(Me 줄·받아쓰기 원문)도 버린다. note는 확인하지 않는다."""
+    lines = _learner_line_tokens(transcript, verbatim) if transcript is not None else None
     if not isinstance(value, dict):
         return None
     spoken = _spoken_words(transcript) if transcript is not None else None
@@ -308,6 +309,8 @@ def normalize_friend_message(value: Any, transcript: Optional[str] = None) -> Op
             words = _long_words(phrase)
             if sum(w in spoken for w in words) * 2 < len(words):
                 continue
+        if lines is not None and _used_by_learner(phrase, lines):
+            continue
         phrases.append({"phrase": phrase, "note": _capped(item.get("note"), MAX_FRIEND_NOTE)})
         if len(phrases) >= MAX_FRIEND_PHRASES:
             break
@@ -337,6 +340,30 @@ def _overlap(words: List[str], line: set) -> float:
     return sum(w in line for w in words) / len(words) if words else 0.0
 
 
+def _used_by_learner(text: str, lines: List[set]) -> bool:
+    """표현의 낱말(3글자 이상)이 전부 학습자가 말한 한 줄 안에 들어 있으면 이미 쓴 표현이다(단어 하나라도 새로 고친 표현은 남긴다)."""
+    words = _long_words(text) or _tokens(text)
+    return bool(words) and any(_overlap(words, line) >= 1.0 for line in lines)
+
+
+def _content_words(text: str) -> set:
+    """축약(’s·’m 등)과 3글자 미만 낱말을 떼고 남은 낱말 집합(“It’s so tiring”과 “It is so tiring”이 같게 나온다)."""
+    return {w for w in (t.split("'")[0] for t in _tokens(text)) if len(w) >= 3}
+
+
+def _repeats_correction(row: Dict[str, str], corrections: List[Dict[str, str]]) -> bool:
+    """단순 문법 실수는 고쳐 말하기 몰이다: said가 교정의 said와 겹치거나 natural이 교정의 better와 사실상 같으면 True."""
+    said_words = _tokens(row["said"])
+    natural = _content_words(row["natural"])
+    for c in corrections:
+        if said_words and _overlap(said_words, set(_tokens(c.get("said", "")))) >= US_SAID_OVERLAP:
+            return True
+        better = _content_words(c.get("better", ""))
+        if natural and natural == better:
+            return True
+    return False
+
+
 def normalize_us_style(
     value: Any,
     transcript: Optional[str] = None,
@@ -344,17 +371,20 @@ def normalize_us_style(
     verbatim: Optional[str] = None,
     known: Iterable[str] = (),
     gap_english: Iterable[str] = (),
+    corrections: Iterable[Dict[str, str]] = (),
 ) -> List[Dict[str, str]]:
     """us_style 정리: 모델이 지어내거나 학습자가 이미 한 말을 가르치는 항목을 버린다(최대 3개).
 
     transcript가 있으면 (1) said가 전문·받아쓰기의 한 줄과 70% 이상 겹치지 않으면, (2) natural의 낙말이 한 줄 안에
     80% 이상 있으면 버린다. known에 있는 표현이거나 thinking_gaps의 english와 같은 natural도 버린다(thinking_gaps 우선).
+    corrections와 같은 말을 다루는 항목(said 겹침, natural≈better)도 버린다(단순 문법 실수는 고쳐 말하기 몰).
     """
     if not isinstance(value, list):
         return []
     lines = _learner_line_tokens(transcript, verbatim) if transcript is not None else None
     known_keys = known_store.keys_of(known)
     gap_keys = known_store.keys_of(gap_english)
+    corrections = list(corrections)
     rows: List[Dict[str, str]] = []
     seen: set = set()
     for item in value:
@@ -370,6 +400,8 @@ def normalize_us_style(
         if not (row["said"] and row["natural"] and row["why"] and key) or len(key.split()) > MAX_US_NATURAL_WORDS:
             continue
         if key in seen or key in gap_keys or known_store.is_known(row["natural"], known_keys):
+            continue
+        if _repeats_correction(row, corrections):
             continue
         if lines is not None:
             said_words = _tokens(row["said"])
@@ -413,11 +445,16 @@ def normalize_tutor_json(
     ][:MAX_PHRASES]
 
     thinking_gaps = normalize_thinking_gaps(data.get("thinking_gaps"))
+    corrections = _drop_known(_rows(data, "corrections", ["said", "better", "why"], MAX_CORRECTIONS), "better", known_keys)
+    vocab = _drop_known(_rows(data, "vocab", ["word", "meaning_ko", "example", "etymology"], MAX_VOCAB), "word", known_keys)
+    if transcript is not None:
+        lines = _learner_line_tokens(transcript, verbatim)
+        vocab = [r for r in vocab if not _used_by_learner(r["word"], lines)]
     return {
         "clip_query": normalize_clip_query(_clean_str(data.get("clip_query"))),
-        "corrections": _drop_known(_rows(data, "corrections", ["said", "better", "why"], MAX_CORRECTIONS), "better", known_keys),
+        "corrections": corrections,
         "good": _rows(data, "good", ["said", "note"], MAX_GOOD),
-        "vocab": _drop_known(_rows(data, "vocab", ["word", "meaning_ko", "example", "etymology"], MAX_VOCAB), "word", known_keys),
+        "vocab": vocab,
         "pragmatics": [],
         "us_style": normalize_us_style(
             data.get("us_style"),
@@ -425,10 +462,11 @@ def normalize_tutor_json(
             verbatim=verbatim,
             known=known,
             gap_english=[g["english"] for g in thinking_gaps],
+            corrections=corrections,
         ),
         "thinking_gaps": thinking_gaps,
         "topic_keywords": normalize_topic_keywords(data.get("topic_keywords")),
-        "friend_message": normalize_friend_message(data.get("friend_message"), transcript),
+        "friend_message": normalize_friend_message(data.get("friend_message"), transcript, verbatim=verbatim),
         "retry": {
             "goal": _clean_str(retry_raw.get("goal")),
             "target_phrases": phrases,

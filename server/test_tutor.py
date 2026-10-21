@@ -84,7 +84,8 @@ class FriendMessageTest(unittest.TestCase):
     def test_phrase_not_in_transcript_is_dropped(self):
         raw = fm([fphrase("quantum entanglement is spooky"), fphrase("went to the farmers market"), fphrase("buy fresh tomatoes")])
         out = tutor.normalize_friend_message(raw, self.TRANSCRIPT)
-        self.assertEqual([p["phrase"] for p in out["phrases"]], ["went to the farmers market", "buy fresh tomatoes"])
+        # "buy fresh tomatoes"는 학습자가 그대로 말한 표현이라 빠진다.
+        self.assertEqual([p["phrase"] for p in out["phrases"]], ["went to the farmers market"])
 
     def test_natural_fix_built_from_transcript_words_stays(self):
         raw = fm([fphrase("I bought fresh tomatoes at the farmers market")])  # bought는 전문에 없지만 나머지 단어가 있다
@@ -99,11 +100,11 @@ class FriendMessageTest(unittest.TestCase):
         self.assertIsNone(tutor.normalize_friend_message(fm([fphrase("priya partner call")]), self.TRANSCRIPT))
 
     def test_normalize_tutor_json_and_analyze_pass_the_transcript(self):
-        raw = {"corrections": [{"said": "a", "better": "b", "why": "c"}], "friend_message": fm([fphrase("space shuttle launch"), fphrase("farmers market")])}
+        raw = {"corrections": [{"said": "a", "better": "b", "why": "c"}], "friend_message": fm([fphrase("space shuttle launch"), fphrase("that sounds fun")])}
         out = tutor.normalize_tutor_json(raw, self.TRANSCRIPT)
-        self.assertEqual([p["phrase"] for p in out["friend_message"]["phrases"]], ["farmers market"])
+        self.assertEqual([p["phrase"] for p in out["friend_message"]["phrases"]], ["that sounds fun"])
         got = tutor.analyze_transcript(self.TRANSCRIPT, generate_text=lambda _p: json.dumps(raw))
-        self.assertEqual([p["phrase"] for p in got["friend_message"]["phrases"]], ["farmers market"])
+        self.assertEqual([p["phrase"] for p in got["friend_message"]["phrases"]], ["that sounds fun"])
 
     def test_profile_update_prompt_excludes_friend_message(self):
         tutoring = {"corrections": [{"said": "x", "better": "y", "why": "z"}], "friend_message": fm([fphrase("zebra crossing")])}
@@ -141,7 +142,7 @@ class FriendMessageTest(unittest.TestCase):
 
     def test_analyze_transcript_returns_friend_message(self):
         reply = json.dumps({"good": [{"said": "a", "note": "b"}], "friend_message": fm([fphrase("cutting board")])})
-        out = tutor.analyze_transcript("**Me:** I bought a cutting board", generate_text=lambda _p: reply)
+        out = tutor.analyze_transcript("**Me:** I bought it\n**Partner:** A cutting board, nice!", generate_text=lambda _p: reply)
         self.assertEqual(out["friend_message"]["phrases"][0]["phrase"], "cutting board")
         reply_without = json.dumps({"good": [{"said": "a", "note": "b"}]})
         self.assertIsNone(tutor.analyze_transcript("**Me:** hi", generate_text=lambda _p: reply_without)["friend_message"])
@@ -351,6 +352,87 @@ class CultureTermsTest(unittest.TestCase):
         self.assertIn("'I'm swamped'", line)
         self.assertIn("cutting board", line)
         self.assertFalse(any("\uac00" <= ch <= "\ud7a3" for ch in line))
+
+
+
+class LearnerAlreadySaidTest(unittest.TestCase):
+    TRANSCRIPT = (
+        "# Call\n\n"
+        "**Me:** I am working in office everyday. It is so tired.\n"
+        "**Partner:** Oh man, that sounds rough.\n"
+        "**Me:** I have to wake up early tomorrow so let's call it a day.\n"
+        "**Partner:** Sounds good! Time to hit the sack. Talk later!\n"
+    )
+
+    def test_us_style_that_repeats_a_correction_is_left_to_the_correction(self):
+        raw = {
+            "corrections": [{"said": "It is so tired.", "better": "It is so tiring.", "why": "-ing"}],
+            "us_style": [us("It is so tired.", "It's so tiring.")],
+        }
+
+        out = tutor.normalize_tutor_json(raw, self.TRANSCRIPT)
+
+        self.assertEqual([c["better"] for c in out["corrections"]], ["It is so tiring."])
+        self.assertEqual([r["natural"] for r in out["us_style"]], [])
+
+    def test_us_style_about_other_words_stays_next_to_a_correction(self):
+        raw = {
+            "corrections": [{"said": "It is so tired.", "better": "It is so tiring.", "why": "-ing"}],
+            "us_style": [us("I am working in office everyday", "I work at an office")],
+        }
+
+        out = tutor.normalize_tutor_json(raw, self.TRANSCRIPT)
+
+        self.assertEqual([r["natural"] for r in out["us_style"]], ["I work at an office"])
+
+    def test_same_natural_as_a_correction_is_dropped_even_with_a_different_said(self):
+        rows = tutor.normalize_us_style(
+            [us("I am working in office everyday", "It's so tiring")],
+            self.TRANSCRIPT,
+            corrections=[{"said": "something else", "better": "It is so tiring.", "why": "w"}],
+        )
+
+        self.assertEqual(rows, [])
+
+    def test_vocab_the_learner_already_said_is_dropped(self):
+        raw = {
+            "corrections": [{"said": "a", "better": "b", "why": "c"}],
+            "vocab": [
+                {"word": "call it a day", "meaning_ko": "m", "example": "e", "etymology": ""},
+                {"word": "hit the sack", "meaning_ko": "m", "example": "e", "etymology": ""},
+            ],
+        }
+
+        out = tutor.normalize_tutor_json(raw, self.TRANSCRIPT)
+
+        self.assertEqual([v["word"] for v in out["vocab"]], ["hit the sack"])
+
+    def test_vocab_said_only_in_the_raw_verbatim_is_dropped_too(self):
+        transcript = "**Me:** Okay.\n**Partner:** See you.\n"
+        raw = {"corrections": [{"said": "a", "better": "b", "why": "c"}], "vocab": [{"word": "call it a day", "meaning_ko": "m", "example": "e", "etymology": ""}]}
+
+        self.assertEqual(len(tutor.normalize_tutor_json(raw, transcript)["vocab"]), 1)
+        self.assertEqual(tutor.normalize_tutor_json(raw, transcript, verbatim="um let's call it a day")["vocab"], [])
+
+    def test_friend_message_phrases_the_learner_said_are_dropped(self):
+        value = fm([fphrase("call it a day"), fphrase("hit the sack")])
+
+        out = tutor.normalize_friend_message(value, self.TRANSCRIPT)
+
+        self.assertEqual([p["phrase"] for p in out["phrases"]], ["hit the sack"])
+        self.assertIsNone(tutor.normalize_friend_message(fm([fphrase("call it a day")]), self.TRANSCRIPT))
+
+    def test_a_phrase_the_learner_only_partly_said_is_kept(self):
+        raw = {"corrections": [{"said": "a", "better": "b", "why": "c"}], "vocab": [{"word": "wake up early", "meaning_ko": "m", "example": "e", "etymology": ""}, {"word": "sleep in late", "meaning_ko": "m", "example": "e", "etymology": ""}]}
+
+        out = tutor.normalize_tutor_json(raw, self.TRANSCRIPT)
+
+        self.assertEqual([v["word"] for v in out["vocab"]], ["sleep in late"])
+
+    def test_without_a_transcript_nothing_is_dropped_for_being_said(self):
+        raw = {"corrections": [{"said": "a", "better": "b", "why": "c"}], "vocab": [{"word": "call it a day", "meaning_ko": "m", "example": "e", "etymology": ""}]}
+
+        self.assertEqual(len(tutor.normalize_tutor_json(raw)["vocab"]), 1)
 
 
 if __name__ == "__main__":

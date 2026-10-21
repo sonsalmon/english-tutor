@@ -93,19 +93,23 @@ def playable(ids: Iterable[str]) -> Set[str]:
     path = cache_path()
     with _LOCK:
         videos = _load(path)
-        unknown = [i for i in wanted if i not in videos]
-        key = youtube.api_key() if unknown else None
-        if unknown and key:
-            fresh: Dict[str, bool] = {}
-            for start in range(0, len(unknown), BATCH):
-                got = _fetch_batch(unknown[start : start + BATCH], key)
-                if got is None:
-                    break
-                fresh.update(got)
-            if fresh:
-                stamp = _now()
+    unknown = [i for i in wanted if i not in videos]
+    key = youtube.api_key() if unknown else None
+    if unknown and key:
+        # 네트워크 호출은 잠금 밖에서 한다(다른 요청과 mark_blocked가 기다리지 않게).
+        fresh: Dict[str, bool] = {}
+        for start in range(0, len(unknown), BATCH):
+            got = _fetch_batch(unknown[start : start + BATCH], key)
+            if got is None:
+                break
+            fresh.update(got)
+        if fresh:
+            stamp = _now()
+            with _LOCK:
+                # 다시 읽어 그사이에 적힌 항목(예: mark_blocked)은 덮어쓰지 않는다.
+                videos = _load(path)
                 for vid, ok in fresh.items():
-                    videos[vid] = {"embeddable": ok, "checked": stamp, "source": "api"}
+                    videos.setdefault(vid, {"embeddable": ok, "checked": stamp, "source": "api"})
                 try:
                     _save(path, videos)
                 except OSError as e:

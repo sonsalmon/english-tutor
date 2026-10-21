@@ -1,6 +1,5 @@
 import { useMemo, type ReactNode } from 'react';
 import { formatUsd, type Cost, type Tutoring } from '../lib/api';
-import { useFinishReview } from '../lib/review';
 import { isSingleWord, wordCount, type Unit } from '../lib/units';
 import { PronounceButton } from './PronounceButton';
 import { ReviewButtons, dimmed, useCards, useReview } from './ReviewButtons';
@@ -47,7 +46,6 @@ export function TutoringBlocks({ tutoring, isTeachback, stem }: { tutoring: Tuto
   const retry = tutoring.retry;
   const cards = useCards(tutoring);
   const review = useReview(stem);
-  useFinishReview(stem);
   const usStyle = tutoring.us_style ?? [];
   const units = useMemo<Unit[]>(
     () => tutoring.vocab.filter((v) => wordCount(v.word) >= 2).map((v) => ({ text: v.word, gloss: v.meaning_ko })),

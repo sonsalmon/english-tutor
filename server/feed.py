@@ -107,8 +107,10 @@ def build_native_page(
     known_path: Optional[Path] = None,
     learner_used: Optional[Set[Tuple[str, ...]]] = None,
     playable: Optional[Playable] = None,
+    genres: Optional[Callable[[Iterable[str]], Dict[str, Optional[str]]]] = None,
 ) -> List[Dict[str, Any]]:
-    """원어민 표현 카드 최대 limit장.
+    """원어민 표현 카드 최대 limit장. 영어 강의 채널(daily) 장면은 쓰지 않는다(genres로 장르를 알 때).
+
 
     알려 준 표현과 학습자가 자기 통화에서 이미 쓴 표현(learner_used)은 뺀다. 중간 빈도 관용구·구동사를 앞에 두고 같은 단계 안에서는
     빈도에 비례해 섞는다. 표현마다 아직 안 본 클립 한 장, 같은 영상은 한 장만, 앱 안에서 틀 수 없는 영상(playable)은 내지 않는다.
@@ -123,13 +125,18 @@ def build_native_page(
     window = max(1, limit) * OVERFETCH
     for start in range(0, len(ordered), window):
         chunk = ordered[start : start + window]
-        ok = playable({c["video_id"] for e in chunk for c in e["clips"]}) if playable else None
+        ids = {c["video_id"] for e in chunk for c in e["clips"]}
+        ok = playable(ids) if playable else None
+        lecture = {v for v, g in genres(ids).items() if g == clipdb.LECTURE_GENRE} if genres else set()
         for entry in chunk:
             clip = next(
                 (
                     c
                     for c in entry["clips"]
-                    if clip_id(c) not in seen and c["video_id"] not in used and (ok is None or c["video_id"] in ok)
+                    if clip_id(c) not in seen
+                    and c["video_id"] not in used
+                    and c["video_id"] not in lecture
+                    and (ok is None or c["video_id"] in ok)
                 ),
                 None,
             )
@@ -224,7 +231,7 @@ def _saved_phrases() -> List[str]:
 def _page(mode: str, limit: int, seen: set) -> Dict[str, Any]:
     if mode == "native":
         entries = native_expr.load()
-        clips = build_native_page(entries, limit, seen, learner_used=native_expr.learner_ngrams(), playable=embeds.playable)
+        clips = build_native_page(entries, limit, seen, learner_used=native_expr.learner_ngrams(), playable=embeds.playable, genres=clipdb.video_genres)
         return {"available": True, "clips": clips, "terms": 0, "native": len(entries)}
     if not clipdb.available():
         return {"available": False, "clips": [], "terms": 0}

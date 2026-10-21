@@ -9,8 +9,9 @@ from typing import Any, Dict, FrozenSet, List
 
 from server.tutor import GENERIC_TOPIC_WORDS
 
-MAX_BLEND = 3
+MAX_BLEND = 2
 MAX_BANK_PER_COUNTRY = 2
+MAX_NOTES = 2
 _MIN_STEM = 3
 
 
@@ -51,14 +52,14 @@ def is_relevant(terms: List[FrozenSet[str]], head: str, body: str = "") -> bool:
     """항목이 통화 주제와 강하게 맞는지.
 
     head(질문·분류·상황)와 body(본문)에 어간이 모두 들어 있는 기준어가 있어야 하고, 그중 낱말 둘 이상짜리 기준어가
-    있거나, 낱말 하나짜리 기준어가 head에 있거나, 서로 다른 기준어가 둘 이상 맞으면 통과한다.
+    전부 맞거나(구 기준어 전체 일치), 서로 다른 기준어가 둘 이상 맞아야 통과한다. 낱말 하나짜리 기준어 하나만 맞는 항목은 버린다.
     """
     head_stems = stems_of(head)
     all_stems = head_stems | stems_of(body)
     matched = [t for t in terms if t <= all_stems]
     if not matched:
         return False
-    return any(len(t) >= 2 for t in matched) or any(t <= head_stems for t in matched) or len(matched) >= 2
+    return any(len(t) >= 2 for t in matched) or len(matched) >= 2
 
 
 def filter_found(found: Dict[str, List[Dict[str, Any]]], tutoring: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
@@ -76,4 +77,5 @@ def filter_found(found: Dict[str, List[Dict[str, Any]]], tutoring: Dict[str, Any
             continue
         per_country[country] = per_country.get(country, 0) + 1
         bank.append(b)
-    return {"blend": blend, "bank": bank}
+    blend = blend[:MAX_NOTES]
+    return {"blend": blend, "bank": bank[: MAX_NOTES - len(blend)]}

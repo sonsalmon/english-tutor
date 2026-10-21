@@ -1,6 +1,6 @@
 // 앱 껍데기만 캐시한다. /api/* 는 절대 캐시하지 않는다(통화·채팅·기록은 항상 서버 최신값).
 // 배포로 캐시 구조가 바뀌면 CACHE 이름만 올린다. 활성화될 때 다른 이름의 캐시는 모두 지운다.
-const CACHE = 'english-friends-v2';
+const CACHE = 'english-friends-v3';
 
 const PRECACHE = [
   '/',
@@ -11,6 +11,7 @@ const PRECACHE = [
   '/icons/icon-512.png',
   '/icons/apple-touch-icon.png',
   '/ms-park.webp',
+  '/partners/brian.webp',
   '/partners/carmen.webp',
   '/partners/chloe.webp',
   '/partners/jake.webp',

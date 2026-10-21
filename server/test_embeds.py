@@ -159,5 +159,46 @@ class EmbedsTest(unittest.TestCase):
         self.assertEqual(len(api.urls), 1)
 
 
+
+class EmbedsLockTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.cache = Path(tmp.name) / "embed.json"
+        env = mock.patch.dict(os.environ, {"EMBED_CACHE_PATH": str(self.cache), "YOUTUBE_API_KEY": KEY})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def test_the_lock_is_free_while_the_network_call_runs(self):
+        seen = []
+        inner = Api()
+
+        def http(url):
+            free = embeds._LOCK.acquire(blocking=False)
+            if free:
+                embeds._LOCK.release()
+            seen.append(free)
+            return inner(url)
+
+        with mock.patch.object(embeds, "_http_get", http):
+            embeds.playable([vid(1), vid(2)])
+
+        self.assertEqual(seen, [True])
+
+    def test_a_video_blocked_by_the_player_during_the_check_stays_blocked(self):
+        inner = Api()
+
+        def http(url):
+            embeds.mark_blocked(vid(2))
+            return inner(url)
+
+        with mock.patch.object(embeds, "_http_get", http):
+            got = embeds.playable([vid(1), vid(2)])
+
+        self.assertEqual(got, {vid(1)})
+        with mock.patch.object(embeds, "_http_get", Api()):
+            self.assertEqual(embeds.playable([vid(1), vid(2)]), {vid(1)})
+
+
 if __name__ == "__main__":
     unittest.main()

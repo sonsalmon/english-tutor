@@ -1,5 +1,5 @@
 import { Briefcase, ChevronLeft, ChevronRight, GraduationCap, MessageCircle, MessageSquareText, Phone } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Avatar } from '../components/Avatar';
 import { FriendMemory, type MemoryState } from '../components/FriendMemory';
 import { PeopleList, TwoPane } from '../components/PeopleList';
@@ -29,18 +29,22 @@ function weakText(w: PronWeak): string {
   return parts.join(', ');
 }
 
-// 사람 페이지를 처음 3번 열 때만 스와이프 안내를 보인다.
+// 사람 페이지를 폰 화면에서 처음 3번 열 때만 스와이프 안내를 보인다. 데스크톱(lg 이상)에서는 안내가 숨겨지므로 횟수를 세지 않는다.
 function SwipeHint() {
-  const [show] = useState(() => {
+  const [show, setShow] = useState(false);
+  const counted = useRef(false);
+  useEffect(() => {
+    if (counted.current || !window.matchMedia('(max-width: 1023px)').matches) return;
+    counted.current = true;
     try {
       const seen = Number(window.localStorage.getItem(SWIPE_HINT_KEY)) || 0;
-      if (seen >= SWIPE_HINT_MAX) return false;
+      if (seen >= SWIPE_HINT_MAX) return;
       window.localStorage.setItem(SWIPE_HINT_KEY, String(seen + 1));
-      return true;
+      setShow(true);
     } catch {
-      return false;
+      // 저장소를 못 쓰면 안내를 보이지 않는다.
     }
-  });
+  }, []);
   if (!show) return null;
   return <p className="mt-3 text-center text-sm text-ink-soft lg:hidden">오른쪽으로 밀면 채팅이 열려요</p>;
 }
@@ -237,7 +241,7 @@ export function PersonView({
   return (
     <div
       data-person={partner.id}
-      className="min-h-[60dvh]"
+      className="min-h-[60dvh] flex-1 lg:flex-none"
       {...(park ? {} : swipe.handlers)}
       style={park ? undefined : swipe.style}
     >

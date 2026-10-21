@@ -645,10 +645,10 @@ class CultureEndpointTest(unittest.TestCase):
         tutoring = {
             "clip_query": "the coffee at a cafe",
             "vocab": [{"word": "latte"}, {"word": "coffee"}],
-            "thinking_gaps": [{"korean": "a", "english": "coffee"}],
+            "thinking_gaps": [{"korean": "a", "english": "coffee"}, {"korean": "b", "english": "cafe"}],
         }
         hits = {
-            "blend": [{"id": "b", "question": "What coffee do people drink?", "korea": [], "us": []}],
+            "blend": [{"id": "b", "question": "What coffee do people drink at a cafe?", "korea": [], "us": []}],
             "bank": [{"country": "US", "topic": "coffee", "context": "cafe", "text": "x"}],
         }
         res, s = self.get(tutoring, search=hits)

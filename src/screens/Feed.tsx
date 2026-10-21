@@ -244,6 +244,7 @@ export function Feed() {
   const [more, setMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [terms, setTerms] = useState(0);
+  const [nativeCount, setNativeCount] = useState(0);
   const [index, setIndex] = useState(0);
   const scroller = useRef<HTMLDivElement>(null);
   const clipsRef = useRef<FeedClip[]>([]);
@@ -270,6 +271,7 @@ export function Feed() {
         clipsRef.current = [...clipsRef.current, ...fresh];
         setClips(clipsRef.current);
         setTerms(page.terms);
+        setNativeCount(page.native);
         setMore(fresh.length > 0);
         setLoad({ status: 'ready' });
       } catch (e) {
@@ -363,6 +365,15 @@ export function Feed() {
     </button>
   );
 
+  // 보여 드릴 새 클립이 없는 이유가 '이미 다 봤어요'인지(목록은 있음) 확인해, 다 봤을 때만 처음부터 다시 보기를 보인다.
+  const exhausted = load.status === 'ready' && clips.length === 0 && (filter !== 'native' || nativeCount > 0);
+  const resetSeen = () => {
+    seen.current = [];
+    saveSeen([]);
+    setLoad({ status: 'loading' });
+    void fetchPage(false);
+  };
+
   const message =
     load.status === 'loading'
       ? '클립을 찾는 중이에요.'
@@ -371,9 +382,9 @@ export function Feed() {
         : load.status === 'error'
           ? load.message
           : clips.length === 0
-            ? filter === 'native'
+            ? filter === 'native' && nativeCount === 0
               ? '원어민 표현 목록이 아직 없어요.'
-              : '보여 드릴 클립이 없어요.'
+              : '새로 보여 드릴 클립이 더 없어요.'
             : null;
 
   return (
@@ -394,6 +405,11 @@ export function Feed() {
           {load.status === 'error' && (
             <button type="button" onClick={() => void fetchPage(false)} className="min-h-11 rounded-full bg-white px-5 font-semibold text-ink">
               다시 불러오기
+            </button>
+          )}
+          {exhausted && (
+            <button type="button" onClick={resetSeen} className="min-h-11 rounded-full bg-white px-5 font-semibold text-ink">
+              처음부터 다시 보기
             </button>
           )}
         </div>

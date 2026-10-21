@@ -353,5 +353,28 @@ class RouterWiringTest(unittest.TestCase):
         self.assertIs(review._update_card, main._card_update_once)
 
 
+
+class CorruptReviewFileTest(unittest.TestCase):
+    def test_a_broken_or_unreadable_review_file_reads_as_empty_instead_of_failing(self):
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"TUTORING_DIR": tmp}):
+                path = review.review_path("2026-10-21-221050")
+                self.assertEqual(review.load_items("2026-10-21-221050"), {})
+                path.write_text("{not json", encoding="utf-8")
+                self.assertEqual(review.load_items("2026-10-21-221050"), {})
+                path.write_text('{"items": "nope"}', encoding="utf-8")
+                self.assertEqual(review.load_items("2026-10-21-221050"), {})
+                path.unlink()
+                path.mkdir()
+                self.assertEqual(review.load_items("2026-10-21-221050"), {})
+                review.apply_flag("2026-10-21-221051", "correction", "I agree", "known")
+                self.assertEqual(review.load_items("2026-10-21-221051"), {"correction:i agree": "known"})
+
+
 if __name__ == "__main__":
     unittest.main()
