@@ -27,7 +27,7 @@ function run(state: PlayerState, ...events: PlayerEvent[]): PlayerState {
 
 // index번째 줄을 재생 중이고 시각 판정 보호 시간은 이미 지난 상태.
 function playing(index: number, settings: Partial<PlayerSettings> = {}): PlayerState {
-  const base = run(initialState(lines[index].start, { ...DEFAULT_SETTINGS, ...settings }), { type: 'lines', lines, atId: lines[index].id });
+  const base = run(initialState(lines[index].start, null, { ...DEFAULT_SETTINGS, ...settings }), { type: 'lines', lines, atId: lines[index].id });
   return { ...base, playing: true };
 }
 
@@ -93,7 +93,7 @@ describe('줄마다 멈춤', () => {
     const blip: ClipLine = { id: 5, start: 5, end: 5, text: 'x' };
     expect(lineEnd(blip)).toBe(5 + MIN_LINE_S);
     expect(lineEnd(lines[0])).toBe(3);
-    const s = run(initialState(5, { ...DEFAULT_SETTINGS, autoPause: true }), { type: 'lines', lines: [blip], atId: 5 });
+    const s = run(initialState(5, null, { ...DEFAULT_SETTINGS, autoPause: true }), { type: 'lines', lines: [blip], atId: 5 });
     expect(step(s, { type: 'tick', time: 5.2, now: 0 }).actions).toEqual([]);
     expect(step(s, { type: 'tick', time: 5 + MIN_LINE_S - END_LEAD_S, now: 0 }).actions).toEqual([{ type: 'pause' }]);
   });
@@ -214,7 +214,7 @@ describe('설정 이벤트', () => {
   });
 
   test('ready: 속도가 1이 아니면 seek 앞에서 속도를 다시 적용하고, 1이면 적용하지 않는다', () => {
-    const slow = step(initialState(4, { ...DEFAULT_SETTINGS, rate: 0.75 }), { type: 'ready', now: 0 });
+    const slow = step(initialState(4, null, { ...DEFAULT_SETTINGS, rate: 0.75 }), { type: 'ready', now: 0 });
     expect(slow.actions).toEqual([{ type: 'setRate', rate: 0.75 }, { type: 'seek', time: 4 - START_LEAD_S }, { type: 'play' }]);
     expect(step(initialState(4), { type: 'ready', now: 0 }).actions).toEqual([{ type: 'seek', time: 4 - START_LEAD_S }, { type: 'play' }]);
   });

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { ClipLine } from './api';
-import { initialState, SEEK_GUARD_MS, START_LEAD_S, step, type PlayerEvent, type PlayerState } from './playerMachine';
+import { END_LEAD_S, initialState, SEEK_GUARD_MS, START_LEAD_S, step, type PlayerEvent, type PlayerState } from './playerMachine';
 
 const lines: ClipLine[] = [
   { id: 1000, start: 1, end: 3, text: 'one' },
@@ -127,6 +127,63 @@ describe('tick', () => {
   test('줄 정보가 없으면 무시한다', () => {
     const s = initialState(4);
     expect(step(s, { type: 'tick', time: 10, now: 0 }).state).toBe(s);
+  });
+});
+
+describe('구간 끝에서 멈춤(피드 카드)', () => {
+  const clip = (extra: Partial<PlayerState> = {}): PlayerState => ({ ...initialState(10, 14), playing: true, ...extra });
+
+  test('끝 시각보다 0.05초 앞에서 멈추고 ended가 된다', () => {
+    const r = step(clip(), { type: 'tick', time: 14 - END_LEAD_S, now: 0 });
+    expect(r.actions).toEqual([{ type: 'pause' }]);
+    expect(r.state.ended).toBe(true);
+  });
+
+  test('끝 직전까지는 아무 일도 없다', () => {
+    const s = clip();
+    const r = step(s, { type: 'tick', time: 14 - END_LEAD_S - 0.01, now: 0 });
+    expect(r.state).toBe(s);
+    expect(r.actions).toEqual([]);
+  });
+
+  test('멈춘 뒤 tick이 또 와도 다시 멈추라고 하지 않는다', () => {
+    const ended = step(clip(), { type: 'tick', time: 14, now: 0 }).state;
+    const again = step(ended, { type: 'tick', time: 14.1, now: 100 });
+    expect(again.state).toBe(ended);
+    expect(again.actions).toEqual([]);
+  });
+
+  test('이동 직후 SEEK_GUARD_MS 동안은 낡은 시각(끝 너머)으로 멈추지 않는다', () => {
+    const moved = step(clip(), { type: 'replay', now: 1000 }).state;
+    expect(step(moved, { type: 'tick', time: 20, now: 1000 + SEEK_GUARD_MS - 1 }).actions).toEqual([]);
+    expect(step(moved, { type: 'tick', time: 20, now: 1000 + SEEK_GUARD_MS }).actions).toEqual([{ type: 'pause' }]);
+  });
+
+  test('다시: 멈춘 뒤에도 시작 시각으로 돌아가 재생하고 ended가 풀린다(영상을 새로 만들지 않는다)', () => {
+    const ended = step(clip(), { type: 'tick', time: 14, now: 0 }).state;
+    const r = step(ended, { type: 'replay', now: 500 });
+    expect(r.actions).toEqual([{ type: 'seek', time: 10 - START_LEAD_S }, { type: 'play' }]);
+    expect(r.state.ended).toBe(false);
+    expect(r.state.guardUntil).toBe(500 + SEEK_GUARD_MS);
+  });
+
+  test('endTime이 없으면 끝에서 멈추지 않는다', () => {
+    const s = { ...initialState(10), playing: true };
+    expect(step(s, { type: 'tick', time: 999, now: 0 }).state).toBe(s);
+  });
+
+  test('줄 정보가 있어도 끝 시각이 먼저 멈춘다', () => {
+    const s = clip({ lines, index: 0 });
+    const r = step(s, { type: 'tick', time: 14, now: 0 });
+    expect(r.actions).toEqual([{ type: 'pause' }]);
+    expect(r.state.index).toBe(0);
+  });
+
+  test('시트가 열려 멈춰 있던 중에 끝에 닿으면 닫아도 다시 재생하지 않는다', () => {
+    const held = step(clip(), { type: 'hold' }).state;
+    const ended = step(held, { type: 'tick', time: 14, now: 0 }).state;
+    expect(ended.resumeAfterHold).toBe(false);
+    expect(step(ended, { type: 'release' }).actions).toEqual([]);
   });
 });
 

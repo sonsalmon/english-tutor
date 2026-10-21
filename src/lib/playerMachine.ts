@@ -5,7 +5,7 @@ import { indexOfId, lineIndexAt } from './clipLines';
 
 /** 줄 시작보다 이만큼 앞에서 재생해 첫 단어가 잘리지 않게 한다. */
 export const START_LEAD_S = 0.12;
-/** 줄 끝보다 이만큼 일찍 멈춘다(다음 줄 첫 소리가 새지 않게). */
+/** 줄 끝이나 구간 끝(endTime)보다 이만큼 일찍 멈춘다(다음 줄 첫 소리가 새지 않게). */
 export const END_LEAD_S = 0.05;
 /** seekTo 직후 플레이어가 낡은 시각을 돌려줄 수 있는 동안(ms) 시각 판정을 건너뛴다. */
 export const SEEK_GUARD_MS = 250;
@@ -28,6 +28,10 @@ export type PlayerState = PlayerSettings & {
   index: number;
   /** 처음 열 때와 "다시"(줄 정보 없음)가 돌아갈 영상 시각. */
   startTime: number;
+  /** 이 시각에서 자동으로 멈춘다(피드 카드의 한 장면). null이면 끝까지 재생한다. */
+  endTime: number | null;
+  /** endTime에서 멈춘 뒤 다시 이동하기 전까지 true. */
+  ended: boolean;
   /** 플레이어가 마지막으로 알린 재생 여부. */
   playing: boolean;
   /** 시트를 열면서 멈췄다면 닫을 때 다시 재생한다. */
@@ -60,12 +64,14 @@ export type PlayerAction = { type: 'seek'; time: number } | { type: 'play' } | {
 
 export type Step = { state: PlayerState; actions: PlayerAction[] };
 
-export function initialState(startTime: number, settings: PlayerSettings = DEFAULT_SETTINGS): PlayerState {
+export function initialState(startTime: number, endTime: number | null = null, settings: PlayerSettings = DEFAULT_SETTINGS): PlayerState {
   return {
     ...settings,
     lines: [],
     index: -1,
     startTime: Math.max(0, startTime),
+    endTime,
+    ended: false,
     playing: false,
     resumeAfterHold: false,
     guardUntil: 0,
@@ -86,7 +92,7 @@ export function lineEnd(line: ClipLine): number {
 
 function moveTo(state: PlayerState, index: number, time: number, now: number, pass = 1): Step {
   return {
-    state: { ...state, index, pass, held: false, gapUntil: null, resumeAfterHold: false, guardUntil: now + SEEK_GUARD_MS },
+    state: { ...state, index, pass, held: false, gapUntil: null, ended: false, resumeAfterHold: false, guardUntil: now + SEEK_GUARD_MS },
     actions: [{ type: 'seek', time: leadTime(time) }, { type: 'play' }],
   };
 }
@@ -125,11 +131,15 @@ export function step(state: PlayerState, event: PlayerEvent): Step {
       return { state: { ...state, lines: event.lines, index: next }, actions: [] };
     }
     case 'tick': {
-      if (!lines.length || index < 0) return same;
-      if (state.gapUntil !== null) {
+      if (state.gapUntil !== null && lines.length && index >= 0) {
         return event.now >= state.gapUntil ? moveTo(state, index, lines[index].start, event.now, state.pass) : same;
       }
       if (event.now < state.guardUntil || state.held) return same;
+      // 장면 끝(피드 카드)과 줄 끝은 같은 멈춤이다: 먼저 닿는 쪽에서 한 번만 멈춘다.
+      if (state.endTime !== null && !state.ended && event.time >= state.endTime - END_LEAD_S) {
+        return { state: { ...state, ended: true, resumeAfterHold: false, gapUntil: null }, actions: [{ type: 'pause' }] };
+      }
+      if (!lines.length || index < 0) return same;
       if (state.autoPause || state.repeat !== 'off') {
         // 줄을 연습하는 중에는 시각이 아니라 지금 줄을 기준으로 끝을 본다.
         return event.time >= lineEnd(lines[index]) - END_LEAD_S ? finishLine(state, event.now) : same;
