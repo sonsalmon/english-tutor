@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { PartnerMemory, Wordbook } from './api';
-import { buildChatInstruction, freeTalkInstruction, friendMemoryBlock, missionInstruction, PARTNER_PROMPT_LIMIT, smallTalkInstruction, teachbackInstruction, trimMemory, trimStoryBank, wordbookBlock } from './instructions';
+import { buildChatInstruction, freeTalkInstruction, friendMemoryBlock, missionInstruction, nativeBlock, PARTNER_PROMPT_LIMIT, smallTalkInstruction, teachbackInstruction, trimMemory, trimStoryBank, wordbookBlock } from './instructions';
 import { PARTNERS, partnerById } from './partners';
 
 const FRIENDS = PARTNERS.filter((p) => p.id !== 'park');
@@ -262,6 +262,60 @@ describe('prompt length limit holds with full memory and a full wordbook', () =>
     const squeezed = smallTalkInstruction('x'.repeat(2000), [], p, [], FULL_MEMORY, '', FULL_WORDBOOK);
     expect(storyCount(squeezed, bank)).toBe(4);
     expect(squeezed).not.toContain("THE LEARNER'S OWN WORDBOOK");
+  });
+});
+
+describe('native expression block for friends', () => {
+  const NATIVE = [
+    { phrase: 'figure out', meaning: '알아내다' },
+    { phrase: 'a <b>tag</b>\nnew "line"', meaning: '뜻' },
+    { phrase: '한글만', meaning: 'x' },
+    { phrase: 'end up', meaning: '결국 ~하게 되다' },
+  ];
+
+  test('lists at most two valid expressions once, inside the notes fence', () => {
+    const block = nativeBlock(NATIVE);
+    expect(block.match(/<<</g)?.length).toBe(1);
+    expect(block.match(/>>>/g)?.length).toBe(1);
+    expect(block.indexOf('figure out')).toBeGreaterThan(block.indexOf('<<<'));
+    expect(block.indexOf('figure out')).toBeLessThan(block.indexOf('>>>'));
+    expect(block.split('\n').filter((l) => l.startsWith('- ')).length).toBe(2);
+    expect(block).not.toContain('한글만');
+    expect(block).not.toMatch(/<b>|<\/b>/);
+  });
+
+  test('empty or missing hints give an empty block', () => {
+    expect(nativeBlock(null)).toBe('');
+    expect(nativeBlock([])).toBe('');
+    expect(nativeBlock([{ phrase: '한글만', meaning: 'x' }])).toBe('');
+  });
+
+  test('friend calls and chats carry it even without a wordbook; Ms. Park does not', () => {
+    const only: Wordbook = { words: [], phrases: [], native: NATIVE };
+    for (const p of VISIBLE_FRIENDS) {
+      expect(smallTalkInstruction('', [], p, [], null, '', only)).toContain('NATIVE EXPRESSIONS YOU MAY USE');
+      expect(freeTalkInstruction('', '', null, [], p, [], null, '', only)).toContain('NATIVE EXPRESSIONS YOU MAY USE');
+      expect(buildChatInstruction(p, '', null, [], only)).toContain('NATIVE EXPRESSIONS YOU MAY USE');
+      expect(smallTalkInstruction('', [], p, [], null, '', null)).not.toContain('NATIVE EXPRESSIONS YOU MAY USE');
+    }
+    const park = partnerById('park');
+    expect(smallTalkInstruction('', [], park, [], null, '', only)).not.toContain('NATIVE EXPRESSIONS YOU MAY USE');
+    expect(freeTalkInstruction('', '', null, [], park, [], null, '', only)).not.toContain('NATIVE EXPRESSIONS YOU MAY USE');
+  });
+
+  test('worst case stays at or under PARTNER_PROMPT_LIMIT and the block goes away with the wordbook when squeezed', () => {
+    const book: Wordbook = { ...FULL_WORDBOOK, native: NATIVE };
+    for (const p of VISIBLE_FRIENDS) {
+      const brief = 'x'.repeat(2000);
+      const texts = [
+        smallTalkInstruction(brief, WORDS, p, [], FULL_MEMORY, 'weekend plans', book),
+        freeTalkInstruction('', brief, null, WORDS, p, [], FULL_MEMORY, '', book),
+        buildChatInstruction(p, brief, FULL_MEMORY, [], book),
+      ];
+      for (const text of texts) expect(text.length).toBeLessThanOrEqual(PARTNER_PROMPT_LIMIT);
+    }
+    const squeezed = smallTalkInstruction('x'.repeat(2000), [], partnerById('brian'), [], FULL_MEMORY, '', book);
+    expect(squeezed).not.toContain('NATIVE EXPRESSIONS YOU MAY USE');
   });
 });
 

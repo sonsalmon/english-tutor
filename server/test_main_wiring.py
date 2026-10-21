@@ -306,6 +306,7 @@ EMPTY_PROFILE = {
     "next_goal": "",
     "practice_words": [],
     "wordbook": {"words": [], "phrases": []},
+    "native_expressions": [],
 }
 EMPTY_BOOK = {"words": [], "phrases": []}
 
@@ -337,6 +338,30 @@ class LearnerProfileEndpointTest(unittest.IsolatedAsyncioTestCase):
         pron_patcher = mock.patch.object(pron, "latest_result", return_value=None)
         self.pron_latest = pron_patcher.start()
         self.addCleanup(pron_patcher.stop)
+        native_patcher = mock.patch.object(main.native_expr, "load", return_value=[])
+        self.native_load = native_patcher.start()
+        self.addCleanup(native_patcher.stop)
+        learner_patcher = mock.patch.object(main.native_expr, "recent_learner_text", return_value="")
+        learner_patcher.start()
+        self.addCleanup(learner_patcher.stop)
+
+    async def test_native_expressions_are_picked_from_the_list(self):
+        entry = main.native_expr.clean_entry(
+            {
+                "expression": "figure out",
+                "kind": "phrasal_verb",
+                "meaning_ko": "알아내다",
+                "register": "casual",
+                "per_million": 100,
+                "clips": [{"video_id": "v", "start": 1, "end": 3, "text": "we figure out"}],
+            }
+        )
+        self.native_load.return_value = [entry]
+        with mock.patch.object(main, "load_profile", return_value=None), \
+                mock.patch.dict("os.environ", {"KNOWN_EXPRESSIONS_PATH": "/nonexistent/known.json"}):
+            body = await main.learner_profile_endpoint()
+
+        self.assertEqual(body["native_expressions"], [{"phrase": "figure out", "meaning": "알아내다"}])
 
     async def test_slow_bridge_does_not_hold_the_home_screen(self):
         import threading

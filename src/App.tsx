@@ -6,7 +6,7 @@ import type { Retry } from './lib/instructions';
 import { takePendingLatency } from './lib/latency';
 import { PARK_ID } from './lib/partners';
 import { go, useRoute, useRouteParam } from './lib/router';
-import { loadShareWordbook } from './lib/shareWordbook';
+import { friendWordbook } from './lib/shareWordbook';
 import { setupPartner, type CallSetup, type FinishedCall } from './lib/setup';
 import { Chat } from './screens/Chat';
 import { Feed } from './screens/Feed';
@@ -113,7 +113,7 @@ export function App() {
             partnerId={param}
             brief={profile?.brief ?? ''}
             interests={profile?.interests}
-            wordbook={loadShareWordbook() ? profile?.wordbook ?? null : null}
+            wordbook={friendWordbook(profile)}
             profileReady={profile !== null}
             onCall={callPerson}
           />
@@ -127,7 +127,7 @@ export function App() {
               brief={profile?.brief ?? ''}
               practiceWords={profile?.practice_words ?? []}
               interests={profile?.interests}
-              wordbook={loadShareWordbook() ? profile?.wordbook ?? null : null}
+              wordbook={friendWordbook(profile)}
               timeLimit={timeLimitFor(setup.kind, limits)}
               onFinished={onFinished}
             />

@@ -3,6 +3,7 @@
 - filter=mine: 내 표현(단어장 구, 최근 튜터링의 미국식 표현·기억할 단어. 이미 안다고 표시한 것은 뺀다)을 말하는 장면을
   표현마다 돌아가며 한 장씩 뽑고, 모자란 만큼은 무작위 장면으로 채운다.
 - filter=browse: 무작위 장면만.
+- filter=native: 원어민 표현 목록(native_expr)에서 표현마다 미리 붙여 둔 클립을 한 장씩. 알려 준 표현은 뺀다.
 자막 DB(clipdb)는 읽기 전용으로만 연다. YouTube 검색 API는 쓰지 않아 비용이 없다.
 """
 
@@ -15,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter
 
-from server import clipdb, known, readgloss
+from server import clipdb, known, native_expr, readgloss
 from server.transcript_store import get_tutoring_dir
 
 logger = logging.getLogger(__name__)
@@ -29,7 +30,7 @@ ID_MAX = 40
 TERMS_PER_PAGE = 12
 PER_TERM = 3
 TUTORING_FILES = 8
-FILTERS = ("mine", "browse")
+FILTERS = ("mine", "browse", "native")
 
 
 def clip_id(hit: Dict[str, Any]) -> str:
@@ -88,6 +89,38 @@ def _card(hit: Dict[str, Any], source: str, term: Optional[str] = None) -> Dict[
     }
 
 
+def build_native_page(
+    entries: List[Dict[str, Any]],
+    limit: int,
+    seen: set,
+    rng: Optional[random.Random] = None,
+    known_path: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
+    """원어민 표현 카드 최대 limit장. 빈도에 비례해 섞고, 표현마다 아직 안 본 클립 한 장, 같은 영상은 한 장만."""
+    rng = rng or random.Random()
+    used = {s.split(":")[0] for s in seen}
+    cards: List[Dict[str, Any]] = []
+    for entry in native_expr.weighted_order(native_expr.eligible(entries, known_path), rng):
+        clip = next((c for c in entry["clips"] if clip_id(c) not in seen and c["video_id"] not in used), None)
+        if clip is None:
+            continue
+        used.add(clip["video_id"])
+        card = _card(clip, "native", entry["expression"])
+        card["native"] = {
+            "expression": entry["expression"],
+            "kind": entry["kind"],
+            "meaning_ko": entry["meaning_ko"],
+            "why_hard": entry["why_hard"],
+            "register": entry["register"],
+            "example": entry["example"],
+            "per_million": entry["per_million"],
+        }
+        cards.append(card)
+        if len(cards) >= limit:
+            break
+    return cards
+
+
 def build_page(
     terms: List[str],
     mode: str,
@@ -139,6 +172,9 @@ def _saved_phrases() -> List[str]:
 
 
 def _page(mode: str, limit: int, seen: set) -> Dict[str, Any]:
+    if mode == "native":
+        entries = native_expr.load()
+        return {"available": True, "clips": build_native_page(entries, limit, seen), "terms": 0, "native": len(entries)}
     if not clipdb.available():
         return {"available": False, "clips": [], "terms": 0}
     terms = collect_terms(_saved_phrases()) if mode == "mine" else []
