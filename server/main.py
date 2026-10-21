@@ -832,6 +832,27 @@ async def word_endpoint(raw: Request):
     return result
 
 
+MAX_SOURCE_SECONDS = 86400
+MAX_SOURCE_TITLE_CHARS = 200
+
+
+def _clip_source(body: dict) -> tuple:
+    """저장 요청의 선택 필드 source {video_id, t, title}를 (youtu.be 시각 링크, 영상 제목)으로 바꾼다. 없으면 ("", "")."""
+    source = body.get("source")
+    if source is None:
+        return "", ""
+    if not isinstance(source, dict):
+        raise HTTPException(status_code=400, detail="출처 형식이 틀렸어요.")
+    video_id, at, title = source.get("video_id"), source.get("t", 0), source.get("title", "")
+    if not isinstance(video_id, str) or not CLIP_VIDEO_ID_RE.fullmatch(video_id):
+        raise HTTPException(status_code=400, detail="영상 ID 형식이 틀렸어요.")
+    if isinstance(at, bool) or not isinstance(at, (int, float)) or not 0 <= at <= MAX_SOURCE_SECONDS:
+        raise HTTPException(status_code=400, detail="시각은 0 이상 86400 이하 숫자여야 해요.")
+    if not isinstance(title, str) or len(title) > MAX_SOURCE_TITLE_CHARS:
+        raise HTTPException(status_code=400, detail="영상 제목은 문자열 200자 이하여야 해요.")
+    return f"https://youtu.be/{video_id}?t={int(at)}", title.strip()
+
+
 @app.post("/api/word/save")
 async def word_save_endpoint(raw: Request):
     """찾은 단어를 readgloss 단어장에 저장한다. 다리가 꺼져 있으면 503."""
@@ -846,7 +867,8 @@ async def word_save_endpoint(raw: Request):
         raise HTTPException(status_code=400, detail="뜻은 문자열 200자 이하여야 해요.")
     if not isinstance(sentence, str) or len(sentence) > MAX_SENTENCE_CHARS:
         raise HTTPException(status_code=400, detail="문장은 문자열 1000자 이하여야 해요.")
-    saved = await asyncio.to_thread(save_word, lemma.strip().lower(), word, gloss, sentence)
+    url, _ = _clip_source(body)
+    saved = await asyncio.to_thread(save_word, lemma.strip().lower(), word, gloss, sentence, url)
     if not saved:
         raise HTTPException(status_code=503, detail=READGLOSS_SAVE_OFF_DETAIL)
     return {"saved": True}
@@ -869,7 +891,11 @@ async def phrase_save_endpoint(raw: Request):
         raise HTTPException(status_code=400, detail="문장은 글자가 있는 2자 이상 1000자 이하여야 해요.")
     if not isinstance(translation, str) or len(translation) > MAX_TRANSLATION_CHARS:
         raise HTTPException(status_code=400, detail="번역은 문자열 300자 이하여야 해요.")
-    if not await asyncio.to_thread(save_phrase, text, translation.strip()):
+    sentence = body.get("sentence", "")
+    if not isinstance(sentence, str) or len(sentence) > MAX_SENTENCE_CHARS:
+        raise HTTPException(status_code=400, detail="문장은 문자열 1000자 이하여야 해요.")
+    url, title = _clip_source(body)
+    if not await asyncio.to_thread(save_phrase, text, translation.strip(), " ".join(sentence.split()), url, title):
         raise HTTPException(status_code=503, detail=READGLOSS_PHRASE_OFF_DETAIL)
     return {"saved": True}
 

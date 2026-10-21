@@ -139,9 +139,9 @@ def lookup_word(word: str) -> Optional[Dict[str, Any]]:
     return compact_lookup(word, result)
 
 
-def save_word(lemma: str, word: str, gloss: str, sentence: str) -> bool:
-    """단어 하나를 readgloss 단어장에 넣는다. 다리가 꺼져 있거나 거절하면 False."""
-    body = {"op": "save", "lemma": lemma, "word": word, "gloss": gloss[:SAVE_GLOSS_MAX], "sentence": sentence, "url": ""}
+def save_word(lemma: str, word: str, gloss: str, sentence: str, url: str = "") -> bool:
+    """단어 하나를 readgloss 단어장에 넣는다. url은 단어를 만난 곳(클립이면 영상 시각 링크). 다리가 꺼져 있거나 거절하면 False."""
+    body = {"op": "save", "lemma": lemma, "word": word, "gloss": gloss[:SAVE_GLOSS_MAX], "sentence": sentence, "url": url}
     return _request("POST", "/words", body) is not None
 
 
@@ -150,9 +150,9 @@ def normalize_phrase(text: Any) -> str:
     return " ".join(str(text or "").split()).lower()
 
 
-def save_phrase(text: str, translation: str) -> bool:
-    """문장 하나를 readgloss 구 카드(expression)로 넣는다. 다리가 꺼져 있거나 거절하면 False."""
-    body = {"op": "save-phrase", "text": text, "translation": translation, "kind": "expression", "title": PHRASE_TITLE, "sentence": "", "url": ""}
+def save_phrase(text: str, translation: str, sentence: str = "", url: str = "", title: str = "") -> bool:
+    """문장 하나를 readgloss 구 카드(expression)로 넣는다. sentence는 만난 문장(없으면 text), url·title은 만난 곳. 다리가 꺼져 있거나 거절하면 False."""
+    body = {"op": "save-phrase", "text": text, "translation": translation, "kind": "expression", "title": title or PHRASE_TITLE, "sentence": sentence or text, "url": url}
     return _request("POST", "/words", body) is not None
 
 

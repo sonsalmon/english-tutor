@@ -2,6 +2,7 @@ import { ChevronLeft, ChevronRight, ExternalLink, GraduationCap, Pause, Play, Ro
 import { useEffect, useState, type ReactNode } from 'react';
 import { getClipSegments, type Clip, type ClipSegments } from '../lib/api';
 import { openClip } from '../lib/clipRoute';
+import { lineSource } from '../lib/clipLines';
 import { usePlayer } from '../lib/usePlayer';
 import { WordText } from './WordText';
 
@@ -140,7 +141,7 @@ export function ClipPlayer({ clip, onClose, onBlocked }: { clip: Clip; onClose: 
         <>
           <div className="mt-3 rounded-xl border border-line bg-paper p-3">
             <p key={line.id} lang="en" className="line-in text-xl leading-snug font-semibold break-words">
-              <WordText text={line.text} onOpenChange={act.hold} />
+              <WordText text={line.text} onOpenChange={act.hold} source={lineSource(clip.id, clip.title, line)} />
             </p>
             <p className="mt-1 text-sm text-ink-soft">{mmss(line.start)}부터</p>
           </div>

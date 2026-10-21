@@ -1,7 +1,7 @@
 import { Check, Volume2, X } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ReadglossOffError, lookupWord, saveWord, type WordInfo } from '../lib/api';
+import { ReadglossOffError, lookupWord, saveWord, type SaveSource, type WordInfo } from '../lib/api';
 import { glossPhrase, isPhraseSaved, markWordSaved, savePhrase } from '../lib/phrases';
 import { StarButton } from './StarButton';
 import { useWide } from './ui';
@@ -28,6 +28,7 @@ export function WordPopover({
   text: word,
   gloss,
   sentence,
+  source,
   anchor,
   extend,
   onClose,
@@ -37,6 +38,7 @@ export function WordPopover({
   text: string;
   gloss?: string;
   sentence: string;
+  source?: SaveSource;
   anchor: HTMLElement;
   extend?: Extend;
   onClose: () => void;
@@ -151,9 +153,9 @@ export function WordPopover({
     if (!info || saving === 'saving' || saving === 'saved') return;
     setSaving('saving');
     try {
-      if (isPhrase) await savePhrase(word, info.gloss.trim().slice(0, 300));
+      if (isPhrase) await savePhrase(word, info.gloss.trim().slice(0, 300), { sentence, source });
       else {
-        await saveWord({ word, lemma: info.lemma, gloss: info.gloss, sentence });
+        await saveWord({ word, lemma: info.lemma, gloss: info.gloss, sentence, source });
         markWordSaved(info.lemma);
       }
       setSaving('saved');
@@ -281,6 +283,7 @@ export function WordPopover({
             lemma={isPhrase ? undefined : lemma}
             gloss={info?.gloss ?? ''}
             sentence={sentence}
+            source={source}
             disabled={!info}
             saved={saving === 'saved'}
             onSaved={() => setSaving('saved')}

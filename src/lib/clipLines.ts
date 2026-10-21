@@ -1,4 +1,4 @@
-import type { ClipLine, ClipSegments } from './api';
+import type { ClipLine, ClipSegments, SaveSource } from './api';
 
 // 시각 time에 해당하는 줄의 위치: start가 time 이하인 마지막 줄. 첫 줄보다 앞이면 -1, 줄 사이 틈이면 앞 줄, 마지막 줄 뒤면 마지막 줄.
 export function lineIndexAt(lines: readonly ClipLine[], time: number): number {
@@ -37,4 +37,9 @@ export function mergeSegments(prev: ClipSegments, next: ClipSegments, side: 'bef
     hasMoreBefore: side === 'before' ? next.hasMoreBefore : prev.hasMoreBefore,
     hasMoreAfter: side === 'after' ? next.hasMoreAfter : prev.hasMoreAfter,
   };
+}
+
+// 이 줄에서 저장한 단어·표현에 붙일 출처: 영상 ID, 줄 시작 초(내림), 영상 제목.
+export function lineSource(videoId: string, title: string, line: ClipLine): SaveSource {
+  return { video_id: videoId, t: Math.max(0, Math.floor(line.start)), title };
 }
