@@ -13,8 +13,9 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 from google.genai.types import AudioTranscriptionConfig, EndSensitivity, StartSensitivity
 
@@ -23,6 +24,7 @@ from server.lesson import session_time_limit_from_env
 from server import partner_memory
 from server.partner_memory import PARTNER_IDS, PARTNER_NAMES
 from server.pricing import UsageTotals, estimate_cost
+from server.readgloss import LEMMA_RE
 from server.transcript_clean import clean_learner_text
 from server.transcript_store import (
     get_transcript_dir,
@@ -58,6 +60,8 @@ CHAT_DEFAULT_SILENCE_MS = 500  # next10 실험 결정: 채팅 기본 end=HIGH, s
 AFFECTIVE_DIALOG_ENV = "LIVE_AFFECTIVE_DIALOG"  # 0|false|off면 끈다(gemini-3.8-live는 1007로 거부, 2026-10-20 확인)
 MISSION_RE = re.compile(r'trying to:\s*"([^"]+)"')
 MIN_LEARNER_WORDS = 3
+LESSON_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}", re.ASCII)
+MAX_PRACTICE_WORDS = 10
 # Gemini 입력 받아쓰기가 잡음을 `{}`로 내보낼 때가 있다(2026-10-20 브라우저 시험: "{} hi, I'm ...").
 NOISE_MARK_RE = re.compile(r"\{\s*\}")
 # 입력 전사 언어 힌트(쉼표 구분 BCP-47). 빈 문자열이면 힌트를 넣지 않는다(Vertex가 거부할 때 끄는 스위치).
@@ -250,6 +254,9 @@ class CallConfig:
     mode: str
     voice: str = DEFAULT_VOICE
     partner: Optional[str] = None
+    # 통화가 끝난 뒤 서버가 스스로 정리를 걸 때 쓰는 입력(예전에는 화면이 /api/tutor 본문으로 보냈다).
+    lesson_date: Optional[str] = None
+    practice_words: Tuple[str, ...] = ()
 
     @property
     def mission(self) -> Optional[str]:
@@ -337,7 +344,26 @@ def parse_call_config(data: Any) -> CallConfig:
     # 기억은 수다·자유 대화만 쓴다: 미션 역할극 발화는 학습자의 실제 사실이 아니다.
     if partner not in PARTNER_IDS or mode not in PARTNER_MEMORY_MODES:
         partner = None
-    return CallConfig(system_instruction=instruction, mode=mode, voice=voice, partner=partner)
+    lesson_date = data.get("lesson_date")
+    if lesson_date is not None:
+        try:
+            if not isinstance(lesson_date, str) or not LESSON_DATE_RE.fullmatch(lesson_date):
+                raise ValueError
+            datetime.strptime(lesson_date, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError("lesson_date는 YYYY-MM-DD 형식이어야 합니다.") from None
+    raw_words = data.get("practice_words")
+    practice_words = tuple(
+        w for w in (raw_words[:MAX_PRACTICE_WORDS] if isinstance(raw_words, list) else []) if isinstance(w, str) and LEMMA_RE.fullmatch(w)
+    )
+    return CallConfig(
+        system_instruction=instruction,
+        mode=mode,
+        voice=voice,
+        partner=partner,
+        lesson_date=lesson_date,
+        practice_words=practice_words,
+    )
 
 
 @dataclass
@@ -427,6 +453,27 @@ def finish_call(record: CallRecord, config: CallConfig, model: str, ended_at: Op
         logger.error("Transcript save failed: %s", e)
         return None
     return saved
+
+
+# 통화가 저장된 뒤 거는 뒷일(통화 정리). main이 시작할 때 등록한다(review.configure와 같은 방식).
+_call_saved_hook: Optional[Callable[[Any, "CallConfig"], None]] = None
+
+
+def configure_call_saved(hook: Optional[Callable[[Any, "CallConfig"], None]]) -> None:
+    global _call_saved_hook
+    _call_saved_hook = hook
+
+
+def notify_call_saved(saved: Any, config: "CallConfig", record: "CallRecord") -> bool:
+    """저장된 통화에서 학습자가 실제로 말했으면 통화 정리를 건다. 걸었으면 True. 실패해도 통화 마무리는 막지 않는다."""
+    if saved is None or _call_saved_hook is None or not record.learner_has_spoken():
+        return False
+    try:
+        _call_saved_hook(saved, config)
+    except Exception as e:  # noqa: BLE001
+        logger.error("Call summary scheduling failed: %s", e)
+        return False
+    return True
 
 
 def mission_tools(config: CallConfig):
@@ -681,3 +728,4 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
         saved = await asyncio.to_thread(finish_call, record, config, model, None, vad_meta)
         logger.info("Call finished; transcript saved: %s", saved)
         schedule_partner_memory_update(saved, config, record)
+        notify_call_saved(saved, config, record)

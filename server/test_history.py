@@ -60,6 +60,7 @@ class HistoryTest(HistoryDirs):
                 "voice": None,
                 "partner": None,
                 "has_tutoring": False,
+                "summary": "pending",
                 "kind": "call",
                 "cost": {"live": None, "tutoring": None, "total": None},
                 "latency": None,

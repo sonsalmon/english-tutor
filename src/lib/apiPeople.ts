@@ -1,4 +1,4 @@
-import type { CallSummary } from './api';
+import { withSummary, type CallSummary } from './api';
 import { PARK_ID, isPark, type Partner } from './partners';
 
 export type PersonCall = { stem: string; started_at: string; mission: string; duration_sec: number };
@@ -23,7 +23,7 @@ export async function getPersonCalls(partnerId: string, limit = 50, signal?: Abo
   const res = await fetch(`/api/calls?limit=${limit}&partner=${encodeURIComponent(partnerId)}`, { signal });
   if (!res.ok) throw new Error('통화 내역을 불러오지 못했어요.');
   const data = await res.json();
-  return Array.isArray(data?.calls) ? data.calls : [];
+  return Array.isArray(data?.calls) ? data.calls.map(withSummary) : [];
 }
 
 function stamp(activity: PersonActivity | undefined): number {

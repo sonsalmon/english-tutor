@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { LatencyMeter, clearPendingLatency, stashLatency } from './latency';
 import { cleanLearnerText } from './transcript';
 
+// 통화가 끝난 뒤 서버가 스스로 정리를 걸 때 쓰는 입력. 통화를 걸 때 서버에 미리 알려 둔다.
+export type SummaryInput = { lesson_date?: string; practice_words?: string[] };
 export type CallMode = 'mission' | 'freetalk' | 'teachback' | 'smalltalk';
 export type CallStatus = 'ready' | 'connecting' | 'live' | 'ended' | 'error';
 export type Speaker = 'me' | 'park';
@@ -97,7 +99,7 @@ export function useCall() {
   );
 
   const start = useCallback(
-    async (systemInstruction: string, mode: CallMode, voice = 'Kore', partner?: string) => {
+    async (systemInstruction: string, mode: CallMode, voice = 'Kore', partner?: string, summaryInput?: SummaryInput) => {
       setStatus('connecting');
       setError(null);
       setLines([]);
@@ -182,7 +184,14 @@ export function useCall() {
         await client.connect({
           webrtcRequestParams: {
             endpoint: '/api/offer',
-            requestData: { system_instruction: systemInstruction, mode, voice, ...(partner ? { partner } : {}) },
+            requestData: {
+              system_instruction: systemInstruction,
+              mode,
+              voice,
+              ...(partner ? { partner } : {}),
+              ...(summaryInput?.lesson_date ? { lesson_date: summaryInput.lesson_date } : {}),
+              ...(summaryInput?.practice_words?.length ? { practice_words: summaryInput.practice_words } : {}),
+            },
           },
         });
       } catch (e) {

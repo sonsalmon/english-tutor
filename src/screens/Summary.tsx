@@ -170,7 +170,8 @@ export function Summary({ call, onRetry, onHome }: { call: FinishedCall; onRetry
       {!tutoring && !error && (
         <div className="mt-10 flex flex-col items-center gap-3 text-center text-ink-soft" role="status">
           <LoaderCircle size={28} className="animate-spin" aria-hidden />
-          <p>Ms. Park이 통화를 정리하고 있어요. 30초쯤 걸려요.</p>
+          <p className="font-semibold text-ink">정리는 알아서 해 둘게요. 지금 나가도 괜찮아요.</p>
+          <p className="text-sm">30초쯤 걸려요. 끝나면 통화 내역에서 볼 수 있고, 여기 있으면 바로 보여 드려요.</p>
         </div>
       )}
 
@@ -204,7 +205,7 @@ export function Summary({ call, onRetry, onHome }: { call: FinishedCall; onRetry
             {isTeachback ? '같은 수업 다시 하기' : '같은 장면 다시 통화'}
           </CallButton>
         )}
-        <QuietButton onClick={onHome ?? (() => go('home'))}>홈으로</QuietButton>
+        <QuietButton onClick={onHome ?? (() => go('home'))}>{tutoring || error ? '홈으로' : '홈으로 나가기'}</QuietButton>
       </div>
     </Screen>
   );
