@@ -2,6 +2,7 @@ import { Phone } from 'lucide-react';
 import { useState } from 'react';
 import { CallButton, Screen, TopBar } from '../components/ui';
 import { TOPIC_MAX, sanitizeTopic } from '../lib/instructions';
+import { PARK_ID } from '../lib/partners';
 import { go } from '../lib/router';
 
 export function Topic({ onStart }: { onStart: (topic: string) => void }) {
@@ -9,7 +10,7 @@ export function Topic({ onStart }: { onStart: (topic: string) => void }) {
   const atLimit = topic.length >= TOPIC_MAX;
   return (
     <Screen>
-      <TopBar title="주제 정해서 대화" onBack={() => go('home')} />
+      <TopBar title="주제 정해서 대화" onBack={() => go('person', false, PARK_ID)} />
       <label htmlFor="topic" className="font-semibold">
         오늘 이야기할 주제나 글
       </label>

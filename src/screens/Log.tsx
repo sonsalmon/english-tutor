@@ -1,29 +1,21 @@
+import { ChevronLeft } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { List, RowLink, Screen, TopBar, useWide } from '../components/ui';
 import { ClipList } from '../components/ClipList';
 import { CultureNotes } from '../components/CultureNotes';
 import { FriendMessage } from '../components/FriendMessage';
+import { PeopleList, TwoPane } from '../components/PeopleList';
 import { ThinkingGaps } from '../components/ThinkingGaps';
 import { CostLine, TutoringBlocks } from '../components/TutoringBlocks';
 import { ReplayButton, TranscriptView } from '../components/TranscriptView';
+import { List, RowLink, Screen, TopBar, useWide } from '../components/ui';
 import { WordText } from '../components/WordText';
 import { formatUsdShort, getCall, getCalls, type CallDetail, type CallSummary, type CallTotals } from '../lib/api';
+import { formatDuration, formatWhen } from '../lib/callFormat';
 import { latencyText } from '../lib/latency';
+import { PARK_ID, isPark, partnerById } from '../lib/partners';
 import { go } from '../lib/router';
 
 type Loaded<T> = { data: T | null; error: string | null };
-
-function formatWhen(startedAt: string): string {
-  const [date, time] = startedAt.split(' ');
-  const [, month, day] = date.split('-').map(Number);
-  return `${month}월 ${day}일 ${time}`;
-}
-
-function formatDuration(sec: number): string {
-  const minutes = Math.floor(sec / 60);
-  const seconds = sec % 60;
-  return minutes > 0 ? `${minutes}분 ${seconds}초` : `${seconds}초`;
-}
 
 function useLoaded<T>(load: (signal: AbortSignal) => Promise<T>, key: string): Loaded<T> {
   const [state, setState] = useState<Loaded<T> & { key: string }>({ data: null, error: null, key: '' });
@@ -110,7 +102,7 @@ function FilterRow({ value, onChange }: { value: Filter; onChange: (f: Filter) =
   );
 }
 
-function CallListBody({ activeStem }: { activeStem: string | null }) {
+function CallListBody() {
   const { data, error } = useLoaded((signal) => getCalls(50, signal), 'list');
   const [filter, setFilter] = useState<Filter>('all');
   const shown = data ? data.calls.filter((c) => (filter === 'all' ? true : filter === 'smalltalk' ? c.kind === 'smalltalk' : c.kind !== 'smalltalk')) : [];
@@ -136,8 +128,7 @@ function CallListBody({ activeStem }: { activeStem: string | null }) {
                     title={call.mission}
                     desc={`${formatWhen(call.started_at)}, ${formatDuration(call.duration_sec)}`}
                     trailing={<RowMeta call={call} />}
-                    active={call.stem === activeStem}
-                    onClick={() => go('history', false, call.stem)}
+                    onClick={() => go('log', false, call.stem)}
                   />
                 ))}
               </List>
@@ -149,72 +140,132 @@ function CallListBody({ activeStem }: { activeStem: string | null }) {
   );
 }
 
-function CallDetailBody({ stem }: { stem: string }) {
-  const { data, error } = useLoaded<CallDetail>((signal) => getCall(stem, signal), stem);
-  const latency = data ? latencyText(data.call.latency) : null;
+type DetailTab = 'summary' | 'transcript' | 'clips';
+const TABS: { id: DetailTab; label: string }[] = [
+  { id: 'summary', label: '요약' },
+  { id: 'transcript', label: '전문' },
+  { id: 'clips', label: '클립' },
+];
+
+function DetailTabs({ value, onChange }: { value: DetailTab; onChange: (tab: DetailTab) => void }) {
+  return (
+    <div role="tablist" aria-label="통화 내역 보기" className="mt-5 grid grid-cols-3 gap-1 rounded-full border border-line bg-surface p-1">
+      {TABS.map((tab) => (
+        <button
+          key={tab.id}
+          type="button"
+          role="tab"
+          id={`log-tab-${tab.id}`}
+          aria-selected={value === tab.id}
+          aria-controls="log-panel"
+          onClick={() => onChange(tab.id)}
+          className={`min-h-11 rounded-full px-4 font-semibold ${value === tab.id ? 'bg-ink text-white' : 'text-ink hover:bg-paper'}`}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function CallDetailBody({ data, stem }: { data: CallDetail; stem: string }) {
+  const [tab, setTab] = useState<DetailTab>('summary');
+  const latency = latencyText(data.call.latency);
+  const partner = partnerById(data.call.partner);
+  const hasTranscript = data.transcript.length > 0 || !!data.verbatim;
   return (
     <>
-      {error ? (
-        <p className="text-ink-soft" role="alert">{error}</p>
-      ) : !data ? (
-        <p className="text-ink-soft">통화 기록을 불러오는 중이에요.</p>
-      ) : (
-        <>
-          <header>
-            <h2 className="text-[22px] leading-snug font-bold">
-              <WordText text={data.call.mission} />
-            </h2>
-            <p className="mt-1 text-ink-soft">
-              {formatWhen(data.call.started_at)}, {formatDuration(data.call.duration_sec)}
-              {data.call.completed ? '' : ', 중간에 마쳤어요'}
-            </p>
-            {latency && <p className="mt-1 text-sm text-ink-soft">{latency}</p>}
-            <CostLine cost={data.call.cost ?? data.tutoring?.cost} className="mt-1" />
-          </header>
-          {data.tutoring ? (
-            <>
-              <FriendMessage message={data.tutoring.friend_message} partnerId={data.call.partner} />
-              <TutoringBlocks tutoring={data.tutoring} isTeachback={data.call.kind === 'teachback'} />
-              <ThinkingGaps gaps={data.tutoring.thinking_gaps} />
-            </>
+      <header>
+        <h2 className="text-[22px] leading-snug font-bold">{isPark(partner) ? <WordText text={data.call.mission} /> : `${partner.name} 통화`}</h2>
+        <p className="mt-1 text-ink-soft">
+          {formatWhen(data.call.started_at)} · {formatDuration(data.call.duration_sec)}
+          {data.call.completed ? '' : ' · 중간에 마쳤어요'}
+        </p>
+        {latency && <p className="mt-1 text-sm text-ink-soft">{latency}</p>}
+        <CostLine cost={data.call.cost ?? data.tutoring?.cost} className="mt-1" />
+      </header>
+      <DetailTabs value={tab} onChange={setTab} />
+      <div role="tabpanel" id="log-panel" aria-labelledby={`log-tab-${tab}`}>
+        {tab === 'summary' && (
+          <>
+            {data.tutoring ? (
+              <>
+                <FriendMessage message={data.tutoring.friend_message} partnerId={data.call.partner} />
+                <TutoringBlocks tutoring={data.tutoring} isTeachback={data.call.kind === 'teachback'} />
+                <ThinkingGaps gaps={data.tutoring.thinking_gaps} />
+              </>
+            ) : (
+              <p className="mt-8 leading-relaxed text-ink-soft">이 통화는 저장된 요약이 없어요.</p>
+            )}
+            <CultureNotes stem={stem} />
+          </>
+        )}
+        {tab === 'transcript' &&
+          (hasTranscript ? (
+            <TranscriptView turns={data.transcript} verbatim={data.verbatim} voice={data.call.voice} />
           ) : (
-            <p className="mt-8 leading-relaxed text-ink-soft">이 통화는 저장된 요약이 없어요.</p>
-          )}
-          <CultureNotes stem={stem} />
-          <TranscriptView turns={data.transcript} verbatim={data.verbatim} voice={data.call.voice} />
-          <ClipList stem={stem} />
-          <ReplayButton stem={stem} />
-        </>
-      )}
+            <p className="mt-8 leading-relaxed text-ink-soft">이 통화는 저장된 전문이 없어요.</p>
+          ))}
+        {tab === 'clips' && (
+          <>
+            <ClipList stem={stem} />
+            <ReplayButton stem={stem} />
+          </>
+        )}
+      </div>
     </>
   );
 }
 
-export function CallHistory({ stem }: { stem: string | null }) {
+function LogDetailScreen({ stem, parkHint }: { stem: string; parkHint?: string }) {
   const wide = useWide();
+  const { data, error } = useLoaded<CallDetail>((signal) => getCall(stem, signal), stem);
+  const partnerId = data ? (data.call.partner ?? PARK_ID) : null;
+  const backTo = partnerId ?? PARK_ID;
+  const body = error ? (
+    <p className="text-ink-soft" role="alert">
+      {error}
+    </p>
+  ) : !data ? (
+    <p className="text-ink-soft">통화 기록을 불러오는 중이에요.</p>
+  ) : (
+    <CallDetailBody key={stem} data={data} stem={stem} />
+  );
+
   if (wide) {
     return (
       <Screen wide>
-        <TopBar title="통화 기록" onBack={() => go('home')} />
-        <div className="grid grid-cols-[320px_minmax(0,1fr)] items-start gap-10">
-          <div>
-            <CallListBody activeStem={stem} />
-          </div>
-          <div className="min-w-0">
-            {stem ? (
-              <CallDetailBody stem={stem} />
-            ) : (
-              <p className="leading-relaxed text-ink-soft">왼쪽에서 통화를 고르면 요약이 여기에 나와요.</p>
-            )}
-          </div>
-        </div>
+        <TwoPane list={<PeopleList activeId={partnerId} parkHint={parkHint} />}>
+          <button
+            type="button"
+            onClick={() => go('person', false, backTo)}
+            className="-ml-2 mb-3 flex min-h-11 items-center gap-1 rounded-full px-2 font-semibold text-ink hover:bg-line/60"
+          >
+            <ChevronLeft size={20} aria-hidden />
+            {partnerById(backTo).name}
+          </button>
+          {body}
+        </TwoPane>
       </Screen>
     );
   }
   return (
     <Screen>
-      <TopBar title="통화 기록" onBack={() => go(stem ? 'history' : 'home')} />
-      {stem ? <CallDetailBody stem={stem} /> : <CallListBody activeStem={null} />}
+      <TopBar title="통화 내역" onBack={() => go('person', false, backTo)} />
+      {body}
     </Screen>
   );
+}
+
+// #/log: 전체 통화 기록. #/log/<stem>: 통화 내역 상세(폰은 전체 화면, 데스크톱은 사람 목록 옆 오른쪽 칸).
+export function Log({ stem, parkHint }: { stem: string | null; parkHint?: string }) {
+  if (!stem) {
+    return (
+      <Screen>
+        <TopBar title="전체 통화 기록" onBack={() => go('settings')} />
+        <CallListBody />
+      </Screen>
+    );
+  }
+  return <LogDetailScreen stem={stem} parkHint={parkHint} />;
 }

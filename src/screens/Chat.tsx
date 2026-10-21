@@ -1,104 +1,24 @@
 import { ChevronLeft, Phone, SendHorizontal } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { Avatar } from '../components/Avatar';
 import { WordText } from '../components/WordText';
-import { List, QuietButton, Screen, TopBar } from '../components/ui';
+import { QuietButton } from '../components/ui';
 import { closeChat, getChat, getPartnerMemory, sendChat, type ChatMessage, type PartnerMemory } from '../lib/api';
+import { clock, sameDay, yesterdayOf } from '../lib/callFormat';
 import { buildChatInstruction } from '../lib/instructions';
-import { PARTNERS, isPark, partnerMeta, type Partner } from '../lib/partners';
+import { partnerMeta, type Partner } from '../lib/partners';
 import { go } from '../lib/router';
+import { useSwipe } from '../lib/swipe';
+import { visibleFriends } from '../lib/visibility';
 
 const IDLE_CLOSE_MS = 2 * 60 * 1000;
 const MAX_LENGTH = 1000;
 const GAP_MS = 5 * 60 * 1000;
-const FRIENDS = PARTNERS.filter((p) => !isPark(p));
-
-function sameDay(a: Date, b: Date): boolean {
-  return a.toDateString() === b.toDateString();
-}
-
-function yesterdayOf(now: Date): Date {
-  const d = new Date(now);
-  d.setDate(d.getDate() - 1);
-  return d;
-}
-
-function clock(d: Date): string {
-  return d.toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' });
-}
-
-function listTime(at: string, now = new Date()): string {
-  const d = new Date(at);
-  if (Number.isNaN(d.getTime())) return '';
-  if (sameDay(d, now)) return clock(d);
-  if (sameDay(d, yesterdayOf(now))) return '어제';
-  return d.toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' });
-}
 
 function dayLabel(d: Date, now = new Date()): string {
   if (sameDay(d, now)) return '오늘';
   if (sameDay(d, yesterdayOf(now))) return '어제';
   return d.toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'short' });
-}
-
-function Avatar({ partner, size }: { partner: Partner; size: number }) {
-  return (
-    <span className="block shrink-0 overflow-hidden rounded-full bg-line" style={{ width: size, height: size }}>
-      <img src={partner.portrait} alt="" width={size} height={size} className="size-full object-cover" />
-    </span>
-  );
-}
-
-function ChatList() {
-  const [last, setLast] = useState<Record<string, ChatMessage | null>>({});
-
-  useEffect(() => {
-    const controller = new AbortController();
-    for (const p of FRIENDS) {
-      getChat(p.id, controller.signal).then(
-        (messages) => setLast((prev) => ({ ...prev, [p.id]: messages[messages.length - 1] ?? null })),
-        () => {},
-      );
-    }
-    return () => controller.abort();
-  }, []);
-
-  const stamp = (id: string) => {
-    const t = new Date(last[id]?.at ?? '').getTime();
-    return Number.isNaN(t) ? 0 : t;
-  };
-  const ordered = [...FRIENDS].sort((a, b) => stamp(b.id) - stamp(a.id));
-
-  return (
-    <Screen>
-      <TopBar title="친구 채팅" onBack={() => go('home')} />
-      <p className="-mt-2 mb-5 text-ink-soft lg:-mt-3">문자로 편하게 이야기해요. 친구는 통화에서 나눈 이야기도 기억해요.</p>
-      <List>
-        {ordered.map((p) => {
-          const message = last[p.id];
-          const preview = message ? `${message.role === 'me' ? '나: ' : ''}${message.text}` : p.intro;
-          return (
-            <button
-              key={p.id}
-              type="button"
-              onClick={() => go('chat', false, p.id)}
-              className="flex w-full items-center gap-4 px-4 py-4 text-left hover:bg-paper"
-            >
-              <Avatar partner={p} size={56} />
-              <span className="min-w-0 flex-1">
-                <span className="flex items-baseline justify-between gap-3">
-                  <span className="font-bold">{p.name}</span>
-                  {message && <span className="shrink-0 text-xs text-ink-soft">{listTime(message.at)}</span>}
-                </span>
-                <span lang={message ? 'en' : 'ko'} className="mt-0.5 block truncate text-sm text-ink-soft">
-                  {preview}
-                </span>
-              </span>
-            </button>
-          );
-        })}
-      </List>
-    </Screen>
-  );
 }
 
 type ConversationProps = {
@@ -121,6 +41,7 @@ function Conversation({ partner, brief, interests, profileReady, onCall }: Conve
   const alive = useRef(true);
   const dirty = useRef(false);
   const idleTimer = useRef<number | undefined>(undefined);
+  const swipe = useSwipe({ onLeft: () => go('person', false, id) });
   const memory = useRef<PartnerMemory | null>(null);
   const memoryLoad = useRef<Promise<void>>(Promise.resolve());
   const memoryStale = useRef(false);
@@ -232,12 +153,16 @@ function Conversation({ partner, brief, interests, profileReady, onCall }: Conve
   const now = new Date();
 
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-[480px] flex-col px-5 lg:max-w-[760px] lg:px-10 lg:min-h-dvh!">
+    <main
+      {...swipe.handlers}
+      style={swipe.style}
+      className="mx-auto flex min-h-dvh w-full max-w-[480px] flex-col px-5 lg:max-w-[760px] lg:px-10 lg:min-h-dvh!"
+    >
       <header className="sticky top-0 z-10 -mx-5 flex items-center gap-2 border-b border-line bg-paper/95 px-3 pt-[calc(8px+env(safe-area-inset-top))] pb-2 backdrop-blur lg:mx-0 lg:px-0 lg:pt-8 lg:pb-3">
         <button
           type="button"
-          onClick={() => go('chat')}
-          aria-label="친구 목록"
+          onClick={() => go('person', false, id)}
+          aria-label="뒤로"
           className="grid size-11 shrink-0 place-items-center rounded-full text-ink hover:bg-line/60"
         >
           <ChevronLeft size={24} aria-hidden />
@@ -391,11 +316,10 @@ export function Chat({
   profileReady: boolean;
   onCall: (partnerId: string) => void;
 }) {
-  const partner = FRIENDS.find((p) => p.id === partnerId);
+  const partner = visibleFriends().find((p) => p.id === partnerId);
   useEffect(() => {
-    if (partnerId && !partner) go('chat', true);
-  }, [partnerId, partner]);
-  if (!partnerId) return <ChatList />;
+    if (!partner) go('home', true);
+  }, [partner]);
   if (!partner) return null;
   return <Conversation key={partner.id} partner={partner} brief={brief} interests={interests} profileReady={profileReady} onCall={onCall} />;
 }

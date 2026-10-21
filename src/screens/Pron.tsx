@@ -491,7 +491,7 @@ function Results({ result, onRetake, retaking }: { result: PronResult; onRetake:
   const clean = measured.filter((c) => c.as_other + c.unclear === 0);
   return (
     <Screen wide>
-      <TopBar title="발음 진단 결과" onBack={() => go('home')} />
+      <TopBar title="발음 진단 결과" onBack={() => go('settings')} />
       <p className="max-w-[640px] leading-relaxed text-ink-soft">
         {result.date}에 읽은 문장을 받아쓰기가 들은 그대로 비교한 결과예요. 점수가 아니라 내 발음 습관이에요. 숫자는 다르게 들린 문장 수 / 해당 소리가 들어간 문장 수예요.
       </p>
@@ -528,7 +528,7 @@ function Results({ result, onRetake, retaking }: { result: PronResult; onRetake:
           <RotateCcw size={20} aria-hidden />
           다시 진단하기
         </PrimaryButton>
-        <QuietButton onClick={() => go('home')}>홈으로</QuietButton>
+        <QuietButton onClick={() => go('settings')}>설정으로</QuietButton>
       </div>
     </Screen>
   );
@@ -607,7 +607,7 @@ export function Pron() {
 
   return (
     <Screen>
-      <TopBar title="발음 진단" onBack={() => go('home')} />
+      <TopBar title="발음 진단" onBack={() => go('settings')} />
       <p className="text-lg font-semibold leading-relaxed">내 발음 습관이 어떤지 먼저 재 봐요.</p>
       <p className="mt-2 leading-relaxed text-ink-soft">
         Ms. Park이 문장을 하나씩 보여 줄게요. 소리 내어 읽으면 프로그램이 들린 그대로 받아써요. 고쳐 주지 않아요. can과 can’t처럼 비슷한 소리가 어떻게 들리는지 알아보는 거예요.

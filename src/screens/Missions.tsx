@@ -3,6 +3,7 @@ import { List, Screen, TopBar } from '../components/ui';
 import { WordText } from '../components/WordText';
 import { ChevronRight } from 'lucide-react';
 import type { Mission } from '../lib/instructions';
+import { PARK_ID } from '../lib/partners';
 import { go } from '../lib/router';
 
 const LEVELS: Record<string, { label: string; className: string }> = {
@@ -16,7 +17,7 @@ const MISSIONS = (missionsData as Mission[]).filter((m) => m.type !== 'teachback
 export function Missions({ onPick }: { onPick: (mission: Mission) => void }) {
   return (
     <Screen>
-      <TopBar title="상황 역할극" onBack={() => go('home')} />
+      <TopBar title="상황 역할극" onBack={() => go('person', false, PARK_ID)} />
       <p className="mb-4 leading-relaxed text-ink-soft">
         장면을 고르면 Ms. Park이 그 역할로 통화해요. 끝나면 쉬운 영어로 짧게 피드백해요.
       </p>
