@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 from server.call_bot import NOISE_MARK_RE
 from server.partner_memory import PARTNER_IDS
 from server.pricing import combine_cost
+from server.transcript_clean import clean_learner_text
 from server.transcript_store import get_teachback_dir, get_transcript_dir, get_tutoring_dir
 
 logger = logging.getLogger(__name__)
@@ -196,9 +197,13 @@ def _all_calls() -> List[Dict[str, Any]]:
     return calls
 
 
-def list_calls(limit: int = 50) -> List[Dict[str, Any]]:
-    """최신순 통화 목록. limit개까지."""
-    calls = _all_calls()[: max(int(limit), 0)]
+def list_calls(limit: int = 50, partner: Optional[str] = None) -> List[Dict[str, Any]]:
+    """최신순 통화 목록. limit개까지. partner가 있으면 그 사람의 통화만("park"는 머리글에 partner가 없는 통화)."""
+    calls = _all_calls()
+    if partner is not None:
+        wanted = None if partner == "park" else partner
+        calls = [c for c in calls if c["partner"] == wanted]
+    calls = calls[: max(int(limit), 0)]
     for call in calls:
         call["cost"] = combine_cost(call["cost"]["live"], _tutoring_cost(call))
     return calls
@@ -240,6 +245,9 @@ def _read_transcript(path: Path) -> List[Dict[str, str]]:
         elif raw and line.strip():
             raw[-1][1] += " " + line
     turns = [{"speaker": s, "text": " ".join(NOISE_MARK_RE.sub(" ", t).split())} for s, t in raw]
+    for turn in turns:
+        if turn["speaker"] == "me":
+            turn["text"] = clean_learner_text(turn["text"])
     return [t for t in turns if t["text"]]
 
 

@@ -2,6 +2,7 @@ import { PipecatClient } from '@pipecat-ai/client-js';
 import { SmallWebRTCTransport } from '@pipecat-ai/small-webrtc-transport';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { LatencyMeter, clearPendingLatency, stashLatency } from './latency';
+import { cleanLearnerText } from './transcript';
 
 export type CallMode = 'mission' | 'freetalk' | 'teachback' | 'smalltalk';
 export type CallStatus = 'ready' | 'connecting' | 'live' | 'ended' | 'error';
@@ -46,13 +47,14 @@ export function useCall() {
 
   const addChunk = useCallback((who: Speaker, chunk: string) => {
     if (!chunk || !chunk.replace(NOISE_MARK, '').trim()) return;
+    const text = who === 'me' ? cleanLearnerText(chunk) : chunk;
     setLines((prev) => {
       const last = prev[prev.length - 1];
       if (last && last.who === who) {
-        return [...prev.slice(0, -1), { ...last, text: joinChunk(last.text, chunk) }];
+        return [...prev.slice(0, -1), { ...last, text: joinChunk(last.text, text) }];
       }
       lineId.current += 1;
-      return [...prev, { id: lineId.current, who, text: joinChunk('', chunk) }].slice(-40);
+      return [...prev, { id: lineId.current, who, text: joinChunk('', text) }].slice(-40);
     });
   }, []);
 
