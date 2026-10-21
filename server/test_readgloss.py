@@ -307,5 +307,58 @@ class BridgeClientTest(unittest.TestCase):
         self.assertIsNone(readgloss.push_tutoring({"vocab": [{"word": "x", "meaning_ko": ""}]}, "t"))
 
 
+class WordbookForFriendsTest(unittest.TestCase):
+    def state(self, **extra):
+        saved = {f"word{chr(97 + i)}": {"word": f"word{chr(97 + i)}", "gloss": f"뜻{i}", "ts": ms(NOW - timedelta(days=i + 1)), "review": {"done": False}} for i in range(12)}
+        return {"known": {"wordb": {"ts": 1}}, "saved": saved, "history": [], "phrases": {}, **extra}
+
+    def test_shareable_phrase_filters_private_and_long_text(self):
+        keep = readgloss.shareable_phrase("  Circle <back> later ")
+        self.assertEqual(keep, "Circle back later")
+        for text in [
+            "",
+            "한글만",
+            "see https://example.com/page now",
+            "mail me at jane@example.com",
+            "call 010-1234-5678 now",
+            "my number is 123456",
+            "x" * 91,
+            " ".join(["word"] * 13),
+        ]:
+            self.assertEqual(readgloss.shareable_phrase(text), "", text)
+
+    def test_words_capped_at_eight_known_words_excluded(self):
+        book = readgloss.pick_wordbook(self.state(), None, NOW)
+
+        self.assertEqual(len(book["words"]), readgloss.WORDBOOK_WORDS)
+        self.assertNotIn("wordb", [w["lemma"] for w in book["words"]])
+        self.assertEqual(set(book["words"][0]), {"lemma", "gloss"})
+
+    def test_phrases_newest_first_capped_filtered_and_deduplicated(self):
+        phrases = {f"id{i:010d}": {"text": f"phrase number {chr(97 + i)}", "translation": "뜻", "ts": i + 1} for i in range(8)}
+        phrases["priv"] = {"text": "visit https://example.com today", "translation": "", "ts": 100}
+        phrases["dup"] = {"text": "PHRASE  number h", "translation": "", "ts": 50}
+        book = readgloss.pick_wordbook(self.state(phrases=phrases), None, NOW)
+
+        self.assertEqual(len(book["phrases"]), readgloss.WORDBOOK_PHRASES)
+        self.assertEqual([p["text"] for p in book["phrases"]][:2], ["PHRASE number h", "phrase number g"])
+        self.assertNotIn("priv", " ".join(p["text"] for p in book["phrases"]))
+
+    def test_bridge_off_gives_empty_lists_and_one_read_pair_otherwise(self):
+        with mock.patch.object(readgloss, "_request", return_value=None) as request:
+            self.assertEqual(readgloss.bridge_lists(NOW), ([], {"words": [], "phrases": []}))
+        request.assert_called_once()
+
+        def fake(method, path, body=None, timeout=1.5):
+            return self.state() if path == "/words" else {"due": []}
+
+        with mock.patch.object(readgloss, "_request", side_effect=fake) as request:
+            practice, book = readgloss.bridge_lists(NOW)
+
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(len(practice), readgloss.PRACTICE_LIMIT)
+        self.assertEqual(len(book["words"]), readgloss.WORDBOOK_WORDS)
+
+
 if __name__ == "__main__":
     unittest.main()

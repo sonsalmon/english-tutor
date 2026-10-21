@@ -32,17 +32,17 @@ from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCRequestHandler,
 )
 
-from server import chat, clipdb, culture_filter, culturedb, people, phrase_gloss, pron, review, tts, youtube
-from server.call_bot import parse_call_config, run_bot, smalltalk_time_limit_from_env
+from server import chat, clipdb, culture_filter, culturedb, feed, people, phrase_gloss, pron, review, tts, wordbook, youtube
+from server.call_bot import parse_call_config, run_bot, time_limit_for_mode
 from server import partner_memory
 from server.history import list_calls, live_cost_of, load_call, totals as call_totals
 from server.pricing import combine_cost
 from server.readgloss import (
     LEMMA_RE,
     WORD_RE,
+    bridge_lists,
     lookup_word,
     normalize_phrase,
-    practice_words,
     save_phrase,
     save_word,
     stored_phrase_keys,
@@ -93,6 +93,8 @@ app = FastAPI(lifespan=lifespan)
 app.include_router(phrase_gloss.router)
 app.include_router(people.router)
 app.include_router(review.router)
+app.include_router(wordbook.router)
+app.include_router(feed.router)
 
 # Serve static files
 # app.mount("/static", StaticFiles(directory="frontend"), name="static")
@@ -104,13 +106,13 @@ if os.path.exists("dist/audio-processors"):
     app.mount("/audio-processors", StaticFiles(directory="dist/audio-processors"), name="audio-processors")
 @app.get("/api/status")
 async def get_status():
-    """화면이 통화 제한 시간(초)을 미리 알고 남은 시간을 보여 주는 데 쓴다."""
+    """화면이 통화 제한 시간(초)을 미리 알고 남은 시간을 보여 주는 데 쓴다. 친구 통화(smalltalk)는 제한이 없어 null이다."""
     return {
         "mode": "local",
         "time_limits": {
-            "call": session_time_limit_from_env(None),
-            "teachback": session_time_limit_from_env("teachback"),
-            "smalltalk": smalltalk_time_limit_from_env(),
+            "call": time_limit_for_mode("mission"),
+            "teachback": time_limit_for_mode("teachback"),
+            "smalltalk": time_limit_for_mode("smalltalk"),
         },
     }
 
@@ -125,6 +127,7 @@ async def learner_profile_endpoint():
         card = None
         broken = True
     pron_result = await asyncio.to_thread(pron.latest_result)
+    practice, wordbook_lists = await _bridge_lists_within(PRACTICE_DEADLINE_SEC)
     return {
         "load_failed": broken,
         "brief": "\n".join(part for part in (pron.pron_brief(pron_result), profile_brief(card)) if part),
@@ -135,7 +138,8 @@ async def learner_profile_endpoint():
             {"pattern": p["pattern"], "example": p["example"]} for p in (card["weak_points"][:3] if card else [])
         ],
         "next_goal": card["next_goal"] if card else "",
-        "practice_words": await _practice_words_within(PRACTICE_DEADLINE_SEC),
+        "practice_words": practice,
+        "wordbook": wordbook_lists,
     }
 
 
@@ -143,12 +147,13 @@ async def learner_profile_endpoint():
 PRACTICE_DEADLINE_SEC = 3.0
 
 
-async def _practice_words_within(seconds: float) -> list:
+async def _bridge_lists_within(seconds: float) -> tuple:
+    """(통화에 써 볼 단어, 친구에게 보여 줄 단어장). 다리가 느리면 둘 다 빈 값."""
     try:
-        return await asyncio.wait_for(asyncio.to_thread(practice_words), timeout=seconds)
+        return await asyncio.wait_for(asyncio.to_thread(bridge_lists), timeout=seconds)
     except asyncio.TimeoutError:
         logger.info("readgloss practice words skipped: bridge too slow")
-        return []
+        return [], {"words": [], "phrases": []}
 
 
 # 백그라운드 카드 갱신 작업. 참조를 안 잡으면 끝나기 전에 수거될 수 있다.

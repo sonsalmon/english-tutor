@@ -368,7 +368,7 @@ Rules:
 - Write text in English. Every thread also needs a short Korean label in "ko" (at most 30 characters).
 - Limits: at most {MAX_FACTS} facts (each at most {FACT_MAX} characters), {MAX_THREADS} threads (each at most {THREAD_MAX}), {MAX_SELF_STORY} self_story entries (story at most {STORY_MAX}, progress at most {PROGRESS_MAX}), {MAX_JOKES} jokes (each at most {JOKE_MAX}), episode at most {SUMMARY_MAX} characters. If over the limit, drop the least important or oldest.
 - Privacy: never store real person names (including the learner's own), addresses, company or school names, phone numbers, emails or other contact details of the learner or the learner's acquaintances. Write "a coworker" or "the learner's friend" instead. Names of {name}'s own people inside {name}'s stories are fine.
-- Faith privacy: never store the learner's own faith, beliefs or religious practice (anything the learner ("Me") says about their own religion), not even in a changed form. {name}'s own faith life inside {name}'s stories is fine.
+- Faith: the learner's own faith, beliefs and religious practice are a normal personal topic, like hobbies or family. You may remember what the learner ("Me") said about it as a fact, and remember it respectfully: record it neutrally, never judge it, never argue with it, and never turn it into pressure to believe or to change. {name}'s own faith life inside {name}'s stories is fine.
 - If nothing is worth remembering, return the current memory unchanged (still with an episode)."""
 
 

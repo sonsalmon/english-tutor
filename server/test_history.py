@@ -285,13 +285,12 @@ class CallsHttpTest(HistoryDirs):
         self.assertEqual(stems("?partner=park"), ["2026-10-18-080000"])
         self.assertEqual(len(stems("")), 2)
 
-    def test_status_time_limits_include_smalltalk(self):
+    def test_status_time_limits_have_no_smalltalk_limit(self):
         env = {"SESSION_TIME_LIMIT": "180", "TEACHBACK_TIME_LIMIT": "900"}
         with mock.patch.dict(os.environ, env):
-            os.environ.pop("SMALLTALK_TIME_LIMIT", None)
             limits = self.client.get("/api/status").json()["time_limits"]
 
-        self.assertEqual(limits, {"call": 180, "teachback": 900, "smalltalk": 300})
+        self.assertEqual(limits, {"call": 180, "teachback": 900, "smalltalk": None})
 
     def test_cost_over_http_in_list_and_detail(self):
         self.add_call("2026-10-20-090000", "2026-10-20 09:00", cost="0.0200")
