@@ -340,5 +340,93 @@ class PhraseAndGenreTest(unittest.TestCase):
         self.assertEqual({h["genre"] for h in clipdb.random_segments(3, path=self.db, rng=random.Random(2), tier=clipdb.TIER_LECTURE)}, {"daily"})
 
 
+class SegmentsAround(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.path = Path(self._tmp.name) / "captions.db"
+        conn = clipdb.connect(self.path)
+        self.addCleanup(conn.close)
+        self.conn = conn
+        clipdb.upsert_channel(conn, "@office", "The Office", "tv")
+        self.save("vid-seg1", [seg(i * 3.0, i * 3.0 + 3.0, f"line {i}") for i in range(10)])
+
+    def save(self, vid, segments, status="ok"):
+        clipdb.save_video(
+            self.conn,
+            {"id": vid, "channel_handle": "@office", "title": f"Title {vid}", "published": "2026-01-01T00:00:00Z", "duration_sec": 45},
+            status,
+            "auto",
+            segments,
+            "2026-10-20T00:00:00+00:00",
+        )
+
+    def around(self, at, **kw):
+        return clipdb.segments_around("vid-seg1", at, path=self.path, **kw)
+
+    def starts(self, res):
+        return [line["start"] for line in res["lines"]]
+
+    def test_window_returns_lines_in_time_order_with_video_info(self):
+        res = self.around(15.0, before=6, after=6)
+        self.assertEqual(self.starts(res), [9.0, 12.0, 15.0, 18.0, 21.0])
+        self.assertEqual(res["at_id"], 15000)
+        self.assertEqual(res["lines"][2], {"id": 15000, "start": 15.0, "end": 18.0, "text": "line 5"})
+        self.assertEqual((res["video_id"], res["title"], res["channel"], res["caption_kind"], res["duration_sec"]), ("vid-seg1", "Title vid-seg1", "The Office", "auto", 45))
+        self.assertTrue(res["has_more_before"])
+        self.assertTrue(res["has_more_after"])
+
+    def test_has_more_flags_are_false_at_the_edges_of_the_video(self):
+        head = self.around(0.0, before=90, after=5)
+        self.assertEqual(self.starts(head), [0.0, 3.0])
+        self.assertEqual((head["at_id"], head["has_more_before"], head["has_more_after"]), (0, False, True))
+        everything = self.around(15.0)
+        self.assertEqual(len(everything["lines"]), 10)
+        self.assertEqual((everything["has_more_before"], everything["has_more_after"]), (False, False))
+
+    def test_at_between_lines_picks_the_line_that_already_started(self):
+        self.assertEqual(self.around(16.4, before=3, after=3)["at_id"], 15000)
+
+    def test_limit_keeps_the_lines_around_at_and_reports_the_cut_sides(self):
+        res = self.around(15.0, limit=4)
+        self.assertEqual(self.starts(res), [9.0, 12.0, 15.0, 18.0])
+        self.assertEqual(res["at_id"], 15000)
+        self.assertTrue(res["has_more_before"] and res["has_more_after"])
+        tail = self.around(27.0, limit=3)
+        self.assertEqual(self.starts(tail), [21.0, 24.0, 27.0])
+        self.assertTrue(tail["has_more_before"])
+        self.assertFalse(tail["has_more_after"])
+
+    def test_limit_and_window_are_clamped(self):
+        self.assertEqual(len(self.around(15.0, limit=0)["lines"]), 1)
+        self.assertEqual(len(self.around(15.0, limit=10**6)["lines"]), 10)
+        self.assertEqual(self.starts(self.around(15.0, before=-5, after=-5)), [15.0])
+        self.assertEqual(len(self.around(15.0, before=10**9, after=10**9)["lines"]), 10)
+
+    def test_same_start_gets_unique_ids(self):
+        self.save("vid-dup1", [seg(5.0, 6.0, "a"), seg(5.0, 7.0, "b"), seg(9.0, 10.0, "c")])
+        res = clipdb.segments_around("vid-dup1", 5.0, path=self.path)
+        self.assertEqual([line["id"] for line in res["lines"]], [5000, 5001, 9000])
+        self.assertEqual(res["at_id"], 5001)
+
+    def test_unknown_or_captionless_video_and_missing_db_give_none(self):
+        self.assertIsNone(clipdb.segments_around("vid-none", 1.0, path=self.path))
+        self.save("vid-bad1", [], status="no_captions")
+        self.assertIsNone(clipdb.segments_around("vid-bad1", 1.0, path=self.path))
+        self.assertIsNone(clipdb.segments_around("", 1.0, path=self.path))
+        self.assertIsNone(clipdb.segments_around("vid-seg1", 1.0, path=Path(self._tmp.name) / "nope.db"))
+
+    def test_video_without_lines_in_the_window_has_no_at_id(self):
+        self.save("vid-gap1", [seg(100.0, 103.0, "late")])
+        res = clipdb.segments_around("vid-gap1", 1.0, before=5, after=5, path=self.path)
+        self.assertEqual((res["lines"], res["at_id"], res["has_more_after"]), ([], None, True))
+
+    def test_db_is_opened_read_only(self):
+        real = clipdb.sqlite3.connect
+        with mock.patch.object(clipdb.sqlite3, "connect", wraps=real) as connect:
+            self.around(15.0)
+        self.assertIn("mode=ro", connect.call_args.args[0])
+
+
 if __name__ == "__main__":
     unittest.main()

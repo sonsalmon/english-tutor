@@ -39,6 +39,20 @@ body {
   outline-offset: 2px;
 }
 
+/* 줄이 바뀔 때 현재 줄 카드를 120ms 동안 서서히 보인다. */
+@keyframes line-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.line-in {
+  animation: line-in 120ms ease-out;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   ::before,

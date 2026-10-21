@@ -104,10 +104,14 @@ export type Clip = {
   thumbnail: string;
   published?: string;
   start?: number;
+  start_f?: number;
+  end?: number;
   text?: string;
   phrase?: string;
   source?: 'db' | 'search';
 };
+export type ClipLine = { id: number; start: number; end: number; text: string };
+export type ClipSegments = { lines: ClipLine[]; atId: number | null; hasMoreBefore: boolean; hasMoreAfter: boolean };
 export type ClipStatus = 'ok' | 'no_key' | 'no_query' | 'error';
 export type ClipResult = { query: string; clips: Clip[]; status: ClipStatus };
 
@@ -457,6 +461,22 @@ export async function getCallClips(stem: string, signal?: AbortSignal): Promise<
     query: typeof data?.query === 'string' ? data.query : '',
     clips: Array.isArray(data?.clips) ? data.clips : [],
     status,
+  };
+}
+
+// 자막 DB에서 영상의 at초 앞뒤 줄. 없거나 실패하면 던진다(재생기는 일반 재생으로 열린다).
+export async function getClipSegments(videoId: string, at: number, signal?: AbortSignal): Promise<ClipSegments> {
+  const res = await fetch(`/api/clips/segments?video_id=${encodeURIComponent(videoId)}&at=${at}`, { signal });
+  if (!res.ok) throw new Error(await errorMessage(res, '자막 줄을 불러오지 못했어요.'));
+  const data = await res.json();
+  const lines: ClipLine[] = (Array.isArray(data?.lines) ? data.lines : []).filter(
+    (l: any) => Number.isFinite(l?.id) && Number.isFinite(l?.start) && Number.isFinite(l?.end) && typeof l?.text === 'string',
+  );
+  return {
+    lines,
+    atId: Number.isFinite(data?.at_id) ? data.at_id : null,
+    hasMoreBefore: data?.has_more_before === true,
+    hasMoreAfter: data?.has_more_after === true,
   };
 }
 

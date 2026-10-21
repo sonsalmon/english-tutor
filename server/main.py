@@ -14,6 +14,7 @@
 
 import asyncio
 import json
+import math
 import os
 import re
 import logging
@@ -644,6 +645,8 @@ def _db_clips(tutoring: dict):
                     "channel": hit.get("channel") or "",
                     "thumbnail": f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg",
                     "start": int(hit.get("start") or 0),
+                    "start_f": float(hit.get("start") or 0),
+                    "end": float(hit.get("end") or 0),
                     "text": hit.get("text") or "",
                     "phrase": phrase,
                     "source": "db",
@@ -694,6 +697,20 @@ async def call_clips_endpoint(stem: str):
         seen.add(c.get("id"))
         clips.append({**c, "source": "search"})
     return {"query": query, "clips": clips, "status": "ok", "source": "mixed" if db_clips else "search"}
+
+
+CLIP_VIDEO_ID_RE = re.compile(r"[A-Za-z0-9_-]{6,20}")
+
+
+@app.get("/api/clips/segments")
+async def clip_segments_endpoint(video_id: str, at: float = 0.0, before: float = 90.0, after: float = 90.0, limit: int = 200):
+    """자막 DB에서 영상의 at초 앞뒤 줄. 영상 id나 숫자가 이상하면 400, 영상이 없거나 자막이 없으면 404."""
+    if not CLIP_VIDEO_ID_RE.fullmatch(video_id) or not all(math.isfinite(v) for v in (at, before, after)):
+        raise HTTPException(status_code=400, detail="영상 id나 시각이 틀렸어요.")
+    found = await asyncio.to_thread(clipdb.segments_around, video_id, at, before, after, limit)
+    if found is None:
+        raise HTTPException(status_code=404, detail="이 영상의 자막 줄이 없어요.")
+    return found
 
 
 MAX_CULTURE_TERMS = 6
