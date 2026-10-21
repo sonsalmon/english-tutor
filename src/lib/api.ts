@@ -1,5 +1,6 @@
 import type { LessonSection, PracticeWord, Retry } from './instructions';
 import type { CallLatency, LatencyResult } from './latency';
+import { toThinkingGaps } from './thinkingGaps';
 
 export type WeakPoint = { pattern: string; example: string };
 // 내 단어장에서 친구 통화·채팅에 보여 주는 단어와 저장한 문장. 서버가 아직 안 주는 동안은 없다.
@@ -44,7 +45,8 @@ export type Lesson = {
 // 예상 비용(USD). 모르는 쪽은 null, total은 아는 쪽의 합이다.
 export type Cost = { live: number | null; tutoring: number | null; total: number | null };
 // 한국어 표현과 영어 표현의 생각 방식 차이. word=단어를 몰랐음, framing=말하는 틀이 다름.
-export type ThinkingGap = { korean: string; english: string; kind: 'word' | 'framing'; note: string };
+// detail(한국어 자세한 설명)·examples(영어 예문)는 새 통화에만 있다. 옛 통화는 note만 있다.
+export type ThinkingGap = { korean: string; english: string; kind: 'word' | 'framing'; note: string; detail?: string; examples?: string[] };
 // 통화 뒤 대화 상대가 보내는 메시지. 이번 통화에서 나온 표현만 담긴다.
 export type FriendMessage = {
   opening: string;
@@ -360,9 +362,7 @@ function toTutoring(data: Record<string, unknown>): Tutoring {
     practice_used: list(data.practice_used),
     readgloss: (data.readgloss as Tutoring['readgloss']) ?? null,
     cost: (data.cost as Cost | null | undefined) ?? null,
-    thinking_gaps: list(data.thinking_gaps).filter(
-      (g): g is ThinkingGap => !!g && (g.kind === 'word' || g.kind === 'framing') && typeof g.korean === 'string' && typeof g.english === 'string',
-    ),
+    thinking_gaps: toThinkingGaps(data.thinking_gaps),
     friend_message: toFriendMessage(data.friend_message),
     stem: typeof data.stem === 'string' && data.stem ? data.stem : null,
   };

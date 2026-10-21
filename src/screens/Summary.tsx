@@ -194,7 +194,7 @@ export function Summary({ call, onRetry, onHome }: { call: FinishedCall; onRetry
         </>
       )}
       {tutoring && <ReadingWords words={call.practiceWords} used={tutoring.practice_used ?? []} />}
-      {tutoring && <ThinkingGaps gaps={tutoring.thinking_gaps} />}
+      {tutoring && <ThinkingGaps tutoring={tutoring} stem={stem} />}
       {stem && <CallExtras stem={stem} />}
 
       <div className="mt-auto space-y-3 pt-10 lg:flex lg:space-y-0 lg:gap-3">

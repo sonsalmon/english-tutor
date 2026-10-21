@@ -80,6 +80,9 @@ GAP_KINDS = ("word", "framing")
 MAX_GAP_KOREAN = 60
 MAX_GAP_ENGLISH = 80
 MAX_GAP_NOTE = 140
+MAX_GAP_DETAIL = 400
+MAX_GAP_EXAMPLES = 2
+MAX_GAP_EXAMPLE = 120
 MAX_FRIEND_PHRASES = 5
 MAX_FRIEND_OPENING = 120
 MAX_FRIEND_PHRASE = 80
@@ -99,7 +102,7 @@ _CONTRACT_HINT = """{
   "retry": {"goal": "다음 통화에서 쓸 목표 한두 줄(영어)", "target_phrases": ["...", "..."]},
   "clip_query": "3-8 word English YouTube search query",
   "topic_keywords": ["kitchen", "cutting board", "busy week"],
-  "thinking_gaps": [{"korean": "학습자가 말하려던 한국어. 받아쓰기가 잘못 들었으면 문맥으로 알 수 있는 의도한 단어로 고쳐 쓴다", "english": "natural English", "kind": "word 또는 framing", "note": "한국어 한 문장"}],
+  "thinking_gaps": [{"korean": "학습자가 말하려던 한국어. 받아쓰기가 잘못 들었으면 문맥으로 알 수 있는 의도한 단어로 고쳐 쓴다", "english": "natural English", "kind": "word 또는 framing", "note": "한국어 한 문장", "detail": "한국어 2-4문장: 학습자가 말한 것에 딱 맞는 자세한 설명", "examples": ["짧고 자연스러운 영어 예문 1-2개"]}],
   "friend_message": {"opening": "one short, warm line specific to this call", "phrases": [{"phrase": "English phrase from this call", "note": "one short plain-English line (B1 level)"}], "next_time": "Next time, try telling me about ..."}
 }"""
 
@@ -125,7 +128,7 @@ Analysis rules:
 - retry.target_phrases: 2-4 short English phrases the learner should try to use next time.
 - clip_query: a short English YouTube search query (3-8 words) for clips showing native speakers in the same topic or situation as this call, e.g. "coworkers small talk about weekend plans". Use only generic words: no personal names, addresses or company names.
 - topic_keywords: 2-5 concrete English nouns or short noun phrases (letters and spaces only, max 30 characters each) naming what the conversation was actually about, e.g. "kitchen", "cutting board", "busy week", "coffee". Never generic words such as talk, place, people, thing, coworkers, conversation, small talk, day, time. No personal names, addresses or company names.
-- thinking_gaps: one item per moment the learner switched to Korean or asked how to say something (the Partner's "You can say ..." offers often answer these). Up to {max_gaps} items. "korean" is the learner's Korean words (or the thing they asked about); "english" is the natural English; "kind" is "word" when it was just a missing word, or "framing" when English frames the idea differently from Korean (e.g. "정신없다" -> "I'm swamped", "빈둥빈둥" -> "lazing around", "입맛에 안 맞다" -> "It wasn't to my taste"). "note": ONE short Korean sentence - for "framing" how English frames the idea differently (what it focuses on, the image or structure), for "word" just that it was a missing word. If a raw verbatim transcription of the learner is given below, use it, because it keeps the Korean. The raw transcription can mishear Korean words, so "korean" is the Korean the learner MEANT, not necessarily the transcribed form. Check each Korean word against the context (what the learner asked about and what the Partner answered); if the transcribed word does not fit but a similar-sounding word does, write the intended word and never copy the misheard one. "korean" and "note" must agree: if your note names a different Korean word than "korean", fix "korean". When the learner's question and the Partner's answer make the intended word clear, write the intended word (example: the transcription says 토막 while the learner asks for a kitchen item and the Partner answers "cutting board" -> write 도마). Do not correct the learner's English. Empty list if there were none.
+- thinking_gaps: one item per moment the learner switched to Korean or asked how to say something (the Partner's "You can say ..." offers often answer these). Up to {max_gaps} items. "korean" is the learner's Korean words (or the thing they asked about); "english" is the natural English; "kind" is "word" when it was just a missing word, or "framing" when English frames the idea differently from Korean (e.g. "정신없다" -> "I'm swamped", "빈둥빈둥" -> "lazing around", "입맛에 안 맞다" -> "It wasn't to my taste"). "note": ONE short Korean sentence - for "framing" how English frames the idea differently (what it focuses on, the image or structure), for "word" just that it was a missing word. "detail": 2-4 Korean sentences, concrete to what THIS learner said: why thinking in Korean leads to saying it that way, and how an English speaker thinks about the same idea instead. No generic advice (nothing like "practice more" or "English is direct"); every sentence must refer to this expression. "examples": 1-2 short, natural English sentences (max 120 characters each) that use the "english" expression in everyday situations; no Korean in them. If a raw verbatim transcription of the learner is given below, use it, because it keeps the Korean. The raw transcription can mishear Korean words, so "korean" is the Korean the learner MEANT, not necessarily the transcribed form. Check each Korean word against the context (what the learner asked about and what the Partner answered); if the transcribed word does not fit but a similar-sounding word does, write the intended word and never copy the misheard one. "korean" and "note" must agree: if your note names a different Korean word than "korean", fix "korean". When the learner's question and the Partner's answer make the intended word clear, write the intended word (example: the transcription says 토막 while the learner asks for a kitchen item and the Partner answers "cutting board" -> write 도마). Do not correct the learner's English. Empty list if there were none.
 - friend_message: a short text message that {partner_name}, the call partner, sends the learner right after the call, like a friend's recap. Write it in {partner_name}'s own voice, in plain, warm English (B1 level, no Korean, no markdown). "opening" is ONE short, warm line (max 120 characters) about something specific that happened in THIS call; write it fresh in your own words, never a stock greeting. "phrases" has 3-5 items (aim for 4 when the call has enough material) taken ONLY from THIS call (never invent, never reuse phrases that did not appear): (1) things the learner reached for in Korean or asked how to say, (2) the most useful fix of a mistake the learner actually made, written as the natural version, (3) useful words or expressions the Partner used or offered (for example a word the Partner taught the learner); when the Partner used or offered one, include at least one of them. Each "phrase" is the English phrase itself (max 80 characters); each "note" is ONE short plain-English line saying what it means or when to use it (max 120 characters). Keep it friendly, not a correction list. "next_time" is ONE English sentence that starts with "Next time, try telling me about" and names a topic that fits this call. Use only generic words: no real personal names, addresses or company names. If the call was too short for any real phrase, leave "phrases" empty.
 
 Return ONLY valid JSON with exactly this shape (no markdown fences, no commentary, no extra keys):
@@ -252,9 +255,9 @@ def _capped(value: Any, limit: int) -> str:
     return text[:limit].rstrip()
 
 
-def normalize_thinking_gaps(value: Any) -> List[Dict[str, str]]:
-    """thinking_gaps 정리: kind는 word/framing만, korean·english 필수, 길이 상한, 최대 5개."""
-    rows: List[Dict[str, str]] = []
+def normalize_thinking_gaps(value: Any) -> List[Dict[str, Any]]:
+    """thinking_gaps 정리: kind는 word/framing만, korean·english 필수, 길이 상한, 최대 5개. detail(문자열)·examples(문자열 최대 2개)는 있을 때만 담는다."""
+    rows: List[Dict[str, Any]] = []
     if not isinstance(value, list):
         return rows
     for item in value:
@@ -269,6 +272,18 @@ def normalize_thinking_gaps(value: Any) -> List[Dict[str, str]]:
         }
         if kind not in GAP_KINDS or not row["korean"] or not row["english"]:
             continue
+        # detail·examples는 선택: 옛 통화에는 없고, 모델이 빠뜨렸거나 형식이 틀리면 키를 두지 않는다.
+        detail = _capped(item.get("detail"), MAX_GAP_DETAIL)
+        if detail:
+            row["detail"] = detail
+        raw_examples = item.get("examples")
+        examples = []
+        for ex in raw_examples if isinstance(raw_examples, list) else []:
+            text = _capped(ex, MAX_GAP_EXAMPLE) if isinstance(ex, str) else ""
+            if text and text not in examples:
+                examples.append(text)
+        if examples:
+            row["examples"] = examples[:MAX_GAP_EXAMPLES]
         rows.append(row)
         if len(rows) >= MAX_THINKING_GAPS:
             break
@@ -1010,6 +1025,12 @@ if __name__ == "__main__":
     assert len(_gaps) == 5 and _gaps[0]["korean"] == "정신없다" and _gaps[0]["kind"] == "framing", _gaps
     assert len(_gaps[1]["korean"]) == MAX_GAP_KOREAN and len(_gaps[1]["english"]) == MAX_GAP_ENGLISH, _gaps
     assert "thinking_gaps" not in normalize_teachback_json({"thinking_gaps": _gaps})
+    assert "detail" not in _gaps[0] and "examples" not in _gaps[0], _gaps[0]
+    _rich = normalize_thinking_gaps(
+        [{"korean": "정신없다", "english": "I'm swamped", "kind": "framing", "note": "n", "detail": "d" * 500, "examples": ["I'm swamped.", "I'm swamped.", 3, "e" * 200, "third"]}]
+    )[0]
+    assert len(_rich["detail"]) == MAX_GAP_DETAIL and len(_rich["examples"]) == MAX_GAP_EXAMPLES, _rich
+    assert _rich["examples"][0] == "I'm swamped." and len(_rich["examples"][1]) == MAX_GAP_EXAMPLE, _rich
     assert len(_out["corrections"]) == 1 and _out["corrections"][0]["better"] == "I agree"
     assert _out["retry"]["target_phrases"] == ["Here's the bottom line"], _out["retry"]
 

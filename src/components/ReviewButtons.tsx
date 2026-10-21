@@ -11,7 +11,7 @@ export type Cards = { available: boolean; off: boolean; saved: Set<string>; mark
 
 export function useCards(tutoring: Tutoring): Cards {
   const texts = useMemo(() => {
-    const all = [...tutoring.corrections.map((c) => c.better), ...(tutoring.us_style ?? []).map((u) => u.natural)].filter(cardable);
+    const all = [...tutoring.corrections.map((c) => c.better), ...(tutoring.us_style ?? []).map((u) => u.natural), ...(tutoring.thinking_gaps ?? []).map((g) => g.english)].filter(cardable);
     return [...new Set(all)].slice(0, 40);
   }, [tutoring]);
   const [saved, setSaved] = useState<Set<string>>(() => new Set());
