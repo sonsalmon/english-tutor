@@ -5,6 +5,8 @@ import { indexOfId, lineIndexAt } from './clipLines';
 
 /** 줄 시작보다 이만큼 앞에서 재생해 첫 단어가 잘리지 않게 한다. */
 export const START_LEAD_S = 0.12;
+/** 구간 끝(endTime)보다 이만큼 일찍 멈춘다. */
+export const END_LEAD_S = 0.05;
 /** seekTo 직후 플레이어가 낡은 시각을 돌려줄 수 있는 동안(ms) 시각 판정을 건너뛴다. */
 export const SEEK_GUARD_MS = 250;
 /** getCurrentTime 폴링 주기(ms). */
@@ -16,6 +18,10 @@ export type PlayerState = {
   index: number;
   /** 처음 열 때와 "다시"(줄 정보 없음)가 돌아갈 영상 시각. */
   startTime: number;
+  /** 이 시각에서 자동으로 멈춘다(피드 카드의 한 장면). null이면 끝까지 재생한다. */
+  endTime: number | null;
+  /** endTime에서 멈춘 뒤 다시 이동하기 전까지 true. */
+  ended: boolean;
   /** 플레이어가 마지막으로 알린 재생 여부. */
   playing: boolean;
   /** 시트를 열면서 멈췄다면 닫을 때 다시 재생한다. */
@@ -39,8 +45,8 @@ export type PlayerAction = { type: 'seek'; time: number } | { type: 'play' } | {
 
 export type Step = { state: PlayerState; actions: PlayerAction[] };
 
-export function initialState(startTime: number): PlayerState {
-  return { lines: [], index: -1, startTime: Math.max(0, startTime), playing: false, resumeAfterHold: false, guardUntil: 0 };
+export function initialState(startTime: number, endTime: number | null = null): PlayerState {
+  return { lines: [], index: -1, startTime: Math.max(0, startTime), endTime, ended: false, playing: false, resumeAfterHold: false, guardUntil: 0 };
 }
 
 function leadTime(time: number): number {
@@ -49,7 +55,7 @@ function leadTime(time: number): number {
 
 function moveTo(state: PlayerState, index: number, time: number, now: number): Step {
   return {
-    state: { ...state, index, resumeAfterHold: false, guardUntil: now + SEEK_GUARD_MS },
+    state: { ...state, index, ended: false, resumeAfterHold: false, guardUntil: now + SEEK_GUARD_MS },
     actions: [{ type: 'seek', time: leadTime(time) }, { type: 'play' }],
   };
 }
@@ -69,7 +75,11 @@ export function step(state: PlayerState, event: PlayerEvent): Step {
       return { state: { ...state, lines: event.lines, index: next }, actions: [] };
     }
     case 'tick': {
-      if (!lines.length || event.now < state.guardUntil) return same;
+      if (event.now < state.guardUntil) return same;
+      if (state.endTime !== null && !state.ended && event.time >= state.endTime - END_LEAD_S) {
+        return { state: { ...state, ended: true, resumeAfterHold: false }, actions: [{ type: 'pause' }] };
+      }
+      if (!lines.length) return same;
       const at = Math.max(0, lineIndexAt(lines, event.time + START_LEAD_S));
       return at === index ? same : { state: { ...state, index: at }, actions: [] };
     }

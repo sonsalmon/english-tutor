@@ -6,6 +6,8 @@ type YTPlayer = {
   playVideo(): void;
   pauseVideo(): void;
   seekTo(seconds: number, allowSeekAhead: boolean): void;
+  unMute(): void;
+  setVolume(volume: number): void;
   getCurrentTime(): number;
   getIframe(): HTMLIFrameElement;
   destroy(): void;
@@ -78,6 +80,8 @@ export function usePlayer({
   videoId,
   title,
   startTime,
+  endTime = null,
+  muted = false,
   segments,
   nativeControls,
   enabled,
@@ -86,6 +90,10 @@ export function usePlayer({
   videoId: string;
   title: string;
   startTime: number;
+  /** 이 시각에서 자동으로 멈춘다(피드 카드). 없으면 끝까지 재생한다. */
+  endTime?: number | null;
+  /** 처음 만들 때 음소거로 시작한다. 이미 만든 플레이어는 act.unmute로 켠다. */
+  muted?: boolean;
   segments: ClipSegments | null;
   nativeControls: boolean;
   enabled: boolean;
@@ -94,12 +102,13 @@ export function usePlayer({
   const mountRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<PlayerStatus>('loading');
   const [slow, setSlow] = useState(false);
-  const [state, setState] = useState<PlayerState>(() => initialState(startTime));
+  const [state, setState] = useState<PlayerState>(() => initialState(startTime, endTime));
   const stateRef = useRef(state);
   const playerRef = useRef<YTPlayer | null>(null);
   const blockedRef = useRef(onBlocked);
   blockedRef.current = onBlocked;
   const startRef = useRef(startTime);
+  const mutedRef = useRef(muted);
   const titleRef = useRef(title);
   titleRef.current = title;
 
@@ -137,6 +146,7 @@ export function usePlayer({
             playsinline: 1,
             modestbranding: 1,
             enablejsapi: 1,
+            mute: mutedRef.current ? 1 : 0,
             origin: location.origin,
             start: Math.floor(Math.max(0, startRef.current - START_LEAD_S)),
           },
@@ -199,6 +209,10 @@ export function usePlayer({
       next: () => dispatch({ type: 'next', now: performance.now() }),
       replay: () => dispatch({ type: 'replay', now: performance.now() }),
       toggle: () => dispatch({ type: 'toggle' }),
+      unmute: () => {
+        playerRef.current?.unMute();
+        playerRef.current?.setVolume(100);
+      },
       hold: (open: boolean) => dispatch({ type: open ? 'hold' : 'release' }),
     }),
     [dispatch],
