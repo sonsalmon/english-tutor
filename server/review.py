@@ -236,6 +236,8 @@ async def phrase_clips_endpoint(q: str = "", limit: int = DEFAULT_PHRASE_CLIPS):
             "channel": h.get("channel") or "",
             "thumbnail": f"https://i.ytimg.com/vi/{h['video_id']}/mqdefault.jpg",
             "start": int(h.get("start") or 0),
+            "start_f": float(h.get("start") or 0),
+            "end": float(h.get("end") or 0),
             "text": clipdb.excerpt(h.get("text") or "", query),
             "phrase": query,
             "source": "db",

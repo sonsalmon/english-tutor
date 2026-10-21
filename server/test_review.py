@@ -239,7 +239,7 @@ class PhraseClipsTest(unittest.IsolatedAsyncioTestCase):
             )
 
     async def test_ok_returns_db_clips_with_the_matching_moment(self):
-        hits = [{"video_id": "abc123", "title": "T", "channel": "C", "start": 12.7, "text": "so what do you do"}, {"title": "no id"}]
+        hits = [{"video_id": "abc123", "title": "T", "channel": "C", "start": 12.7, "end": 15.2, "text": "so what do you do"}, {"title": "no id"}]
         with mock.patch.object(review.clipdb, "available", return_value=True), mock.patch.object(
             review.clipdb, "search", return_value=hits
         ) as search, mock.patch.object(review.embeds, "playable", allow_all):
@@ -251,6 +251,7 @@ class PhraseClipsTest(unittest.IsolatedAsyncioTestCase):
         clip = res["clips"][0]
         self.assertEqual((clip["id"], clip["start"], clip["source"], clip["phrase"]), ("abc123", 12, "db", "So, what do you do?"))
         self.assertEqual(clip["thumbnail"], "https://i.ytimg.com/vi/abc123/mqdefault.jpg")
+        self.assertEqual((clip["start_f"], clip["end"]), (12.7, 15.2))
 
     async def test_no_db_hides_the_area_and_a_bad_query_is_no_query(self):
         with mock.patch.object(review.clipdb, "available", return_value=False), mock.patch.object(review.clipdb, "search") as search:

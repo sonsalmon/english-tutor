@@ -1,32 +1,13 @@
-import { ExternalLink, X } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { getCallClips, type Clip, type ClipResult } from '../lib/api';
 import { reportBlockedVideo } from '../lib/apiFeed';
 import { getPhraseClips } from '../lib/review';
+import { ClipPlayer, mmss } from './ClipPlayer';
 
 const MAX_CLIPS = 5;
 
-function mmss(sec: number): string {
-  const s = Math.max(0, Math.floor(sec));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-}
-
-function startSec(clip: Clip): number {
-  return clip.source === 'db' && typeof clip.start === 'number' ? Math.max(0, Math.floor(clip.start)) : 0;
-}
-
-function embedUrl(clip: Clip): string {
-  const start = startSec(clip) > 0 || (clip.source === 'db' && typeof clip.start === 'number') ? `&start=${startSec(clip)}` : '';
-  return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(clip.id)}?autoplay=1&rel=0&playsinline=1&enablejsapi=1&origin=${encodeURIComponent(location.origin)}${start}`;
-}
-
-function watchUrl(clip: Clip): string {
-  return `https://www.youtube.com/watch?v=${encodeURIComponent(clip.id)}&t=${startSec(clip)}s`;
-}
-
 const BLOCKED_KEY = 'english-tutor.blocked-clips';
 const MAX_BLOCKED = 200;
-const READY_TIMEOUT_MS = 8000;
 
 function loadBlocked(): string[] {
   try {
@@ -46,8 +27,6 @@ function rememberBlocked(id: string): void {
     /* storage unavailable: skip remembering */
   }
 }
-
-const YT_ORIGINS = new Set(['https://www.youtube-nocookie.com', 'https://www.youtube.com']);
 
 function Matched({ clip }: { clip: Clip }) {
   if (clip.source !== 'db' || !clip.text) return null;
@@ -82,123 +61,6 @@ function Skeleton() {
   );
 }
 
-function Player({ clip, onClose, onBlocked }: { clip: Clip; onClose: () => void; onBlocked: (id: string) => void }) {
-  const frame = useRef<HTMLIFrameElement>(null);
-  const [blocked, setBlocked] = useState(false);
-  const [slow, setSlow] = useState(false);
-
-  useEffect(() => {
-    setBlocked(false);
-    setSlow(false);
-    let alive = true;
-    let heard = false;
-    // 명시 오류(onError)만 플레이어를 바꾸고 기억한다. 응답이 늦는 것만으로는 iframe을 지우지 않는다.
-    const giveUp = () => {
-      if (!alive) return;
-      alive = false;
-      setBlocked(true);
-      onBlocked(clip.id);
-    };
-    const timer = window.setTimeout(() => {
-      if (alive && !heard) setSlow(true);
-    }, READY_TIMEOUT_MS);
-    const listen = () => frame.current?.contentWindow?.postMessage(JSON.stringify({ event: 'listening', id: 1, channel: 'widget' }), 'https://www.youtube-nocookie.com');
-    const poll = window.setInterval(() => {
-      if (heard) window.clearInterval(poll);
-      else listen();
-    }, 1000);
-    const onMessage = (e: MessageEvent) => {
-      if (!YT_ORIGINS.has(e.origin) || e.source !== frame.current?.contentWindow || typeof e.data !== 'string') return;
-      let data: { event?: unknown };
-      try {
-        data = JSON.parse(e.data) as { event?: unknown };
-      } catch {
-        return;
-      }
-      if (data.event === 'onError') {
-        window.clearTimeout(timer);
-        giveUp();
-      } else if (data.event === 'onReady' || data.event === 'infoDelivery' || data.event === 'initialDelivery') {
-        heard = true;
-        window.clearTimeout(timer);
-        setSlow(false);
-      }
-    };
-    window.addEventListener('message', onMessage);
-    const el = frame.current;
-    el?.addEventListener('load', listen);
-    return () => {
-      alive = false;
-      window.clearTimeout(timer);
-      window.clearInterval(poll);
-      window.removeEventListener('message', onMessage);
-      el?.removeEventListener('load', listen);
-    };
-  }, [clip.id, onBlocked]);
-
-  return (
-    <div className="p-3">
-      {blocked ? (
-        <div role="alert" className="flex aspect-video w-full flex-col items-center justify-center gap-3 rounded-lg border border-line bg-paper p-4 text-center">
-          <p className="font-semibold">이 영상은 앱 안에서 틀 수 없어요.</p>
-          <a
-            href={watchUrl(clip)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex min-h-11 items-center gap-1.5 rounded-full bg-ink px-4 text-sm font-semibold text-surface"
-          >
-            <ExternalLink size={18} aria-hidden />
-            YouTube에서 보기 ({mmss(startSec(clip))}부터)
-          </a>
-        </div>
-      ) : (
-        <div className="aspect-video w-full overflow-hidden rounded-lg bg-ink">
-          <iframe
-            ref={frame}
-            src={embedUrl(clip)}
-            title={clip.title}
-            allow="autoplay; encrypted-media; picture-in-picture"
-            allowFullScreen
-            className="size-full border-0"
-          />
-        </div>
-      )}
-      {slow && !blocked && (
-        <p className="mt-2 text-sm text-ink-soft">
-          <a
-            href={watchUrl(clip)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex min-h-11 items-center gap-1.5 underline"
-          >
-            <ExternalLink size={16} aria-hidden />
-            안 나오면 YouTube에서 보기 ({mmss(startSec(clip))}부터)
-          </a>
-        </p>
-      )}
-      <div className="mt-2 flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="font-semibold break-words">{clip.title}</p>
-          <p className="text-sm text-ink-soft">{clip.channel}</p>
-          {clip.source === 'db' && clip.text && (
-            <p className="mt-1 text-sm break-words">
-              <span lang="en">“{clip.text}”</span> <span className="text-ink-soft">{mmss(clip.start ?? 0)}부터</span>
-            </p>
-          )}
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="flex min-h-11 shrink-0 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-sm font-semibold hover:bg-paper"
-        >
-          <X size={18} aria-hidden />
-          닫기
-        </button>
-      </div>
-    </div>
-  );
-}
-
 function ClipCard({ clip, onPlay }: { clip: Clip; onPlay: () => void }) {
   return (
     <button type="button" onClick={onPlay} aria-label={`영상 재생, ${clip.title}`} className="flex w-full gap-3 p-3 text-left hover:bg-paper">
@@ -226,7 +88,7 @@ function ClipRows({ clips }: { clips: Clip[] }) {
       {clips.map((clip) => (
         <li key={clip.id}>
           {playing === clip.id ? (
-            <Player clip={clip} onClose={() => setPlaying(null)} onBlocked={rememberBlocked} />
+            <ClipPlayer clip={clip} onClose={() => setPlaying(null)} onBlocked={rememberBlocked} />
           ) : (
             <ClipCard clip={clip} onPlay={() => setPlaying(clip.id)} />
           )}

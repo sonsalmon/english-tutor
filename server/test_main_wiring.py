@@ -773,7 +773,7 @@ class ClipsAndTtsEndpointsTest(unittest.TestCase):
             body["clips"][1],
             {
                 "id": "v1", "title": "Tv1", "channel": "Ch", "thumbnail": "https://i.ytimg.com/vi/v1/mqdefault.jpg",
-                "start": 12, "text": "let's wrap up", "phrase": "wrap up", "source": "db",
+                "start": 12, "start_f": 12.7, "end": 12.7 + 3, "text": "let's wrap up", "phrase": "wrap up", "source": "db",
             },
         )
         clips.assert_not_called()
@@ -1094,6 +1094,71 @@ class ChatCloseWiringTest(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(main.partner_memory, "update") as update:
             self.assertEqual(await main.chat_close("jake", _JsonRequest()), {"status": "nothing"})
         update.assert_not_called()
+
+
+class ClipSegmentsEndpointTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / "captions.db"
+        conn = main.clipdb.connect(path)
+        self.addCleanup(conn.close)
+        main.clipdb.upsert_channel(conn, "@tv", "A Show", "tv")
+        main.clipdb.save_video(
+            conn,
+            {"id": "vid-seg1", "channel_handle": "@tv", "title": "T", "published": "2026-01-01T00:00:00Z", "duration_sec": 30},
+            "ok",
+            "manual",
+            [{"start": i * 3.0, "end": i * 3.0 + 3.0, "text": f"line {i}"} for i in range(5)],
+            "2026-10-20T00:00:00+00:00",
+        )
+        main.clipdb.save_video(
+            conn,
+            {"id": "vid-bad1", "channel_handle": "@tv", "title": "B", "published": None, "duration_sec": 30},
+            "no_captions",
+            None,
+            [],
+            "2026-10-20T00:00:00+00:00",
+        )
+        env = mock.patch.dict(os.environ, {"CLIPDB_PATH": str(path)})
+        env.start()
+        self.addCleanup(env.stop)
+        from fastapi.testclient import TestClient
+
+        self.client = TestClient(main.app)
+
+    def get(self, **params):
+        return self.client.get("/api/clips/segments", params=params)
+
+    def test_returns_the_lines_around_at(self):
+        res = self.get(video_id="vid-seg1", at=6, before=3, after=3)
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertEqual([line["text"] for line in body["lines"]], ["line 1", "line 2", "line 3"])
+        self.assertEqual((body["at_id"], body["caption_kind"], body["has_more_before"], body["has_more_after"]), (6000, "manual", True, True))
+
+    def test_defaults_cover_the_whole_short_video(self):
+        body = self.get(video_id="vid-seg1", at=6).json()
+        self.assertEqual(len(body["lines"]), 5)
+        self.assertEqual((body["has_more_before"], body["has_more_after"]), (False, False))
+
+    def test_limit_is_capped(self):
+        self.assertEqual(len(self.get(video_id="vid-seg1", at=6, limit=2).json()["lines"]), 2)
+
+    def test_unknown_video_and_video_without_captions_are_404(self):
+        self.assertEqual(self.get(video_id="vid-none", at=0).status_code, 404)
+        self.assertEqual(self.get(video_id="vid-bad1", at=0).status_code, 404)
+
+    def test_bad_video_id_or_numbers_are_rejected(self):
+        self.assertEqual(self.get(video_id="a b", at=0).status_code, 400)
+        self.assertEqual(self.get(video_id="abc", at=0).status_code, 400)
+        self.assertEqual(self.get(video_id="vid-seg1", at="nan").status_code, 400)
+        self.assertEqual(self.get(video_id="vid-seg1", at="inf").status_code, 400)
+        self.assertEqual(self.get(video_id="vid-seg1", at="abc").status_code, 422)
+
+    def test_missing_database_is_404(self):
+        with mock.patch.dict(os.environ, {"CLIPDB_PATH": "/nonexistent/captions.db"}):
+            self.assertEqual(self.get(video_id="vid-seg1", at=0).status_code, 404)
 
 
 if __name__ == "__main__":

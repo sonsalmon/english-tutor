@@ -1,4 +1,4 @@
-import { createContext, useContext, useRef, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { extendRange, findUnits, lookupForm, WORD_TOKEN, type Range, type Unit } from '../lib/units';
 import { WordPopover } from './WordPopover';
 import { YouGlishSheet } from './YouGlishSheet';
@@ -35,11 +35,21 @@ const UnitsContext = createContext<Unit[]>([]);
 export const WordUnitsProvider = UnitsContext.Provider;
 
 // units: 알려진 두 낱말 이상 표현(뜻이 있으면 함께). 문장에서 먼저 찾아 낱말 대신 하나의 버튼으로 만든다. 없으면 WordUnitsProvider의 목록을 쓴다.
-export function WordText({ text, units }: { text: string; units?: Unit[] }) {
+// onOpenChange: 단어 시트나 발음 시트가 열리고 닫힐 때 알린다(재생기가 영상을 멈췄다 되돌리는 데 쓴다).
+export function WordText({ text, units, onOpenChange }: { text: string; units?: Unit[]; onOpenChange?: (open: boolean) => void }) {
   const inherited = useContext(UnitsContext);
   const [active, setActive] = useState<Active | null>(null);
   const [phrase, setPhrase] = useState<string | null>(null);
   const lastAnchor = useRef<HTMLElement | null>(null);
+  const open = active !== null || phrase !== null;
+  const notify = useRef(onOpenChange);
+  notify.current = onOpenChange;
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (wasOpen.current === open) return;
+    wasOpen.current = open;
+    notify.current?.(open);
+  }, [open]);
 
   const matches = findUnits(text, units ?? inherited);
   const pieces: Piece[] = matches.map((m) => ({ index: m.index, length: m.length, label: text.slice(m.index, m.index + m.length), unit: m.unit }));
