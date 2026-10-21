@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { getCallClips, type Clip, type ClipResult } from '../lib/api';
 import { reportBlockedVideo } from '../lib/apiFeed';
+import { exampleLabel, nextExample } from '../lib/examples';
 import { getPhraseClips } from '../lib/review';
 import { ClipPlayer, mmss } from './ClipPlayer';
 
@@ -81,14 +82,37 @@ function ClipCard({ clip, onPlay }: { clip: Clip; onPlay: () => void }) {
   );
 }
 
-function ClipRows({ clips }: { clips: Clip[] }) {
+// examples: 같은 표현의 예시라면 true. 열린 클립에 '다음 예시'(목록의 다음 클립을 열고 이전 클립은 접는다)가 생긴다.
+function ClipRows({ clips, examples = false }: { clips: Clip[]; examples?: boolean }) {
   const [playing, setPlaying] = useState<string | null>(null);
+  const list = useRef<HTMLUListElement>(null);
+  const advanced = useRef(false);
+  useEffect(() => {
+    if (!advanced.current) return;
+    advanced.current = false;
+    list.current?.querySelector('[data-playing]')?.scrollIntoView({ block: 'nearest' });
+  }, [playing]);
   return (
-    <ul className="divide-y divide-line overflow-hidden rounded-2xl border border-line bg-surface">
-      {clips.map((clip) => (
-        <li key={clip.id}>
+    <ul ref={list} className="divide-y divide-line overflow-hidden rounded-2xl border border-line bg-surface">
+      {clips.map((clip, i) => (
+        <li key={clip.id} data-playing={playing === clip.id ? '' : undefined}>
           {playing === clip.id ? (
-            <ClipPlayer clip={clip} onClose={() => setPlaying(null)} onBlocked={rememberBlocked} />
+            <ClipPlayer
+              clip={clip}
+              onClose={() => setPlaying(null)}
+              onBlocked={rememberBlocked}
+              example={
+                examples
+                  ? {
+                      label: exampleLabel(i, clips.length),
+                      onNext: nextExample(i, clips.length) === null ? null : () => {
+                        advanced.current = true;
+                        setPlaying(clips[nextExample(i, clips.length)!].id);
+                      },
+                    }
+                  : undefined
+              }
+            />
           ) : (
             <ClipCard clip={clip} onPlay={() => setPlaying(clip.id)} />
           )}
@@ -118,7 +142,7 @@ export function PhraseClips({ phrase }: { phrase: string }) {
   return (
     <div className="mt-4">
       <h5 className="text-sm font-semibold text-ink-soft">예시 클립</h5>
-      <div className="mt-2">{clips ? <ClipRows clips={clips} /> : <Skeleton />}</div>
+      <div className="mt-2">{clips ? <ClipRows clips={clips} examples /> : <Skeleton />}</div>
     </div>
   );
 }

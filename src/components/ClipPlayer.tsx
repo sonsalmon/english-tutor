@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, ExternalLink, GraduationCap, Pause, Play, RotateCcw, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ExternalLink, GraduationCap, Pause, Play, RotateCcw, SkipForward, X } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { getClipSegments, type Clip, type ClipSegments } from '../lib/api';
 import { openClip } from '../lib/clipRoute';
@@ -67,7 +67,18 @@ function ControlButton({ onClick, disabled, label, primary, children }: { onClic
 }
 
 // 요약 화면의 예시 클립 재생기. 줄 정보가 있으면 현재 줄 카드와 이전/다시/다음 줄을 보이고, 없으면 YouTube 기본 컨트롤로 연다.
-export function ClipPlayer({ clip, onClose, onBlocked }: { clip: Clip; onClose: () => void; onBlocked: (id: string) => void }) {
+// example: 같은 표현의 예시 클립 목록 안에서 열었을 때의 위치 표시(label)와 '다음 예시'(onNext가 null이면 마지막이라 눌러지지 않는다).
+export function ClipPlayer({
+  clip,
+  onClose,
+  onBlocked,
+  example,
+}: {
+  clip: Clip;
+  onClose: () => void;
+  onBlocked: (id: string) => void;
+  example?: { label: string; onNext: (() => void) | null };
+}) {
   const lines = useClipLines(clip);
   const withLines = lines.status === 'ok';
   const { mountRef, status, slow, state, act } = usePlayer({
@@ -141,7 +152,13 @@ export function ClipPlayer({ clip, onClose, onBlocked }: { clip: Clip; onClose: 
         <>
           <div className="mt-3 rounded-xl border border-line bg-paper p-3">
             <p key={line.id} lang="en" className="line-in text-xl leading-snug font-semibold break-words">
-              <WordText text={line.text} onOpenChange={act.hold} source={lineSource(clip.id, clip.title, line)} />
+              <WordText
+                text={line.text}
+                onOpenChange={act.hold}
+                source={lineSource(clip.id, clip.title, line)}
+                units={clip.phrase ? [{ text: clip.phrase }] : undefined}
+                learn
+              />
             </p>
             <p className="mt-1 text-sm text-ink-soft">{mmss(line.start)}부터</p>
           </div>
@@ -202,6 +219,18 @@ export function ClipPlayer({ clip, onClose, onBlocked }: { clip: Clip; onClose: 
             >
               <GraduationCap size={18} aria-hidden />
               공부하기
+            </button>
+          )}
+          {example && (
+            <button
+              type="button"
+              onClick={example.onNext ?? undefined}
+              disabled={!example.onNext}
+              className="flex min-h-11 items-center justify-center gap-1.5 rounded-full border border-line bg-surface px-3 text-sm font-semibold whitespace-nowrap hover:bg-paper disabled:opacity-40"
+            >
+              <SkipForward size={18} aria-hidden />
+              {example.onNext ? '다음 예시' : '마지막 예시'}
+              {example.label && <span className="font-normal text-ink-soft">{example.label}</span>}
             </button>
           )}
           <button

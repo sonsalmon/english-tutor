@@ -4,7 +4,7 @@ import { mmss } from '../components/ClipPlayer';
 import { rememberBlocked } from '../components/ClipList';
 import { WordText } from '../components/WordText';
 import { getClipSegments, type ClipLine, type ClipSegments } from '../lib/api';
-import { canAutoScroll, mergeSegments } from '../lib/clipLines';
+import { canAutoScroll, lineSource, mergeSegments } from '../lib/clipLines';
 import { closeClip, parseClipParam, type ClipTarget } from '../lib/clipRoute';
 import { loadPrefs, nextEngMode, nextRepeat, savePrefs, stepRate, visibleRates, type EngMode } from '../lib/playerPrefs';
 import { REPEAT_TIMES, type RepeatMode } from '../lib/playerMachine';
@@ -309,7 +309,7 @@ function Study({ target }: { target: ClipTarget }) {
                   </button>
                 ) : (
                   <p key={line.id} lang="en" className="line-in min-h-14 text-xl leading-snug font-semibold break-words">
-                    <WordText text={line.text} onOpenChange={act.hold} />
+                    <WordText text={line.text} onOpenChange={act.hold} source={lineSource(videoId, data?.title ?? '', line)} learn />
                   </p>
                 )}
               </div>
