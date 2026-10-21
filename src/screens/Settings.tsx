@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { ScreenSettings } from '../components/ScreenSettings';
 import { List, RowLink, Screen } from '../components/ui';
 import { go } from '../lib/router';
+import { loadShareWordbook, saveShareWordbook } from '../lib/shareWordbook';
 import { loadShowAllFriends, saveShowAllFriends } from '../lib/visibility';
 
 function ToggleRow({ label, desc, checked, onChange }: { label: string; desc: string; checked: boolean; onChange: (value: boolean) => void }) {
@@ -31,6 +32,11 @@ export function Settings() {
     setShowAll(value);
     saveShowAllFriends(value);
   };
+  const [shareBook, setShareBook] = useState(() => loadShareWordbook());
+  const changeShareBook = (value: boolean) => {
+    setShareBook(value);
+    saveShareWordbook(value);
+  };
   return (
     <Screen>
       <header className="flex h-11 items-center lg:mb-4 lg:h-auto">
@@ -45,6 +51,12 @@ export function Settings() {
             <RowLink icon={HistoryIcon} title="전체 통화 기록" desc="모든 사람과의 통화를 모아 봐요" onClick={() => go('log')} />
           </List>
         </section>
+        <ToggleRow
+          label="친구에게 내 단어장 보여주기"
+          desc="친구가 내 단어장의 단어와 저장한 문장을 알고 대화에 가끔 써요. 단어와 짧은 문장만 가고, 읽던 글과 주소는 가지 않아요."
+          checked={shareBook}
+          onChange={changeShareBook}
+        />
         <ToggleRow
           label="숨긴 친구 보기"
           desc="목록에서 숨긴 친구 네 명(Omar, Lukas, Carmen, Chloe)도 보여요. 이야기한 기억은 그대로 남아 있어요."

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Keyboar
 import { Avatar } from '../components/Avatar';
 import { WordText } from '../components/WordText';
 import { QuietButton } from '../components/ui';
-import { closeChat, getChat, getPartnerMemory, sendChat, type ChatMessage, type PartnerMemory } from '../lib/api';
+import { closeChat, getChat, getPartnerMemory, sendChat, type ChatMessage, type PartnerMemory, type Wordbook } from '../lib/api';
 import { clock, sameDay, yesterdayOf } from '../lib/callFormat';
 import { buildChatInstruction } from '../lib/instructions';
 import { partnerMeta, type Partner } from '../lib/partners';
@@ -25,11 +25,12 @@ type ConversationProps = {
   partner: Partner;
   brief: string;
   interests?: string[];
+  wordbook?: Wordbook | null;
   profileReady: boolean;
   onCall: (partnerId: string) => void;
 };
 
-function Conversation({ partner, brief, interests, profileReady, onCall }: ConversationProps) {
+function Conversation({ partner, brief, interests, wordbook, profileReady, onCall }: ConversationProps) {
   const id = partner.id;
   const [messages, setMessages] = useState<ChatMessage[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -125,7 +126,7 @@ function Conversation({ partner, brief, interests, profileReady, onCall }: Conve
         loadMemory();
       }
       await memoryLoad.current;
-      const instruction = buildChatInstruction(partner, brief, memory.current, interests ?? []);
+      const instruction = buildChatInstruction(partner, brief, memory.current, interests ?? [], wordbook ?? null);
       const res = await sendChat(id, instruction, text);
       setMessages((prev) => [...(prev ?? []), ...res.messages]);
       if (alive.current) {
@@ -307,12 +308,14 @@ export function Chat({
   partnerId,
   brief,
   interests,
+  wordbook,
   profileReady,
   onCall,
 }: {
   partnerId: string | null;
   brief: string;
   interests?: string[];
+  wordbook?: Wordbook | null;
   profileReady: boolean;
   onCall: (partnerId: string) => void;
 }) {
@@ -321,5 +324,5 @@ export function Chat({
     if (!partner) go('home', true);
   }, [partner]);
   if (!partner) return null;
-  return <Conversation key={partner.id} partner={partner} brief={brief} interests={interests} profileReady={profileReady} onCall={onCall} />;
+  return <Conversation key={partner.id} partner={partner} brief={brief} interests={interests} wordbook={wordbook} profileReady={profileReady} onCall={onCall} />;
 }
