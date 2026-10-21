@@ -693,7 +693,7 @@ async def call_culture_endpoint(stem: str):
     return {"status": "ok", "terms": terms, "blend": found.get("blend", []), "bank": found.get("bank", []), "attribution": culturedb.ATTRIBUTION}
 
 
-ALLOWED_TTS_VOICES = frozenset({"Kore", "Leda", "Charon", "Iapetus", "Sulafat", "Fenrir", "Zephyr"})
+ALLOWED_TTS_VOICES = frozenset({"Kore", "Leda", "Charon", "Iapetus", "Sulafat", "Fenrir", "Zephyr", "Achird"})
 
 
 @app.post("/api/tts")

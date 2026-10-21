@@ -775,7 +775,7 @@ class ClipsAndTtsEndpointsTest(unittest.TestCase):
                 res = self.client.post("/api/tts", json={"text": "Hi", "voice": voice})
                 self.assertEqual(res.status_code, 400, voice)
             syn.assert_not_called()
-        for voice in ("Kore", "Leda", "Charon", "Iapetus", "Sulafat", "Fenrir", "Zephyr"):
+        for voice in ("Kore", "Leda", "Charon", "Iapetus", "Sulafat", "Fenrir", "Zephyr", "Achird"):
             with mock.patch.object(main.tts, "synthesize", return_value=b"RIFFxx"):
                 self.assertEqual(self.client.post("/api/tts", json={"text": "Hi", "voice": voice}).status_code, 200)
 

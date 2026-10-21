@@ -470,8 +470,8 @@ class PartnerConfigTest(unittest.TestCase):
     def parse(self, **extra):
         return parse_call_config({"system_instruction": INSTRUCTION, "mode": "smalltalk", **extra})
 
-    def test_six_ids_are_kept(self):
-        for pid in ("priya", "omar", "lukas", "carmen", "jake", "chloe"):
+    def test_seven_ids_are_kept(self):
+        for pid in ("priya", "omar", "lukas", "carmen", "jake", "chloe", "brian"):
             self.assertEqual(self.parse(partner=pid).partner, pid)
 
     def test_other_values_mean_ms_park(self):
@@ -484,6 +484,12 @@ class PartnerConfigTest(unittest.TestCase):
 
         self.assertIsNone(config.partner)
 
+    def test_brian_is_accepted_for_smalltalk_and_freetalk_only(self):
+        for mode, expected in (("smalltalk", "brian"), ("freetalk", "brian"), ("mission", None), ("teachback", None)):
+            with self.subTest(mode=mode):
+                config = parse_call_config({"system_instruction": INSTRUCTION, "mode": mode, "partner": "brian"})
+                self.assertEqual(config.partner, expected)
+
     def test_only_smalltalk_and_freetalk_keep_a_partner(self):
         for mode, expected in (("smalltalk", "omar"), ("freetalk", "omar"), ("mission", None), ("teachback", None)):
             with self.subTest(mode=mode):
@@ -491,7 +497,7 @@ class PartnerConfigTest(unittest.TestCase):
                 self.assertEqual(config.partner, expected)
 
     def test_opener_text_uses_the_partner_name(self):
-        names = {"priya": "Priya", "omar": "Omar", "lukas": "Lukas", "carmen": "Carmen", "jake": "Jake", "chloe": "Chloe"}
+        names = {"priya": "Priya", "omar": "Omar", "lukas": "Lukas", "carmen": "Carmen", "jake": "Jake", "chloe": "Chloe", "brian": "Brian"}
         for pid, name in names.items():
             self.assertEqual(call_bot.opener_text(pid), f"[The learner just joined the call. Start as {name}.]")
         for value in (None, "park"):
