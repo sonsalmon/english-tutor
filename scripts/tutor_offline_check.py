@@ -150,11 +150,30 @@ def check_save_status() -> None:
             os.environ.pop("TUTORING_DIR", None)
 
 
+def check_us_style_filter() -> None:
+    """(e) us_style는 지어낸 said와 학습자가 이미 말한 natural을 버리고, pragmatics는 빈 목록이다."""
+    transcript = "**Me:** How old are you?\n**Me:** Sorry?\n"
+    raw = {
+        "corrections": [{"said": "a", "better": "b c", "why": "d"}],
+        "pragmatics": [{"pattern": "Bottom line first", "note": "결론 먼저"}],
+        "us_style": [
+            {"said": "How old are you?", "korean_way": "k", "natural": "So, what do you do?", "why": "w"},
+            {"said": "How old are you?", "korean_way": "k", "natural": "Sorry?", "why": "w"},
+            {"said": "never said this at all", "korean_way": "k", "natural": "Thanks for jumping on this", "why": "w"},
+        ],
+    }
+    out = normalize_tutor_json(raw, transcript)
+    assert [r["natural"] for r in out["us_style"]] == ["So, what do you do?"], out["us_style"]
+    assert out["pragmatics"] == [], out["pragmatics"]
+    assert not is_empty_result({**normalize_tutor_json({}), "us_style": out["us_style"]})
+
+
 def main() -> int:
     check_mtime_filter()
     check_empty_result()
     check_filename_re()
     check_save_status()
+    check_us_style_filter()
     print("tutor offline check OK")
     return 0
 
