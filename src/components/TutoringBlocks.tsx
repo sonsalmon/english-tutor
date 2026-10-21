@@ -2,7 +2,9 @@ import { BookmarkPlus, Check, Volume2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { formatUsd, ReadglossOffError, type Cost, type Tutoring } from '../lib/api';
 import { phraseStatus, savePhrase } from '../lib/phrases';
-import { WordText } from './WordText';
+import { isSingleWord, wordCount, type Unit } from '../lib/units';
+import { StarButton } from './StarButton';
+import { WordText, WordUnitsProvider } from './WordText';
 import { YouGlishSheet } from './YouGlishSheet';
 
 const CAUSES: Record<string, string> = {
@@ -151,8 +153,12 @@ function PronounceButton({ phrase }: { phrase: string }) {
 export function TutoringBlocks({ tutoring, isTeachback }: { tutoring: Tutoring; isTeachback: boolean }) {
   const retry = tutoring.retry;
   const cards = useCards(tutoring);
+  const units = useMemo<Unit[]>(
+    () => tutoring.vocab.filter((v) => wordCount(v.word) >= 2).map((v) => ({ text: v.word, gloss: v.meaning_ko })),
+    [tutoring.vocab],
+  );
   return (
-    <>
+    <WordUnitsProvider value={units}>
       {cards.off && cards.available && (
         <p className="mt-6 text-sm text-ink-soft" role="status">
           readgloss가 꺼져 있어 카드로 저장할 수 없어요.
@@ -206,7 +212,15 @@ export function TutoringBlocks({ tutoring, isTeachback }: { tutoring: Tutoring; 
                   </span>
                   {v.meaning_ko && <span className="ml-2 text-ink-soft">{v.meaning_ko}</span>}
                 </p>
-                <PronounceButton phrase={v.word} />
+                <div className="-my-1 flex shrink-0 items-center gap-2">
+                  <PronounceButton phrase={v.word} />
+                  <StarButton
+                    kind={isSingleWord(v.word) ? 'word' : 'phrase'}
+                    text={v.word}
+                    gloss={v.meaning_ko}
+                    sentence={v.example}
+                  />
+                </div>
               </div>
               {v.example && (
                 <p className="mt-1 text-sm text-ink-soft">
@@ -255,6 +269,6 @@ export function TutoringBlocks({ tutoring, isTeachback }: { tutoring: Tutoring; 
           )}
         </section>
       )}
-    </>
+    </WordUnitsProvider>
   );
 }
