@@ -1,4 +1,4 @@
-export type KeyCommand = 'toggle' | 'prev' | 'next' | 'replay' | 'repeat' | 'autoPause' | 'slower' | 'faster' | 'eng' | 'help' | 'close';
+export type KeyCommand = 'toggle' | 'prev' | 'next' | 'replay' | 'repeat' | 'autoPause' | 'slower' | 'faster' | 'eng' | 'syncEarlier' | 'syncLater' | 'help' | 'close';
 
 export type KeyInput = { key: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean };
 
@@ -33,6 +33,10 @@ export function keyCommand(e: KeyInput, inEditable: boolean): KeyCommand | null 
     case 'c':
     case 'C':
       return 'eng';
+    case ',':
+      return 'syncEarlier';
+    case '.':
+      return 'syncLater';
     case '?':
       return 'help';
     case 'Escape':
@@ -51,6 +55,7 @@ export const SHORTCUTS: readonly { keys: string; label: string }[] = [
   { keys: 'Q', label: '줄마다 멈춤 켜기 / 끄기' },
   { keys: '[  ]', label: '속도 내리기 / 올리기' },
   { keys: 'C', label: '영어 자막: 보임, 흐림, 숨김' },
+  { keys: ', .', label: '자막 싱크 -0.1초 / +0.1초' },
   { keys: '?', label: '단축키 도움말' },
   { keys: 'Esc', label: '닫기' },
 ];
