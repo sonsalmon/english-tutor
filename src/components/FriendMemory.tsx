@@ -3,9 +3,9 @@ import { clearPartnerMemory, forgetPartnerMemoryItem, getPartnerMemory, MemoryCh
 
 export type MemoryState = { status: 'loading' } | { status: 'failed' } | { status: 'ready'; memory: PartnerMemory | null };
 
-// 한국어 발음 기준 조사: 카르멘은 받침이 있어 '이', 나머지는 '가'.
+// 한국어 발음 기준 조사: 카르멘과 브라이언은 받침이 있어 '이', 나머지는 '가'.
 function subject(id: string): string {
-  return id === 'carmen' ? '이' : '가';
+  return id === 'carmen' || id === 'brian' ? '이' : '가';
 }
 
 function ForgetButton({ label, onClick, disabled, focusKey }: { label: string; onClick: () => void; disabled: boolean; focusKey: string }) {

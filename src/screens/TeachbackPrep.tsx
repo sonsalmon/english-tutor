@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { CallButton, Screen, TopBar } from '../components/ui';
 import { getLesson, type Lesson } from '../lib/api';
 import type { SeniorMode } from '../lib/instructions';
+import { PARK_ID } from '../lib/partners';
 import { go } from '../lib/router';
 
 const SENIOR_KEY = 'teachback.seniorMode';
@@ -61,7 +62,7 @@ export function TeachbackPrep({ onStart }: { onStart: (lesson: Lesson, seniorMod
 
   return (
     <Screen>
-      <TopBar title="가르치며 배우기" onBack={() => go('home')} />
+      <TopBar title="가르치며 배우기" onBack={() => go('person', false, PARK_ID)} />
       <p className="leading-relaxed text-ink-soft">
         오늘 공부한 내용을 영어로 설명해요. 미국 중학생 Maya, Leo, Sam이 모르는 말을 물어봐요. 모르면 “Good question - let me check and get back to you.”라고 하면 돼요.
       </p>
