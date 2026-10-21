@@ -1,12 +1,14 @@
-import { ChevronLeft, ChevronRight, ExternalLink, Keyboard, Pause, Play, RotateCcw, X } from 'lucide-react';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Captions, ChevronLeft, ChevronRight, ExternalLink, Keyboard, Pause, Play, RotateCcw, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { CaptionSheet, CHIP, CHIP_OFF, CHIP_ON, ENG_LABEL, SIZE_LABEL, SyncControl } from '../components/CaptionSheet';
 import { mmss } from '../components/ClipPlayer';
 import { rememberBlocked } from '../components/ClipList';
 import { WordText } from '../components/WordText';
 import { getClipSegments, type ClipLine, type ClipSegments } from '../lib/api';
+import { lineFill, loadSync, saveSync, shiftLines, stepSync } from '../lib/captionTune';
 import { canAutoScroll, mergeSegments } from '../lib/clipLines';
 import { closeClip, parseClipParam, type ClipTarget } from '../lib/clipRoute';
-import { loadPrefs, nextEngMode, nextRepeat, savePrefs, stepRate, visibleRates, type EngMode } from '../lib/playerPrefs';
+import { loadPrefs, nextEngMode, nextRepeat, nextTextSize, savePrefs, stepRate, visibleRates, type EngMode, type TextSize } from '../lib/playerPrefs';
 import { REPEAT_TIMES, type RepeatMode } from '../lib/playerMachine';
 import { keyCommand, SHORTCUTS } from '../lib/studyKeys';
 import { usePlayer } from '../lib/usePlayer';
@@ -19,17 +21,15 @@ type Loaded = { status: 'loading' } | { status: 'ok'; data: ClipSegments } | { s
 const BTN = 'flex min-h-12 items-center justify-center gap-1 rounded-full border px-2 text-sm font-semibold whitespace-nowrap disabled:opacity-40';
 const BTN_PLAIN = 'border-surface/30 bg-surface/10 text-surface hover:bg-surface/20';
 const BTN_PRIMARY = 'border-marker bg-marker text-ink';
-const CHIP = 'flex min-h-11 items-center justify-center gap-1.5 rounded-full border-2 px-3 text-sm font-semibold whitespace-nowrap';
-const CHIP_ON = 'border-marker bg-marker/15 text-surface';
-const CHIP_OFF = 'border-surface/30 text-surface/80 hover:bg-surface/10';
+
+// 글자 크기별 현재 줄 글자. Tailwind가 클래스를 찾도록 글자 그대로 적는다.
+const SIZE_CLASS: Record<TextSize, string> = { sm: 'text-lg', md: 'text-xl', lg: 'text-2xl' };
 
 function repeatLabel(repeat: RepeatMode, pass: number): string {
   if (repeat === 'x3') return `반복 ×${REPEAT_TIMES} · ${Math.min(pass, REPEAT_TIMES)}/${REPEAT_TIMES}`;
   if (repeat === 'inf') return `반복 무한 · ${pass}회`;
   return '반복 끔';
 }
-
-const ENG_LABEL: Record<EngMode, string> = { show: '보임', blur: '흐림', hide: '숨김' };
 
 function Kbd({ children }: { children: ReactNode }) {
   return <kbd className="hidden rounded border border-surface/30 px-1 font-mono text-xs text-surface/70 lg:inline">{children}</kbd>;
@@ -40,7 +40,7 @@ function watchUrl(videoId: string, t: number): string {
 }
 
 // 지금 줄 안에서 영상이 어디쯤인지 보이는 가는 막대. 100ms마다 플레이어 시각을 읽는다(화면 전체를 다시 그리지 않으려고 이 안에서만 갱신).
-function LineProgress({ line, getTime }: { line: ClipLine; getTime: () => number | null }) {
+function LineProgress({ line, labels, getTime }: { line: ClipLine; labels: ClipLine; getTime: () => number | null }) {
   const [time, setTime] = useState(line.start);
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -53,11 +53,11 @@ function LineProgress({ line, getTime }: { line: ClipLine; getTime: () => number
   const ratio = Math.min(1, Math.max(0, (time - line.start) / span));
   return (
     <div aria-hidden className="mt-3 flex items-center gap-3 text-xs tabular-nums text-surface/70">
-      <span>{mmss(line.start)}</span>
+      <span>{mmss(labels.start)}</span>
       <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface/20">
         <div className="h-full bg-marker" style={{ width: `${ratio * 100}%` }} />
       </div>
-      <span>{mmss(line.end)}</span>
+      <span>{mmss(labels.end)}</span>
     </div>
   );
 }
@@ -67,6 +67,12 @@ function Study({ target }: { target: ClipTarget }) {
   const [loaded, setLoaded] = useState<Loaded>({ status: 'loading' });
   const [prefs] = useState(loadPrefs);
   const [eng, setEng] = useState<EngMode>(prefs.engMode);
+  const [size, setSize] = useState<TextSize>(prefs.textSize);
+  const [syncMs, setSyncMs] = useState(() => loadSync(videoId));
+  const [ccOpen, setCcOpen] = useState(false);
+  const ccButton = useRef<HTMLButtonElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const currentId = useRef<number | null>(null);
   const [revealedId, setRevealedId] = useState<number | null>(null);
   const [help, setHelp] = useState(false);
   const [moreBusy, setMoreBusy] = useState<'before' | 'after' | null>(null);
@@ -87,11 +93,12 @@ function Study({ target }: { target: ClipTarget }) {
 
   const data = loaded.status === 'ok' ? loaded.data : null;
   const withLines = data !== null;
+  const shifted = useMemo(() => (data ? { ...data, lines: shiftLines(data.lines, syncMs), atId: currentId.current ?? data.atId } : null), [data, syncMs]);
   const { mountRef, status, slow, state, rates, act } = usePlayer({
     videoId,
     title: data?.title ?? '',
     startTime: t,
-    segments: data,
+    segments: shifted,
     nativeControls: !withLines,
     enabled: loaded.status !== 'loading',
     onBlocked: rememberBlocked,
@@ -106,8 +113,25 @@ function Study({ target }: { target: ClipTarget }) {
   const masked = eng !== 'show' && line !== null && revealedId !== line.id;
 
   useEffect(() => {
-    savePrefs({ rate: state.rate, repeat: state.repeat, autoPause: state.autoPause, engMode: eng });
-  }, [state.rate, state.repeat, state.autoPause, eng]);
+    savePrefs({ rate: state.rate, repeat: state.repeat, autoPause: state.autoPause, engMode: eng, textSize: size });
+  }, [state.rate, state.repeat, state.autoPause, eng, size]);
+
+  useEffect(() => {
+    saveSync(videoId, syncMs);
+  }, [videoId, syncMs]);
+
+  // 형광펜: 현재 줄 카드의 채움 비율(--fill)을 100ms마다 DOM에 직접 써 화면 전체를 다시 그리지 않는다.
+  useEffect(() => {
+    const el = cardRef.current;
+    if (!el || !line || masked) return;
+    const paint = () => {
+      const t = act.getTime();
+      if (t !== null) el.style.setProperty('--fill', String(lineFill(line, t)));
+    };
+    paint();
+    const timer = window.setInterval(paint, 100);
+    return () => window.clearInterval(timer);
+  }, [act, line, masked]);
 
   useEffect(() => {
     const list = listRef.current;
@@ -118,7 +142,6 @@ function Study({ target }: { target: ClipTarget }) {
     list.scrollTo({ top: Math.max(0, top), behavior: reduce ? 'auto' : 'smooth' });
   }, [state.index, state.lines.length]);
 
-  const currentId = useRef<number | null>(null);
   currentId.current = line?.id ?? null;
 
   function loadMore(side: 'before' | 'after') {
@@ -139,8 +162,8 @@ function Study({ target }: { target: ClipTarget }) {
     );
   }
 
-  const latest = useRef({ state, visible, ready, eng, help, withLines });
-  latest.current = { state, visible, ready, eng, help, withLines };
+  const latest = useRef({ state, visible, ready, eng, help, withLines, syncMs });
+  latest.current = { state, visible, ready, eng, help, withLines, syncMs };
   useEffect(() => {
     const dialogOpen = () => document.querySelector('[role="dialog"]') !== null;
     const onKeyDown = (e: KeyboardEvent) => {
@@ -162,6 +185,8 @@ function Study({ target }: { target: ClipTarget }) {
       else if (command === 'slower') act.setRate(stepRate(cur.visible, cur.state.rate, -1));
       else if (command === 'faster') act.setRate(stepRate(cur.visible, cur.state.rate, 1));
       else if (command === 'eng') setEng(nextEngMode(cur.eng));
+      else if (command === 'syncEarlier') setSyncMs(stepSync(cur.syncMs, -1));
+      else if (command === 'syncLater') setSyncMs(stepSync(cur.syncMs, 1));
       e.preventDefault();
     };
     // Space로 누른 버튼이 keyup에서 한 번 더 눌리지 않게 한다.
@@ -201,6 +226,18 @@ function Study({ target }: { target: ClipTarget }) {
           <ExternalLink size={16} aria-hidden />
           YouTube에서 보기
         </a>
+        {withLines && !blocked && (
+          <button
+            ref={ccButton}
+            type="button"
+            onClick={() => setCcOpen(true)}
+            aria-haspopup="dialog"
+            aria-label="자막 설정"
+            className="flex size-11 shrink-0 items-center justify-center rounded-full hover:bg-surface/15 lg:hidden"
+          >
+            <Captions size={22} aria-hidden />
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setHelp((v) => !v)}
@@ -287,28 +324,30 @@ function Study({ target }: { target: ClipTarget }) {
 
           {withLines && !blocked && line && (
             <>
-              <LineProgress line={line} getTime={act.getTime} />
-              <div className="mt-3 rounded-2xl border-l-4 border-marker bg-surface/10 p-4">
+              <LineProgress line={line} labels={data.lines[state.index] ?? line} getTime={act.getTime} />
+              <div ref={cardRef} className={`mt-3 rounded-2xl border-l-4 border-marker bg-surface/10 p-4 ${masked ? '' : 'line-fill'}`}>
                 {masked ? (
                   <button
                     type="button"
                     onClick={() => setRevealedId(line.id)}
                     aria-label="영어 자막 보기"
-                    className="block min-h-14 w-full text-left text-xl leading-snug font-semibold break-words"
+                    className={`relative block min-h-14 w-full text-left ${SIZE_CLASS[size]} leading-snug font-semibold break-words`}
                   >
                     {eng === 'blur' ? (
                       <>
                         <span aria-hidden className="block blur-md select-none">
                           {line.text}
                         </span>
-                        <span className="mt-2 block text-sm font-normal text-surface/80">탭하면 이 줄이 보여요.</span>
+                        <span className="absolute inset-0 flex items-center justify-center">
+                          <span className="rounded-full bg-ink/85 px-3 py-1 text-sm font-normal text-surface">탭하면 이 줄이 보여요.</span>
+                        </span>
                       </>
                     ) : (
                       <span className="text-base font-normal text-surface/80">영어 자막이 숨겨져 있어요. 탭하면 보여요.</span>
                     )}
                   </button>
                 ) : (
-                  <p key={line.id} lang="en" className="line-in min-h-14 text-xl leading-snug font-semibold break-words">
+                  <p key={line.id} lang="en" className={`line-in min-h-14 ${SIZE_CLASS[size]} leading-snug font-semibold break-words`}>
                     <WordText text={line.text} onOpenChange={act.hold} />
                   </p>
                 )}
@@ -386,6 +425,17 @@ function Study({ target }: { target: ClipTarget }) {
                 >
                   영어 자막 {ENG_LABEL[eng]} <Kbd>C</Kbd>
                 </button>
+                <div className="hidden items-center gap-2 lg:flex">
+                  <button
+                    type="button"
+                    onClick={() => setSize(nextTextSize(size))}
+                    aria-label={`글자 크기 ${SIZE_LABEL[size]}, 누르면 바뀝니다`}
+                    className={`${CHIP} ${size !== 'md' ? CHIP_ON : CHIP_OFF}`}
+                  >
+                    글자 {SIZE_LABEL[size]}
+                  </button>
+                  <SyncControl syncMs={syncMs} onChange={setSyncMs} hint={<Kbd>, .</Kbd>} />
+                </div>
               </div>
             </>
           )}
@@ -428,7 +478,7 @@ function Study({ target }: { target: ClipTarget }) {
                           current ? 'border-marker bg-surface/15' : 'border-transparent hover:bg-surface/10'
                         }`}
                       >
-                        <span className="w-10 shrink-0 pt-0.5 text-xs tabular-nums text-surface/70">{mmss(l.start)}</span>
+                        <span className="w-10 shrink-0 pt-0.5 text-xs tabular-nums text-surface/70">{mmss((data.lines[i] ?? l).start)}</span>
                         <span lang="en" className={`min-w-0 break-words ${hidden ? 'blur-sm select-none' : ''}`}>
                           {l.text}
                         </span>
@@ -456,6 +506,21 @@ function Study({ target }: { target: ClipTarget }) {
           </section>
         )}
       </div>
+
+      {ccOpen && (
+        <CaptionSheet
+          eng={eng}
+          size={size}
+          syncMs={syncMs}
+          onEng={setEng}
+          onSize={setSize}
+          onSync={setSyncMs}
+          onClose={() => {
+            setCcOpen(false);
+            ccButton.current?.focus();
+          }}
+        />
+      )}
     </div>
   );
 }

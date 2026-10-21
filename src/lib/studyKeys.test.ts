@@ -4,7 +4,7 @@ import { keyCommand, SHORTCUTS, type KeyCommand } from './studyKeys';
 const plain = (key: string) => ({ key, ctrlKey: false, metaKey: false, altKey: false });
 
 describe('단축키 표', () => {
-  test('Space, A/D/S, 방향키, R, Q, [, ], C, ?, Esc가 명세 표대로 대응한다', () => {
+  test('Space, A/D/S, 방향키, R, Q, [, ], C, 쉼표, 마침표, ?, Esc가 명세 표대로 대응한다', () => {
     const table: [string, KeyCommand][] = [
       [' ', 'toggle'],
       ['a', 'prev'],
@@ -24,6 +24,8 @@ describe('단축키 표', () => {
       [']', 'faster'],
       ['c', 'eng'],
       ['C', 'eng'],
+      [',', 'syncEarlier'],
+      ['.', 'syncLater'],
       ['?', 'help'],
       ['Escape', 'close'],
     ];
@@ -43,7 +45,7 @@ describe('단축키 표', () => {
   });
 
   test('도움말 목록이 단축키마다 한 줄씩 있다', () => {
-    expect(SHORTCUTS.length).toBe(10);
+    expect(SHORTCUTS.length).toBe(11);
     expect(new Set(SHORTCUTS.map((s) => s.keys)).size).toBe(SHORTCUTS.length);
   });
 });
