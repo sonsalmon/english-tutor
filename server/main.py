@@ -53,7 +53,6 @@ from server.lesson import (
     LessonError,
     get_lesson,
     lesson_text,
-    session_time_limit_from_env,
 )
 from server.learner_profile import ProfileError, load_profile, profile_brief, update_profile
 from server.tutor import (
