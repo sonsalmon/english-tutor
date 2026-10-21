@@ -20,8 +20,8 @@ const LEVELS: Record<number, { name: string; desc: string }> = {
   3: { name: 'Peritus', desc: '도움 없이 자연스러웠어요' },
 };
 
-function ReadingWords({ words, used, saved }: { words: string[]; used: string[]; saved: number }) {
-  if (!words.length && !saved) return null;
+function ReadingWords({ words, used }: { words: string[]; used: string[] }) {
+  if (!words.length) return null;
   return (
     <section className="mt-8">
       <h2 className="text-lg font-bold">읽다가 찾아본 단어</h2>
@@ -53,11 +53,6 @@ function ReadingWords({ words, used, saved }: { words: string[]; used: string[];
             })}
           </ul>
         </>
-      )}
-      {saved > 0 && (
-        <p className="mt-3 text-sm leading-relaxed text-ink-soft">
-          이번 통화의 새 단어와 고친 표현 {saved}개를 readgloss 단어장에 넣었어요. 읽을 때 복습에 나와요.
-        </p>
       )}
     </section>
   );
@@ -93,7 +88,7 @@ function duration(ms: number): string {
   return s >= 60 ? `${Math.floor(s / 60)}분 ${s % 60}초` : `${s}초`;
 }
 
-export function Summary({ call, onRetry }: { call: FinishedCall; onRetry: (retry: Retry) => void }) {
+export function Summary({ call, onRetry, onHome }: { call: FinishedCall; onRetry: (retry: Retry) => void; onHome?: () => void }) {
   const [tutoring, setTutoring] = useState<Tutoring | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [stem, setStem] = useState<string | null>(null);
@@ -193,12 +188,10 @@ export function Summary({ call, onRetry }: { call: FinishedCall; onRetry: (retry
       {tutoring && (
         <>
           <h2 className="mt-10 text-[22px] leading-snug font-bold">Ms. Park의 정리</h2>
-          <TutoringBlocks tutoring={tutoring} isTeachback={isTeachback} />
+          <TutoringBlocks tutoring={tutoring} isTeachback={isTeachback} stem={stem} />
         </>
       )}
-      {tutoring && (
-        <ReadingWords words={call.practiceWords} used={tutoring.practice_used ?? []} saved={tutoring.readgloss?.saved ?? 0} />
-      )}
+      {tutoring && <ReadingWords words={call.practiceWords} used={tutoring.practice_used ?? []} />}
       {tutoring && <ThinkingGaps gaps={tutoring.thinking_gaps} />}
       {stem && <CallExtras stem={stem} />}
 
@@ -209,7 +202,7 @@ export function Summary({ call, onRetry }: { call: FinishedCall; onRetry: (retry
             {isTeachback ? '같은 수업 다시 하기' : '같은 장면 다시 통화'}
           </CallButton>
         )}
-        <QuietButton onClick={() => go('home')}>홈으로</QuietButton>
+        <QuietButton onClick={onHome ?? (() => go('home'))}>홈으로</QuietButton>
       </div>
     </Screen>
   );

@@ -174,7 +174,7 @@ function CallDetailBody({ stem }: { stem: string }) {
           {data.tutoring ? (
             <>
               <FriendMessage message={data.tutoring.friend_message} partnerId={data.call.partner} />
-              <TutoringBlocks tutoring={data.tutoring} isTeachback={data.call.kind === 'teachback'} />
+              <TutoringBlocks tutoring={data.tutoring} isTeachback={data.call.kind === 'teachback'} stem={stem} />
               <ThinkingGaps gaps={data.tutoring.thinking_gaps} />
             </>
           ) : (

@@ -2,6 +2,11 @@ import type { LessonSection, PracticeWord, Retry } from './instructions';
 import type { CallLatency, LatencyResult } from './latency';
 
 export type WeakPoint = { pattern: string; example: string };
+// 내 단어장에서 친구 통화·채팅에 보여 주는 단어와 저장한 문장. 서버가 아직 안 주는 동안은 없다.
+export type Wordbook = {
+  words: { lemma: string; gloss: string }[];
+  phrases: { text: string; gloss: string }[];
+};
 export type LearnerProfile = {
   brief: string;
   updated: string | null;
@@ -10,6 +15,7 @@ export type LearnerProfile = {
   practice_words: PracticeWord[];
   interests?: string[];
   load_failed?: boolean;
+  wordbook?: Wordbook;
 };
 export type TimeLimits = { call: number; teachback: number; smalltalk: number };
 export type Lesson = {
@@ -29,11 +35,15 @@ export type FriendMessage = {
   phrases: { phrase: string; note: string }[];
   next_time: string;
 };
+// 미국식으로 말하기: 학습자가 실제로 한 말(said)과 그 자리에서 미국에서 자연스러운 표현(natural), 왜 다른지(why)와 한국식 생각(korean_way).
+export type UsStyleItem = { said: string; korean_way: string; natural: string; why: string };
 export type Tutoring = {
   corrections: { said: string; better: string; why: string }[];
   good: { said: string; note: string }[];
   vocab: { word: string; meaning_ko: string; example: string; etymology: string }[];
+  // 일반 튜터링에서는 항상 빈 목록이다. 옛 저장 파일에만 값이 있다(us_style가 대신한다).
   pragmatics: { pattern: string; note: string }[];
+  us_style?: UsStyleItem[];
   retry: Retry;
   unanswered?: { question: string; teacher_said: string; cause: string; evidence: string }[];
   practice_used?: string[];
@@ -330,6 +340,9 @@ function toTutoring(data: Record<string, unknown>): Tutoring {
     good: list(data.good),
     vocab: list(data.vocab),
     pragmatics: list(data.pragmatics),
+    us_style: list(data.us_style).filter(
+      (u): u is UsStyleItem => !!u && typeof u.said === 'string' && typeof u.natural === 'string' && !!u.natural.trim(),
+    ).map((u) => ({ said: u.said, korean_way: typeof u.korean_way === 'string' ? u.korean_way : '', natural: u.natural, why: typeof u.why === 'string' ? u.why : '' })),
     retry: (data.retry as Retry) || {},
     unanswered: list(data.unanswered),
     practice_used: list(data.practice_used),
