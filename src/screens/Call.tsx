@@ -1,15 +1,16 @@
-import { Captions, CaptionsOff, Mic, MicOff, Pause, Phone, PhoneOff, Play, Volume2 } from 'lucide-react';
+import { Captions, CaptionsOff, Mic, MicOff, MoonStar, Pause, Phone, PhoneOff, Play, Volume2, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { FriendMemory, type MemoryState } from '../components/FriendMemory';
-import { PartnerPicker } from '../components/PartnerPicker';
+import { BlackScreen } from '../components/BlackScreen';
+import type { MemoryState } from '../components/FriendMemory';
 import { TalkingPortrait } from '../components/TalkingPortrait';
 import { TopicChips, type TopicChip } from '../components/TopicChips';
 import { QuietButton, useWide } from '../components/ui';
 import { WordText } from '../components/WordText';
-import { getPartnerMemory, serverNow, type PartnerMemory } from '../lib/api';
+import { getPartnerMemory, serverNow } from '../lib/api';
 import { go } from '../lib/router';
 import { cleanInterests, sanitizeTopic, type PracticeWord } from '../lib/instructions';
-import { isPark, loadPartnerId, partnerById, PARK_ID, savePartnerId } from '../lib/partners';
+import { isPark, partnerById, PARK_ID } from '../lib/partners';
+import { BLACK_DELAY_MS, loadScreenMode, useScreenLock } from '../lib/screenLock';
 import { buildInstruction, callMode, callTitle, practiceWordsFor, type CallSetup, type FinishedCall } from '../lib/setup';
 import { useCall } from '../lib/useCall';
 
@@ -55,7 +56,7 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, timeLi
 }) {
   const call = useCall();
   const wide = useWide();
-  const [partnerId, setPartnerId] = useState(() => (baseSetup.kind === 'teachback' ? PARK_ID : baseSetup.partner ?? loadPartnerId()));
+  const partnerId = baseSetup.kind === 'teachback' ? PARK_ID : baseSetup.partner ?? PARK_ID;
   const partner = partnerById(partnerId);
   const wantsMemory = (baseSetup.kind === 'smalltalk' || baseSetup.kind === 'freetalk') && !isPark(partner);
   const [loaded, setLoaded] = useState<{ id: string; state: MemoryState }>({ id: partnerId, state: { status: 'loading' } });
@@ -79,14 +80,11 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, timeLi
     if (baseSetup.kind === 'mission') return { ...baseSetup, partner: partnerId };
     return { ...baseSetup, partner: partnerId, chip: chipValue };
   }, [baseSetup, partnerId, chipValue]);
-  const choosePartner = (id: string) => {
-    setPartnerId(id);
-    savePartnerId(id);
-  };
-  const showPicker = (call.status === 'ready' || call.status === 'error') && baseSetup.kind !== 'teachback';
+  const idle = call.status === 'ready' || call.status === 'error';
+  const showChips = idle && chips.length > 0;
 
   useEffect(() => {
-    if (!showPicker || !wantsMemory) return;
+    if (!idle || !wantsMemory) return;
     const controller = new AbortController();
     getPartnerMemory(partnerId, controller.signal).then(
       (memory) => setLoaded({ id: partnerId, state: { status: 'ready', memory } }),
@@ -96,10 +94,8 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, timeLi
       },
     );
     return () => controller.abort();
-  }, [showPicker, wantsMemory, partnerId]);
+  }, [idle, wantsMemory, partnerId]);
 
-  const changeMemory = (id: string, memory: PartnerMemory | null) =>
-    setLoaded((prev) => (prev.id === id ? { id, state: { status: 'ready', memory } } : prev));
   const [captions, setCaptions] = useState(true);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -108,6 +104,32 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, timeLi
   const pushedRef = useRef(false);
   const title = callTitle(setup);
   const { hangUp } = call;
+  const live = call.status === 'live';
+  const inCall = call.status === 'connecting' || live;
+  const [screenMode] = useState(() => loadScreenMode());
+  const screen = useScreenLock(inCall, screenMode);
+  const [blackOn, setBlackOn] = useState(false);
+  const blackDone = useRef(false);
+
+  // 검은 화면 모드: 연결되고 5초 뒤 한 번 덮는다. 풀고 나면 그 통화에서는 다시 덮지 않는다.
+  useEffect(() => {
+    if (!live) {
+      setBlackOn(false);
+      blackDone.current = false;
+      return;
+    }
+    if (screenMode !== 'black') return;
+    const timer = window.setTimeout(() => {
+      if (blackDone.current) return;
+      blackDone.current = true;
+      setBlackOn(true);
+    }, BLACK_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [live, screenMode]);
+  const blackNow = () => {
+    blackDone.current = true;
+    setBlackOn(true);
+  };
 
   // 연결 중·통화 중에는 같은 #/call 항목을 하나 더 쌓아 두고, 뒤로 가기(popstate)를 끊기로 처리한다.
   useEffect(() => {
@@ -232,7 +254,7 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, timeLi
 
       <section className="flex flex-col items-center pt-6 text-center lg:col-start-1 lg:row-start-2 lg:self-center lg:pt-0">
         <TalkingPortrait
-          size={call.status === 'live' ? 168 : showPicker && !wide ? 140 : 200}
+          size={live ? 168 : showChips && !wide ? 140 : 200}
           level={call.botLevel}
           active={call.botSpeaking}
           src={partner.portrait}
@@ -243,6 +265,15 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, timeLi
         <p className={`mt-1 min-h-6 ${call.status === 'error' ? 'text-end-press' : 'text-ink-soft'}`} role="status">
           {status}
         </p>
+        {inCall && screenMode !== 'system' && !screen.supported && <p className="mt-2 text-sm text-ink-soft">이 브라우저는 화면 켜두기를 지원하지 않아요</p>}
+        {live && screen.resumed && (
+          <div role="alert" className="mt-3 flex w-full max-w-xs items-center gap-1 rounded-2xl border border-line bg-surface py-2 pl-4 text-left text-sm">
+            <p className="flex-1">화면이 꺼져 있는 동안 마이크가 멈췄을 수 있어요. 말이 안 들리면 음소거를 껐다 켜 보세요.</p>
+            <button type="button" onClick={screen.dismissResumed} aria-label="안내 닫기" className="grid size-11 shrink-0 place-items-center rounded-full text-ink-soft hover:bg-line/60">
+              <X size={18} aria-hidden />
+            </button>
+          </div>
+        )}
         {call.status === 'live' && call.audioBlocked && (
           <div className="mt-3 w-full max-w-xs">
             <QuietButton onClick={call.resumeAudio}>
@@ -253,23 +284,13 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, timeLi
         )}
       </section>
 
-      {showPicker && (
+      {showChips && (
         <section className="mt-4 min-h-0 flex-1 overflow-y-auto lg:col-start-2 lg:row-span-3 lg:row-start-1 lg:mt-0 lg:max-h-full lg:flex-none lg:self-center">
-          <PartnerPicker value={partnerId} onChange={choosePartner} />
-          {wantsMemory && (
-            <FriendMemory
-              key={partnerId}
-              partnerId={partnerId}
-              name={partner.name}
-              state={memoryState}
-              onChange={(memory) => changeMemory(partnerId, memory)}
-            />
-          )}
-          {chips.length > 0 && <TopicChips chips={chips} value={chip?.id ?? NO_CHIP} onChange={(id) => setChosenChip({ partnerId, id })} />}
+          <TopicChips chips={chips} value={chip?.id ?? NO_CHIP} onChange={(id) => setChosenChip({ partnerId, id })} />
         </section>
       )}
 
-      {!showPicker && (
+      {!showChips && (
       <section
         className="mt-4 min-h-0 flex-1 overflow-y-auto lg:col-start-2 lg:row-span-3 lg:row-start-1 lg:mt-0 lg:flex-none lg:rounded-2xl lg:border lg:border-line lg:bg-surface lg:p-8"
         aria-label="실시간 자막"
@@ -303,11 +324,16 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, timeLi
             <QuietButton onClick={() => go('home')}>홈으로</QuietButton>
           </div>
         ) : (
-          <div className="flex items-end justify-center gap-5">
+          <div className="flex items-end justify-center gap-3">
             <RoundButton label={captions ? '자막 끄기' : '자막 켜기'} tone={captions ? 'on' : 'plain'} onClick={() => setCaptions((v) => !v)}>
               {captions ? <Captions size={24} aria-hidden /> : <CaptionsOff size={24} aria-hidden />}
             </RoundButton>
-            {call.status === 'live' && (
+            {live && (
+              <RoundButton label="화면 끄기" onClick={blackNow}>
+                <MoonStar size={24} aria-hidden />
+              </RoundButton>
+            )}
+            {live && (
               <RoundButton label={call.paused ? '다시 시작' : '일시정지'} tone={call.paused ? 'on' : 'plain'} onClick={call.paused ? resumeCall : call.pause}>
                 {call.paused ? <Play size={24} aria-hidden /> : <Pause size={24} aria-hidden />}
               </RoundButton>
@@ -321,6 +347,7 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, timeLi
           </div>
         )}
       </footer>
+      {live && blackOn && <BlackScreen onRelease={() => setBlackOn(false)} />}
     </main>
   );
 }
