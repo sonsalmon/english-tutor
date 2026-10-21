@@ -4,17 +4,20 @@ import { ClipList } from '../components/ClipList';
 import { CultureNotes } from '../components/CultureNotes';
 import { FriendMessage } from '../components/FriendMessage';
 import { PeopleList, TwoPane } from '../components/PeopleList';
+import { SummaryBadge, SummaryPlaceholder } from '../components/SummaryState';
 import { ThinkingGaps } from '../components/ThinkingGaps';
 import { CostLine, TutoringBlocks } from '../components/TutoringBlocks';
 import { ReplayButton, TranscriptView } from '../components/TranscriptView';
 import { List, RowLink, Screen, TopBar, useWide } from '../components/ui';
 import { WordText } from '../components/WordText';
-import { formatUsdShort, getCall, getCalls, type CallDetail, type CallSummary, type CallTotals } from '../lib/api';
+import { formatUsdShort, getCall, getCalls, startSummary, type CallDetail, type CallSummary, type CallTotals } from '../lib/api';
 import { formatDuration, formatWhen } from '../lib/callFormat';
 import { latencyText } from '../lib/latency';
 import { useFinishReview } from '../lib/review';
 import { PARK_ID, isPark, partnerById } from '../lib/partners';
 import { go } from '../lib/router';
+import { anyRunning } from '../lib/summaryStatus';
+import { useSummaryPolling } from '../lib/useSummaryPolling';
 
 type Loaded<T> = { data: T | null; error: string | null };
 
@@ -67,10 +70,11 @@ function SummaryChip() {
 
 function RowMeta({ call }: { call: CallSummary }) {
   const total = call.cost?.total;
-  if (!call.has_tutoring && total == null) return null;
+  const progress = call.summary === 'running' || call.summary === 'failed';
+  if (!call.has_tutoring && total == null && !progress) return null;
   return (
     <span className="flex shrink-0 flex-col items-end gap-1">
-      {call.has_tutoring && <SummaryChip />}
+      {call.has_tutoring ? <SummaryChip /> : <SummaryBadge status={call.summary} />}
       {total != null && <span className="text-xs text-ink-soft">예상 {formatUsdShort(total)}</span>}
     </span>
   );
@@ -104,7 +108,10 @@ function FilterRow({ value, onChange }: { value: Filter; onChange: (f: Filter) =
 }
 
 function CallListBody() {
-  const { data, error } = useLoaded((signal) => getCalls(50, signal), 'list');
+  const { data: loaded, error } = useLoaded((signal) => getCalls(50, signal), 'list');
+  const [fresh, setFresh] = useState<Awaited<ReturnType<typeof getCalls>> | null>(null);
+  const data = fresh ?? loaded;
+  useSummaryPolling(!!data && anyRunning(data.calls), async (signal) => setFresh(await getCalls(50, signal)), 'list');
   const [filter, setFilter] = useState<Filter>('all');
   const shown = data ? data.calls.filter((c) => (filter === 'all' ? true : filter === 'smalltalk' ? c.kind === 'smalltalk' : c.kind !== 'smalltalk')) : [];
   return (
@@ -169,10 +176,24 @@ function DetailTabs({ value, onChange }: { value: DetailTab; onChange: (tab: Det
   );
 }
 
-function CallDetailBody({ data, stem }: { data: CallDetail; stem: string }) {
+function CallDetailBody({ data, stem, onStartSummary }: { data: CallDetail; stem: string; onStartSummary: () => Promise<void> }) {
   const [tab, setTab] = useState<DetailTab>('summary');
+  const [starting, setStarting] = useState(false);
+  const [startFailed, setStartFailed] = useState(false);
+  const startNow = async () => {
+    setStarting(true);
+    setStartFailed(false);
+    try {
+      await onStartSummary();
+    } catch {
+      setStartFailed(true);
+    } finally {
+      setStarting(false);
+    }
+  };
   // 탭을 옮겨도 화면이 열려 있는 동안은 검토가 끝난 것이 아니다(요약 탭의 블록이 언마운트되어도 유지).
-  useFinishReview(stem);
+  // 요약이 아직 없으면(정리하는 중) 보여 준 게 없으니 검토 완료로 치지 않는다.
+  useFinishReview(data.tutoring ? stem : null);
   const latency = latencyText(data.call.latency);
   const partner = partnerById(data.call.partner);
   const hasTranscript = data.transcript.length > 0 || !!data.verbatim;
@@ -195,10 +216,10 @@ function CallDetailBody({ data, stem }: { data: CallDetail; stem: string }) {
               <>
                 <FriendMessage message={data.tutoring.friend_message} partnerId={data.call.partner} />
                 <TutoringBlocks tutoring={data.tutoring} isTeachback={data.call.kind === 'teachback'} stem={stem} />
-                <ThinkingGaps gaps={data.tutoring.thinking_gaps} />
+                <ThinkingGaps tutoring={data.tutoring} stem={stem} />
               </>
             ) : (
-              <p className="mt-8 leading-relaxed text-ink-soft">이 통화는 저장된 요약이 없어요.</p>
+              <SummaryPlaceholder status={data.call.summary} onStart={startNow} starting={starting} startFailed={startFailed} />
             )}
             <CultureNotes stem={stem} />
           </>
@@ -222,7 +243,17 @@ function CallDetailBody({ data, stem }: { data: CallDetail; stem: string }) {
 
 function LogDetailScreen({ stem, parkHint }: { stem: string; parkHint?: string }) {
   const wide = useWide();
-  const { data, error } = useLoaded<CallDetail>((signal) => getCall(stem, signal), stem);
+  const { data: loaded, error } = useLoaded<CallDetail>((signal) => getCall(stem, signal), stem);
+  const [fresh, setFresh] = useState<{ stem: string; detail: CallDetail } | null>(null);
+  const data = fresh && fresh.stem === stem ? fresh.detail : loaded;
+  const refresh = async (signal?: AbortSignal) => {
+    setFresh({ stem, detail: await getCall(stem, signal) });
+  };
+  useSummaryPolling(data?.call.summary === 'running', refresh, stem);
+  const startNow = async () => {
+    await startSummary(stem);
+    await refresh();
+  };
   const partnerId = data ? (data.call.partner ?? PARK_ID) : null;
   const backTo = partnerId ?? PARK_ID;
   const body = error ? (
@@ -232,7 +263,7 @@ function LogDetailScreen({ stem, parkHint }: { stem: string; parkHint?: string }
   ) : !data ? (
     <p className="text-ink-soft">통화 기록을 불러오는 중이에요.</p>
   ) : (
-    <CallDetailBody key={stem} data={data} stem={stem} />
+    <CallDetailBody key={stem} data={data} stem={stem} onStartSummary={startNow} />
   );
 
   if (wide) {

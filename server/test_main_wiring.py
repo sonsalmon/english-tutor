@@ -9,7 +9,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from server import main, pron, review
+from server import main, pron, review, summary_jobs
 
 TRANSCRIPT = Path("/nonexistent/2026-10-20-090000.md")
 TUTORING = {"corrections": [{"said": "I just start", "better": "I just started", "why": "x"}]}
@@ -20,7 +20,7 @@ def isolate_review_state(test):
     tmp = tempfile.TemporaryDirectory()
     test.addCleanup(tmp.cleanup)
     patcher = mock.patch.dict(
-        os.environ, {"TUTORING_DIR": tmp.name, "KNOWN_EXPRESSIONS_PATH": str(Path(tmp.name) / "known.json")}
+        os.environ, {"TUTORING_DIR": tmp.name, "TEACHBACK_DIR": str(Path(tmp.name) / "teachback"), "KNOWN_EXPRESSIONS_PATH": str(Path(tmp.name) / "known.json")}
     )
     patcher.start()
     test.addCleanup(patcher.stop)
@@ -42,7 +42,7 @@ class TutorEndpointWiringTest(unittest.IsolatedAsyncioTestCase):
         return review.finish(TRANSCRIPT.stem)
 
     def setUp(self):
-        main._TUTOR_CACHE.clear()
+        summary_jobs.reset()
         main._PROFILE_UPDATED.clear()
         self.review_dir = isolate_review_state(self)
         patches = {
@@ -67,7 +67,9 @@ class TutorEndpointWiringTest(unittest.IsolatedAsyncioTestCase):
     async def test_card_update_fires_after_the_delay_without_finish(self):
         with mock.patch.object(review, "CARD_DELAY_SEC", 0):
             await main.tutor_endpoint(FakeRequest({}))
-            await review._TIMERS[TRANSCRIPT.stem]
+            timer = review._TIMERS.get(TRANSCRIPT.stem)
+            if timer:
+                await timer
 
         self.mocks["schedule"].assert_called_once_with(TUTORING)
         self.assertFalse(review.finish(TRANSCRIPT.stem))
@@ -101,6 +103,8 @@ class TutorEndpointWiringTest(unittest.IsolatedAsyncioTestCase):
         self.mocks["schedule"].assert_called_once_with({**TUTORING, "thinking_gaps": gaps})
         self.mocks["schedule"].reset_mock()
         main._PROFILE_UPDATED.clear()
+        summary_jobs.reset()
+        summary_jobs.spec_path(TRANSCRIPT.stem).unlink(missing_ok=True)
         result = {"corrections": [], "thinking_gaps": gaps, "unanswered": ["x"], "lesson_date": "2026-10-13"}
         with mock.patch.object(main, "get_lesson", return_value={"date": "2026-10-13", "sections": []}), \
                 mock.patch.object(main, "lesson_text", return_value=""), \
@@ -119,7 +123,7 @@ class TutorEndpointWiringTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_same_call_analyzed_again_after_cache_expiry_updates_card_once(self):
         await main.tutor_endpoint(FakeRequest({}))
-        main._TUTOR_CACHE.clear()
+        summary_jobs.reset()
         await main.tutor_endpoint(FakeRequest({}))
 
         self.assertEqual(self.mocks["run"].call_count, 2)
@@ -156,7 +160,7 @@ class TutorEndpointWiringTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_teachback_again_after_cache_expiry_updates_card_once(self):
         await self._teachback()
-        main._TUTOR_CACHE.clear()
+        summary_jobs.reset()
         await self._teachback()
         self.finish()
 
@@ -174,7 +178,7 @@ class TutorEndpointWiringTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_error_after_path_known_carries_stem(self):
         for exc, status in [(main.TutoringAnalysisError("빈 결과"), 502), (RuntimeError("boom"), 500)]:
-            main._TUTOR_CACHE.clear()
+            summary_jobs.reset()
             self.mocks["run"].side_effect = exc
             res = await main.tutor_endpoint(FakeRequest({}))
             self.assertEqual(res.status_code, status)
@@ -188,7 +192,7 @@ class TutorEndpointWiringTest(unittest.IsolatedAsyncioTestCase):
         with mock.patch("server.history.save_latency") as save:
             await main.tutor_endpoint(FakeRequest({"latency": latency}))
             save.assert_called_once_with(TRANSCRIPT.stem, latency)
-        main._TUTOR_CACHE.clear()
+        summary_jobs.reset()
         self.mocks["run"].side_effect = main.TutoringAnalysisError("빈 결과")
         with mock.patch("server.history.save_latency") as save:
             res = await main.tutor_endpoint(FakeRequest({"latency": latency}))
@@ -197,7 +201,7 @@ class TutorEndpointWiringTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_bad_or_failing_latency_never_fails_the_tutor_request(self):
         for latency, exc in [({"turns_ms": "x"}, ValueError("bad")), ({"turns_ms": []}, FileNotFoundError("none")), ("oops", None), (5, None)]:
-            main._TUTOR_CACHE.clear()
+            summary_jobs.reset()
             with mock.patch("server.history.save_latency", side_effect=exc) as save:
                 res = await main.tutor_endpoint(FakeRequest({"latency": latency}))
             self.assertEqual(res.status_code, 200, latency)
@@ -232,7 +236,7 @@ class ReadglossWiringTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_tutoring_never_pushes_to_readgloss(self):
         first = await main.tutor_endpoint(FakeRequest({}))
-        main._TUTOR_CACHE.clear()
+        summary_jobs.reset()
         await main.tutor_endpoint(FakeRequest({}))
         review.finish(TRANSCRIPT.stem)
 
@@ -897,7 +901,7 @@ class ClipsAndTtsEndpointsTest(unittest.TestCase):
 
 class PartnerMemoryWiringTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        main._TUTOR_CACHE.clear()
+        summary_jobs.reset()
         main._PROFILE_UPDATED.clear()
         isolate_review_state(self)
         patches = {

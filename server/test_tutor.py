@@ -32,6 +32,25 @@ class TutorNormalizeTest(unittest.TestCase):
         self.assertNotIn("thinking_gaps", tutor.normalize_teachback_json(raw))
         self.assertTrue(tutor.is_empty_result(tutor.normalize_tutor_json(raw)))
 
+    def test_thinking_gap_detail_and_examples_are_optional_and_trimmed(self):
+        raw = {
+            "thinking_gaps": [
+                {**tgap("정신없다", "I'm swamped"), "detail": " 한국어는 상태로 말해요. " + "가" * 500, "examples": [" I'm swamped this week. ", "I'm swamped this week.", "", 5, None, "Second one.", "Third one."]},
+                {**tgap("빈둥빈둥", "lazing around", kind="word"), "detail": 7, "examples": "not a list"},
+                {**tgap("가다", "go"), "detail": "   ", "examples": ["x" * 300]},
+                tgap("옛것", "old one"),
+            ]
+        }
+        out = tutor.normalize_tutor_json(raw)["thinking_gaps"]
+        self.assertEqual(len(out[0]["detail"]), tutor.MAX_GAP_DETAIL)
+        self.assertTrue(out[0]["detail"].startswith("한국어는 상태로 말해요."))
+        self.assertEqual(out[0]["examples"], ["I'm swamped this week.", "Second one."])
+        self.assertNotIn("detail", out[1])
+        self.assertNotIn("examples", out[1])
+        self.assertNotIn("detail", out[2])
+        self.assertEqual(len(out[2]["examples"][0]), tutor.MAX_GAP_EXAMPLE)
+        self.assertEqual(out[3], tgap("옛것", "old one"))
+
     def test_normalize_topic_keywords_in_tutor_module(self):
         raw = {"topic_keywords": [" Cutting-Board! ", "talk", "Small Talk", "Kitchen", "kitchen", "x" * 31, 5, "busy week", "a", "b", "c"]}
         out = tutor.normalize_tutor_json(raw)["topic_keywords"]
@@ -261,6 +280,19 @@ class UsStyleTest(unittest.TestCase):
 
         self.assertEqual([c["better"] for c in out["corrections"]], ["I got swamped"])
         self.assertEqual([v["word"] for v in out["vocab"]], ["swamped"])
+
+    def test_known_expressions_leave_thinking_gaps(self):
+        raw = {
+            "thinking_gaps": [
+                {"korean": "정신없다", "english": "I'm swamped", "kind": "framing", "note": "n"},
+                {"korean": "도마", "english": "cutting board", "kind": "word", "note": "n"},
+            ],
+            "good": [{"said": "a", "note": "b"}],
+        }
+
+        out = tutor.normalize_tutor_json(raw, known=["I'm swamped"])
+
+        self.assertEqual([g["english"] for g in out["thinking_gaps"]], ["cutting board"])
 
     def test_us_style_alone_makes_the_result_non_empty_and_old_pragmatics_still_count(self):
         self.assertFalse(tutor.is_empty_result({"us_style": [us("a", "b c")]}))

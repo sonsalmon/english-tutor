@@ -13,8 +13,9 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 from google.genai.types import AudioTranscriptionConfig, EndSensitivity, StartSensitivity
 
@@ -23,6 +24,7 @@ from server.lesson import session_time_limit_from_env
 from server import partner_memory
 from server.partner_memory import PARTNER_IDS, PARTNER_NAMES
 from server.pricing import UsageTotals, estimate_cost
+from server.readgloss import LEMMA_RE
 from server.transcript_clean import clean_learner_text
 from server.transcript_store import (
     get_transcript_dir,
@@ -51,6 +53,13 @@ VAD_CHAT_END_SENSITIVITY_ENV = "LIVE_VAD_CHAT_END_SENSITIVITY"
 VAD_CHAT_SILENCE_MS_ENV = "LIVE_VAD_CHAT_SILENCE_MS"
 VAD_CHAT_PREFIX_MS_ENV = "LIVE_VAD_CHAT_PREFIX_MS"
 VAD_PREFIX_MS_MAX = 2000
+# 말 시작 민감도(모든 통화 모드): 숨소리·잡음에 친구 말이 멈추지 않게 LOW, 앞 여유 500ms가 기본이다(2026-10-21).
+VAD_START_SENSITIVITY_ENV = "LIVE_VAD_START_SENSITIVITY"
+VAD_PREFIX_MS_ENV = "LIVE_VAD_PREFIX_MS"
+DEFAULT_VAD_START_SENSITIVITY = "LOW"
+DEFAULT_VAD_PREFIX_MS = 500
+# 입력 오디오 잡음 제거(RNNoise, 무료). NOISE_FILTER=off면 끈다.
+NOISE_FILTER_ENV = "NOISE_FILTER"
 VAD_SILENCE_MS_RANGE = (100, 3000)
 CHAT_DEFAULT_SILENCE_MS = 500  # next10 실험 결정: 채팅 기본 end=HIGH, silence 500ms
 # LIVE_MODEL·LIVE_AFFECTIVE_DIALOG는 gemini-3.8-live 시험(next10)을 위해 남긴 노브다. 둘 다 기본은 꺼져 있다
@@ -58,6 +67,8 @@ CHAT_DEFAULT_SILENCE_MS = 500  # next10 실험 결정: 채팅 기본 end=HIGH, s
 AFFECTIVE_DIALOG_ENV = "LIVE_AFFECTIVE_DIALOG"  # 0|false|off면 끈다(gemini-3.8-live는 1007로 거부, 2026-10-20 확인)
 MISSION_RE = re.compile(r'trying to:\s*"([^"]+)"')
 MIN_LEARNER_WORDS = 3
+LESSON_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}", re.ASCII)
+MAX_PRACTICE_WORDS = 10
 # Gemini 입력 받아쓰기가 잡음을 `{}`로 내보낼 때가 있다(2026-10-20 브라우저 시험: "{} hi, I'm ...").
 NOISE_MARK_RE = re.compile(r"\{\s*\}")
 # 입력 전사 언어 힌트(쉼표 구분 BCP-47). 빈 문자열이면 힌트를 넣지 않는다(Vertex가 거부할 때 끄는 스위치).
@@ -144,6 +155,58 @@ def chat_vad_overrides(mode: str, env=None) -> dict:
             continue
         out[key] = value
     return out
+
+
+def start_vad_settings(env=None) -> dict:
+    """모든 통화 모드에 적용할 Gemini VAD의 말 시작 노브. 기본 start=LOW, prefix_padding_ms=500.
+
+    `LIVE_VAD_START_SENSITIVITY`(HIGH|LOW)·`LIVE_VAD_PREFIX_MS`(0..2000)로 바꾼다. 잘못된 값은 경고만 남기고 기본값을 쓴다.
+    되돌리기 한 줄(옛 값): LIVE_VAD_START_SENSITIVITY=HIGH LIVE_VAD_PREFIX_MS=300"""
+    env = os.environ if env is None else env
+    sensitivity = DEFAULT_VAD_START_SENSITIVITY
+    raw = (env.get(VAD_START_SENSITIVITY_ENV) or "").strip().upper()
+    if raw in ("HIGH", "LOW"):
+        sensitivity = raw
+    elif raw:
+        logger.warning("%s=%r ignored (HIGH|LOW)", VAD_START_SENSITIVITY_ENV, raw)
+    prefix = DEFAULT_VAD_PREFIX_MS
+    raw = (env.get(VAD_PREFIX_MS_ENV) or "").strip()
+    if raw:
+        try:
+            value = int(raw)
+        except ValueError:
+            value = None
+        if value is None or not 0 <= value <= VAD_PREFIX_MS_MAX:
+            logger.warning("%s=%r ignored (int 0..%s)", VAD_PREFIX_MS_ENV, raw, VAD_PREFIX_MS_MAX)
+        else:
+            prefix = value
+    return {
+        "start_sensitivity": getattr(StartSensitivity, f"START_SENSITIVITY_{sensitivity}"),
+        "prefix_padding_ms": prefix,
+    }
+
+
+def noise_filter_enabled(env=None) -> bool:
+    """잡음 제거 필터는 기본 켬. `NOISE_FILTER=off|0|false|no`면 끈다."""
+    env = os.environ if env is None else env
+    return (env.get(NOISE_FILTER_ENV) or "").strip().lower() not in ("off", "0", "false", "no")
+
+
+def build_audio_in_filter(env=None):
+    """TransportParams(audio_in_filter=...)에 넣을 RNNoiseFilter. 꺼져 있거나 pyrnnoise가 없으면 None(경고만, 통화는 계속)."""
+    if not noise_filter_enabled(env):
+        logger.info("Noise filter off (%s)", NOISE_FILTER_ENV)
+        return None
+    try:
+        import pyrnnoise  # noqa: F401  pipecat은 없어도 import가 통과하므로 먼저 확인한다
+        from pipecat.audio.filters.rnnoise_filter import RNNoiseFilter
+
+        noise_filter = RNNoiseFilter()
+        logger.info("Noise filter on (RNNoise)")
+        return noise_filter
+    except Exception as exc:  # ImportError뿐 아니라 네이티브 라이브러리 로딩 실패도 통화를 막지 않는다
+        logger.warning("RNNoise unavailable, running without noise filter: %s", exc)
+        return None
 
 
 def vad_summary(overrides: dict) -> Optional[str]:
@@ -250,6 +313,9 @@ class CallConfig:
     mode: str
     voice: str = DEFAULT_VOICE
     partner: Optional[str] = None
+    # 통화가 끝난 뒤 서버가 스스로 정리를 걸 때 쓰는 입력(예전에는 화면이 /api/tutor 본문으로 보냈다).
+    lesson_date: Optional[str] = None
+    practice_words: Tuple[str, ...] = ()
 
     @property
     def mission(self) -> Optional[str]:
@@ -337,7 +403,26 @@ def parse_call_config(data: Any) -> CallConfig:
     # 기억은 수다·자유 대화만 쓴다: 미션 역할극 발화는 학습자의 실제 사실이 아니다.
     if partner not in PARTNER_IDS or mode not in PARTNER_MEMORY_MODES:
         partner = None
-    return CallConfig(system_instruction=instruction, mode=mode, voice=voice, partner=partner)
+    lesson_date = data.get("lesson_date")
+    if lesson_date is not None:
+        try:
+            if not isinstance(lesson_date, str) or not LESSON_DATE_RE.fullmatch(lesson_date):
+                raise ValueError
+            datetime.strptime(lesson_date, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError("lesson_date는 YYYY-MM-DD 형식이어야 합니다.") from None
+    raw_words = data.get("practice_words")
+    practice_words = tuple(
+        w for w in (raw_words[:MAX_PRACTICE_WORDS] if isinstance(raw_words, list) else []) if isinstance(w, str) and LEMMA_RE.fullmatch(w)
+    )
+    return CallConfig(
+        system_instruction=instruction,
+        mode=mode,
+        voice=voice,
+        partner=partner,
+        lesson_date=lesson_date,
+        practice_words=practice_words,
+    )
 
 
 @dataclass
@@ -399,9 +484,21 @@ def make_usage_collector(usage: UsageTotals):
     return UsageCollector()
 
 
+def job_spec_for(config: "CallConfig"):
+    """통화 정리 작업의 입력(mode·수업 날짜·연습 단어)."""
+    from server.summary_jobs import JobSpec
+
+    return JobSpec(mode=config.mode, lesson_date=config.lesson_date, practice_words=config.practice_words)
+
+
 def finish_call(record: CallRecord, config: CallConfig, model: str, ended_at: Optional[float] = None, vad: Optional[str] = None):
     ended_at = ended_at or time.time()
     started_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(record.started_at))
+    if _call_saved_hook is not None and record.learner_has_spoken():
+        # 전문(.md)이 생기는 순간부터 /api/tutor·/api/calls가 이 통화를 볼 수 있으므로, 정리 입력을 그보다 먼저 남겨 둔다.
+        from server.summary_jobs import write_spec
+
+        write_spec(transcript_stem(started_str), job_spec_for(config))
     try:
         if record.mic_pcm:
             save_call_audio(bytes(record.mic_pcm), transcript_stem(started_str), sample_rate=MIC_SAMPLE_RATE)
@@ -429,6 +526,27 @@ def finish_call(record: CallRecord, config: CallConfig, model: str, ended_at: Op
     return saved
 
 
+# 통화가 저장된 뒤 거는 뒷일(통화 정리). main이 시작할 때 등록한다(review.configure와 같은 방식).
+_call_saved_hook: Optional[Callable[[Any, "CallConfig"], None]] = None
+
+
+def configure_call_saved(hook: Optional[Callable[[Any, "CallConfig"], None]]) -> None:
+    global _call_saved_hook
+    _call_saved_hook = hook
+
+
+def notify_call_saved(saved: Any, config: "CallConfig", record: "CallRecord") -> bool:
+    """저장된 통화에서 학습자가 실제로 말했으면 통화 정리를 건다. 걸었으면 True. 실패해도 통화 마무리는 막지 않는다."""
+    if saved is None or _call_saved_hook is None or not record.learner_has_spoken():
+        return False
+    try:
+        _call_saved_hook(saved, config)
+    except Exception as e:  # noqa: BLE001
+        logger.error("Call summary scheduling failed: %s", e)
+        return False
+    return True
+
+
 def mission_tools(config: CallConfig):
     """미션·자유 대화에만 complete_mission 도구를 준다. Teach-back과 가벼운 대화는 점수·종료 도구 없이 진행한다(f05f290과 같음)."""
     if config.mode in ("teachback", "smalltalk"):
@@ -448,17 +566,18 @@ def mission_tools(config: CallConfig):
 
 def live_config_for(mode: str, env=None):
     """run_bot이 쓰는 (Live 모델, Gemini VAD 설정, 로컬 사용자 설정, 전문 `- vad:` 요약)을 한 번에 돌려준다."""
-    vad, user_params = turn_settings(mode)
+    vad, user_params = turn_settings(mode, env)
     return live_model_for(mode, env), vad, user_params, vad_summary(chat_vad_overrides(mode, env))
 
 
-def turn_settings(mode: Optional[str] = None):
+def turn_settings(mode: Optional[str] = None, env=None):
     """TURN_MODE에 따라 (Gemini VAD 설정, 로컬 VAD·Smart Turn 사용자 설정)을 돌려준다.
     mode가 smalltalk·freetalk이면 LIVE_VAD_CHAT_* 노브를 기본 VAD 위에 덮는다."""
     from pipecat.processors.aggregators.llm_response_universal import LLMUserAggregatorParams
     from pipecat.services.google.gemini_live.llm import GeminiVADParams
 
-    if os.getenv(TURN_MODE_ENV, "gemini") == "smart":
+    env = os.environ if env is None else env
+    if env.get(TURN_MODE_ENV, "gemini") == "smart":
         from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
         from pipecat.audio.vad.silero import SileroVADAnalyzer
         from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
@@ -470,14 +589,13 @@ def turn_settings(mode: Optional[str] = None):
                 stop=[TurnAnalyzerUserTurnStopStrategy(turn_analyzer=LocalSmartTurnAnalyzerV3())]
             ),
         )
-    # 말 사이 멈춤이 잦은 학습자: 작은 목소리도 말 시작으로 잡고, 1.2초 조용해야 끝으로 본다(10-16 조정값).
+    # 말 끝: 1.2초 조용해야 끝으로 본다(10-16 조정값). 말 시작은 잡음에 덜 반응하게 LOW·앞 여유 500ms(10-21).
     params = GeminiVADParams(
-        start_sensitivity=StartSensitivity.START_SENSITIVITY_HIGH,
         end_sensitivity=EndSensitivity.END_SENSITIVITY_LOW,
-        prefix_padding_ms=300,
         silence_duration_ms=1200,
+        **start_vad_settings(env),
     )
-    overrides = chat_vad_overrides(mode) if mode else {}
+    overrides = chat_vad_overrides(mode, env) if mode else {}
     if overrides:
         params = params.model_copy(update=overrides)
     return params, None
@@ -523,12 +641,22 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
     if vad_meta:
         logger.info("Chat VAD knobs applied (%s): %s", config.mode, vad_meta)
     logger.info("Live model for %s: %s", config.mode, model)
+    if not getattr(vad, "disabled", False):
+        logger.info(
+            "Gemini VAD applied (%s): start=%s prefix_ms=%s end=%s silence_ms=%s",
+            config.mode,
+            vad.start_sensitivity.name.removeprefix("START_SENSITIVITY_"),
+            vad.prefix_padding_ms,
+            vad.end_sensitivity.name.removeprefix("END_SENSITIVITY_"),
+            vad.silence_duration_ms,
+        )
 
     transport = SmallWebRTCTransport(
         webrtc_connection=webrtc_connection,
         params=TransportParams(
             audio_in_enabled=True,
             audio_in_sample_rate=MIC_SAMPLE_RATE,
+            audio_in_filter=build_audio_in_filter(),
             audio_out_enabled=True,
             audio_out_10ms_chunks=2,
         ),
@@ -681,3 +809,4 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
         saved = await asyncio.to_thread(finish_call, record, config, model, None, vad_meta)
         logger.info("Call finished; transcript saved: %s", saved)
         schedule_partner_memory_update(saved, config, record)
+        notify_call_saved(saved, config, record)

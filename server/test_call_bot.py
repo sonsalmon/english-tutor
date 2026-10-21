@@ -264,15 +264,17 @@ class LiveKnobsTest(unittest.TestCase):
         self.assertEqual(call_bot.chat_vad_overrides("smalltalk", {"LIVE_VAD_CHAT_SILENCE_MS": "3000"}), {**CHAT_DEFAULT_VAD, "silence_duration_ms": 3000})
 
     def test_chat_modes_default_to_high_end_and_500ms_without_env(self):
-        env = {k: v for k, v in os.environ.items() if not k.startswith("LIVE_VAD_CHAT_") and k != "TURN_MODE"}
+        env = {k: v for k, v in os.environ.items() if not k.startswith("LIVE_VAD_") and k != "TURN_MODE"}
         with mock.patch.dict(os.environ, env, clear=True):
             chat, _ = call_bot.turn_settings("smalltalk")
             free, _ = call_bot.turn_settings("freetalk")
             mission, _ = call_bot.turn_settings("mission")
             teachback, _ = call_bot.turn_settings("teachback")
-        self.assertEqual((chat.silence_duration_ms, chat.end_sensitivity, chat.prefix_padding_ms), (500, call_bot.EndSensitivity.END_SENSITIVITY_HIGH, 300))
+        self.assertEqual((chat.silence_duration_ms, chat.end_sensitivity, chat.prefix_padding_ms), (500, call_bot.EndSensitivity.END_SENSITIVITY_HIGH, 500))
         for params in (free, mission, teachback):
             self.assertEqual((params.silence_duration_ms, params.end_sensitivity), (1200, call_bot.EndSensitivity.END_SENSITIVITY_LOW))
+        for params in (chat, free, mission, teachback):
+            self.assertEqual((params.start_sensitivity, params.prefix_padding_ms), (call_bot.StartSensitivity.START_SENSITIVITY_LOW, 500))
         self.assertEqual(call_bot.vad_summary(call_bot.chat_vad_overrides("smalltalk", {})), "end=HIGH silence_ms=500")
 
     def test_live_config_for_per_mode(self):
@@ -301,18 +303,77 @@ class LiveKnobsTest(unittest.TestCase):
         self.assertEqual(call_bot.chat_vad_overrides("smalltalk", env), {})
 
     def test_turn_settings_applies_overrides_to_chat_only(self):
-        env = {"LIVE_VAD_CHAT_END_SENSITIVITY": "HIGH", "LIVE_VAD_CHAT_SILENCE_MS": "700"}
-        with mock.patch.dict(os.environ, env, clear=False):
-            os.environ.pop("TURN_MODE", None)
+        env = {k: v for k, v in os.environ.items() if not k.startswith("LIVE_VAD_") and k != "TURN_MODE"}
+        env.update({"LIVE_VAD_CHAT_END_SENSITIVITY": "HIGH", "LIVE_VAD_CHAT_SILENCE_MS": "700"})
+        with mock.patch.dict(os.environ, env, clear=True):
             chat, _ = call_bot.turn_settings("smalltalk")
             mission, _ = call_bot.turn_settings("mission")
             teachback, _ = call_bot.turn_settings("teachback")
             plain, _ = call_bot.turn_settings()
 
         self.assertEqual((chat.silence_duration_ms, chat.end_sensitivity), (700, call_bot.EndSensitivity.END_SENSITIVITY_HIGH))
-        self.assertEqual(chat.prefix_padding_ms, 300)  # 설정 안 한 노브는 기존 값
+        self.assertEqual(chat.prefix_padding_ms, 500)  # 설정 안 한 노브는 새 기본값
         for params in (mission, teachback, plain):
             self.assertEqual((params.silence_duration_ms, params.end_sensitivity), (1200, call_bot.EndSensitivity.END_SENSITIVITY_LOW))
+
+    def test_live_config_for_uses_the_given_env_not_the_process_env(self):
+        with mock.patch.dict(os.environ, {"LIVE_VAD_PREFIX_MS": "900", "LIVE_VAD_START_SENSITIVITY": "HIGH"}):
+            vad = call_bot.live_config_for("mission", {})[1]
+            self.assertEqual((vad.start_sensitivity, vad.prefix_padding_ms), (call_bot.StartSensitivity.START_SENSITIVITY_LOW, 500))
+            vad = call_bot.live_config_for("mission", {"LIVE_VAD_PREFIX_MS": "700"})[1]
+            self.assertEqual(vad.prefix_padding_ms, 700)
+
+    def test_start_vad_defaults_low_and_500ms(self):
+        got = call_bot.start_vad_settings({})
+        self.assertEqual(got, {"start_sensitivity": call_bot.StartSensitivity.START_SENSITIVITY_LOW, "prefix_padding_ms": 500})
+
+    def test_start_vad_env_overrides_and_invalid_ignored(self):
+        got = call_bot.start_vad_settings({"LIVE_VAD_START_SENSITIVITY": "high", "LIVE_VAD_PREFIX_MS": "300"})
+        self.assertEqual(got, {"start_sensitivity": call_bot.StartSensitivity.START_SENSITIVITY_HIGH, "prefix_padding_ms": 300})
+        for prefix in ("0", "2000"):
+            self.assertEqual(call_bot.start_vad_settings({"LIVE_VAD_PREFIX_MS": prefix})["prefix_padding_ms"], int(prefix))
+        default = call_bot.start_vad_settings({})
+        for env in (
+            {"LIVE_VAD_START_SENSITIVITY": "MID"},
+            {"LIVE_VAD_PREFIX_MS": "2001"},
+            {"LIVE_VAD_PREFIX_MS": "-1"},
+            {"LIVE_VAD_PREFIX_MS": "abc"},
+        ):
+            with mock.patch.object(call_bot.logger, "warning") as warn:
+                self.assertEqual(call_bot.start_vad_settings(env), default, env)
+            warn.assert_called_once()
+
+    def test_start_vad_env_applies_to_every_mode_and_chat_prefix_wins(self):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("LIVE_VAD_") and k != "TURN_MODE"}
+        env.update({"LIVE_VAD_START_SENSITIVITY": "HIGH", "LIVE_VAD_PREFIX_MS": "700"})
+        with mock.patch.dict(os.environ, env, clear=True):
+            for mode in ("smalltalk", "freetalk", "mission", "teachback"):
+                params, _ = call_bot.turn_settings(mode)
+                self.assertEqual((params.start_sensitivity, params.prefix_padding_ms), (call_bot.StartSensitivity.START_SENSITIVITY_HIGH, 700), mode)
+        env["LIVE_VAD_CHAT_PREFIX_MS"] = "150"
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(call_bot.turn_settings("smalltalk")[0].prefix_padding_ms, 150)
+            self.assertEqual(call_bot.turn_settings("mission")[0].prefix_padding_ms, 700)
+
+    def test_noise_filter_on_by_default_and_off_switch(self):
+        for value in ("off", "OFF", "0", "false", "no"):
+            self.assertFalse(call_bot.noise_filter_enabled({"NOISE_FILTER": value}))
+        for env in ({}, {"NOISE_FILTER": "on"}, {"NOISE_FILTER": ""}):
+            self.assertTrue(call_bot.noise_filter_enabled(env))
+        self.assertIsNone(call_bot.build_audio_in_filter({"NOISE_FILTER": "off"}))
+
+    def test_noise_filter_built_when_pyrnnoise_present(self):
+        from pipecat.audio.filters.rnnoise_filter import RNNoiseFilter
+
+        with mock.patch.object(call_bot.logger, "info") as info:
+            self.assertIsInstance(call_bot.build_audio_in_filter({}), RNNoiseFilter)
+        info.assert_called_once()
+        self.assertIn("Noise filter on", info.call_args.args[0])
+
+    def test_noise_filter_missing_pyrnnoise_warns_and_returns_none(self):
+        with mock.patch.dict(sys.modules, {"pyrnnoise": None}), mock.patch.object(call_bot.logger, "warning") as warn:
+            self.assertIsNone(call_bot.build_audio_in_filter({}))
+        warn.assert_called_once()
 
     def test_affective_dialog_defaults_on_and_can_be_turned_off(self):
         self.assertTrue(call_bot.affective_dialog_from_env({}))

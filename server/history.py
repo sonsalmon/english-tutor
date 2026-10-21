@@ -13,6 +13,7 @@ from itertools import islice
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from server import summary_jobs
 from server.call_bot import NOISE_MARK_RE
 from server.partner_memory import PARTNER_IDS
 from server.pricing import combine_cost
@@ -150,10 +151,16 @@ def _parse_call(path: Path) -> Optional[Dict[str, Any]]:
         "voice": voice,
         "partner": partner,
         "has_tutoring": tutoring,
+        "summary": "done" if tutoring else summary_jobs.unfinished_status(stem),
         "kind": "teachback" if teachback else "smalltalk" if mission == SMALLTALK_MISSION else "call",
         "cost": combine_cost(live_cost, None),
         "latency": read_latency(stem),
     }
+
+
+def has_summary(stem: str) -> bool:
+    """이 통화의 튜터링(또는 teach-back) 결과 파일이 저장돼 있는지."""
+    return any((directory / f"{stem}.json").is_file() for directory in (get_teachback_dir(), get_tutoring_dir()))
 
 
 def partner_of(path: Path) -> Optional[str]:
