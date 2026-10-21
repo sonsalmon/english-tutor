@@ -7,7 +7,7 @@ import { KoLine } from '../components/KoLine';
 import { WordText } from '../components/WordText';
 import { getClipSegments, type ClipLine, type ClipSegments } from '../lib/api';
 import { lineFill, loadSync, saveSync, shiftLines, stepSync } from '../lib/captionTune';
-import { canAutoScroll, mergeSegments } from '../lib/clipLines';
+import { canAutoScroll, lineSource, mergeSegments } from '../lib/clipLines';
 import { closeClip, parseClipParam, type ClipTarget } from '../lib/clipRoute';
 import { loadPrefs, nextEngMode, nextRepeat, nextTextSize, savePrefs, stepRate, visibleRates, type EngMode, type TextSize } from '../lib/playerPrefs';
 import { KO_MODE_LABEL, loadKoSettings, nextKoMode, saveKoSettings } from '../lib/koLines';
@@ -360,7 +360,7 @@ function Study({ target }: { target: ClipTarget }) {
                   </button>
                 ) : (
                   <p key={line.id} lang="en" className={`line-in min-h-14 ${SIZE_CLASS[size]} leading-snug font-semibold break-words`}>
-                    <WordText text={line.text} onOpenChange={act.hold} />
+                    <WordText text={line.text} onOpenChange={act.hold} source={lineSource(videoId, data?.title ?? '', line)} learn />
                   </p>
                 )}
                 <KoLine line={koLine} />
