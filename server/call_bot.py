@@ -51,6 +51,13 @@ VAD_CHAT_END_SENSITIVITY_ENV = "LIVE_VAD_CHAT_END_SENSITIVITY"
 VAD_CHAT_SILENCE_MS_ENV = "LIVE_VAD_CHAT_SILENCE_MS"
 VAD_CHAT_PREFIX_MS_ENV = "LIVE_VAD_CHAT_PREFIX_MS"
 VAD_PREFIX_MS_MAX = 2000
+# 말 시작 민감도(모든 통화 모드): 숨소리·잡음에 친구 말이 멈추지 않게 LOW, 앞 여유 500ms가 기본이다(2026-10-21).
+VAD_START_SENSITIVITY_ENV = "LIVE_VAD_START_SENSITIVITY"
+VAD_PREFIX_MS_ENV = "LIVE_VAD_PREFIX_MS"
+DEFAULT_VAD_START_SENSITIVITY = "LOW"
+DEFAULT_VAD_PREFIX_MS = 500
+# 입력 오디오 잡음 제거(RNNoise, 무료). NOISE_FILTER=off면 끈다.
+NOISE_FILTER_ENV = "NOISE_FILTER"
 VAD_SILENCE_MS_RANGE = (100, 3000)
 CHAT_DEFAULT_SILENCE_MS = 500  # next10 실험 결정: 채팅 기본 end=HIGH, silence 500ms
 # LIVE_MODEL·LIVE_AFFECTIVE_DIALOG는 gemini-3.8-live 시험(next10)을 위해 남긴 노브다. 둘 다 기본은 꺼져 있다
@@ -144,6 +151,56 @@ def chat_vad_overrides(mode: str, env=None) -> dict:
             continue
         out[key] = value
     return out
+
+
+def start_vad_settings(env=None) -> dict:
+    """모든 통화 모드에 적용할 Gemini VAD의 말 시작 노브. 기본 start=LOW, prefix_padding_ms=500.
+
+    `LIVE_VAD_START_SENSITIVITY`(HIGH|LOW)·`LIVE_VAD_PREFIX_MS`(0..2000)로 바꾼다. 잘못된 값은 경고만 남기고 기본값을 쓴다.
+    되돌리기 한 줄(옛 값): LIVE_VAD_START_SENSITIVITY=HIGH LIVE_VAD_PREFIX_MS=300"""
+    env = os.environ if env is None else env
+    sensitivity = DEFAULT_VAD_START_SENSITIVITY
+    raw = (env.get(VAD_START_SENSITIVITY_ENV) or "").strip().upper()
+    if raw in ("HIGH", "LOW"):
+        sensitivity = raw
+    elif raw:
+        logger.warning("%s=%r ignored (HIGH|LOW)", VAD_START_SENSITIVITY_ENV, raw)
+    prefix = DEFAULT_VAD_PREFIX_MS
+    raw = (env.get(VAD_PREFIX_MS_ENV) or "").strip()
+    if raw:
+        try:
+            value = int(raw)
+        except ValueError:
+            value = None
+        if value is None or not 0 <= value <= VAD_PREFIX_MS_MAX:
+            logger.warning("%s=%r ignored (int 0..%s)", VAD_PREFIX_MS_ENV, raw, VAD_PREFIX_MS_MAX)
+        else:
+            prefix = value
+    return {
+        "start_sensitivity": getattr(StartSensitivity, f"START_SENSITIVITY_{sensitivity}"),
+        "prefix_padding_ms": prefix,
+    }
+
+
+def noise_filter_enabled(env=None) -> bool:
+    """잡음 제거 필터는 기본 켬. `NOISE_FILTER=off|0|false|no`면 끈다."""
+    env = os.environ if env is None else env
+    return (env.get(NOISE_FILTER_ENV) or "").strip().lower() not in ("off", "0", "false", "no")
+
+
+def build_audio_in_filter(env=None):
+    """TransportParams(audio_in_filter=...)에 넣을 RNNoiseFilter. 꺼져 있거나 pyrnnoise가 없으면 None(경고만, 통화는 계속)."""
+    if not noise_filter_enabled(env):
+        logger.info("Noise filter off (%s)", NOISE_FILTER_ENV)
+        return None
+    try:
+        import pyrnnoise  # noqa: F401  pipecat은 없어도 import가 통과하므로 먼저 확인한다
+        from pipecat.audio.filters.rnnoise_filter import RNNoiseFilter
+
+        return RNNoiseFilter()
+    except Exception as exc:  # ImportError뿐 아니라 네이티브 라이브러리 로딩 실패도 통화를 막지 않는다
+        logger.warning("RNNoise unavailable, running without noise filter: %s", exc)
+        return None
 
 
 def vad_summary(overrides: dict) -> Optional[str]:
@@ -470,12 +527,11 @@ def turn_settings(mode: Optional[str] = None):
                 stop=[TurnAnalyzerUserTurnStopStrategy(turn_analyzer=LocalSmartTurnAnalyzerV3())]
             ),
         )
-    # 말 사이 멈춤이 잦은 학습자: 작은 목소리도 말 시작으로 잡고, 1.2초 조용해야 끝으로 본다(10-16 조정값).
+    # 말 끝: 1.2초 조용해야 끝으로 본다(10-16 조정값). 말 시작은 잡음에 덜 반응하게 LOW·앞 여유 500ms(10-21).
     params = GeminiVADParams(
-        start_sensitivity=StartSensitivity.START_SENSITIVITY_HIGH,
         end_sensitivity=EndSensitivity.END_SENSITIVITY_LOW,
-        prefix_padding_ms=300,
         silence_duration_ms=1200,
+        **start_vad_settings(),
     )
     overrides = chat_vad_overrides(mode) if mode else {}
     if overrides:
@@ -523,12 +579,22 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
     if vad_meta:
         logger.info("Chat VAD knobs applied (%s): %s", config.mode, vad_meta)
     logger.info("Live model for %s: %s", config.mode, model)
+    if not getattr(vad, "disabled", False):
+        logger.info(
+            "Gemini VAD applied (%s): start=%s prefix_ms=%s end=%s silence_ms=%s",
+            config.mode,
+            vad.start_sensitivity.name.removeprefix("START_SENSITIVITY_"),
+            vad.prefix_padding_ms,
+            vad.end_sensitivity.name.removeprefix("END_SENSITIVITY_"),
+            vad.silence_duration_ms,
+        )
 
     transport = SmallWebRTCTransport(
         webrtc_connection=webrtc_connection,
         params=TransportParams(
             audio_in_enabled=True,
             audio_in_sample_rate=MIC_SAMPLE_RATE,
+            audio_in_filter=build_audio_in_filter(),
             audio_out_enabled=True,
             audio_out_10ms_chunks=2,
         ),
