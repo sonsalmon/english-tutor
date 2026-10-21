@@ -76,6 +76,11 @@ export function shiftLines(lines: ClipLine[], offsetMs: number): ClipLine[] {
   return lines.map((l) => ({ ...l, start: Math.max(0, l.start + s), end: Math.max(0, l.end + s) }));
 }
 
+/** 영어 자막 흐림/숨김에서 탭해 보인 줄 id. 다른 줄로 가면 잊어서, 그 줄로 돌아오면 다시 가려진다. */
+export function keepRevealed(revealedId: number | null, currentId: number | null): number | null {
+  return revealedId !== null && revealedId === currentId ? revealedId : null;
+}
+
 /** 지금 줄 안에서 영상이 어디쯤인지(0~1). 줄 끝은 재생기가 멈추는 시각과 같은 값을 쓴다. */
 export function lineFill(line: ClipLine, time: number): number {
   return Math.min(1, Math.max(0, (time - line.start) / (lineEnd(line) - line.start)));
