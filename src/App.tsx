@@ -9,6 +9,7 @@ import { go, useRoute, useRouteParam } from './lib/router';
 import { friendWordbook } from './lib/shareWordbook';
 import { setupPartner, type CallSetup, type FinishedCall } from './lib/setup';
 import { Chat } from './screens/Chat';
+import { ClipStudy } from './screens/ClipStudy';
 import { Feed } from './screens/Feed';
 import { Home } from './screens/Home';
 import { Log } from './screens/Log';
@@ -91,6 +92,8 @@ export function App() {
         return <Words />;
       case 'feed':
         return <Feed />;
+      case 'clip':
+        return <ClipStudy param={param} />;
       case 'settings':
         return <Settings />;
       case 'missions':

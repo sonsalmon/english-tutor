@@ -39,6 +39,15 @@ body {
   outline-offset: 2px;
 }
 
+/* 어두운 공부 화면: 스크롤바도 어둡게, 기본 포커스 링(ink)은 바탕에 묻히므로 marker 색으로 바꾼다. */
+.study {
+  color-scheme: dark;
+}
+
+.study :focus-visible {
+  outline-color: var(--color-marker);
+}
+
 /* 줄이 바뀔 때 현재 줄 카드를 120ms 동안 서서히 보인다. */
 @keyframes line-in {
   from {

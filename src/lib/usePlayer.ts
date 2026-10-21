@@ -1,12 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ClipSegments } from './api';
-import { initialState, POLL_MS, START_LEAD_S, step, type PlayerAction, type PlayerEvent, type PlayerState } from './playerMachine';
+import {
+  DEFAULT_SETTINGS,
+  initialState,
+  POLL_MS,
+  START_LEAD_S,
+  step,
+  type PlayerAction,
+  type PlayerEvent,
+  type PlayerSettings,
+  type PlayerState,
+  type RepeatMode,
+} from './playerMachine';
 
 type YTPlayer = {
   playVideo(): void;
   pauseVideo(): void;
   seekTo(seconds: number, allowSeekAhead: boolean): void;
   getCurrentTime(): number;
+  setPlaybackRate(rate: number): void;
+  getAvailablePlaybackRates(): number[];
   getIframe(): HTMLIFrameElement;
   destroy(): void;
 };
@@ -68,6 +81,7 @@ function loadApi(): Promise<YTApi> {
 function run(player: YTPlayer, action: PlayerAction): void {
   if (action.type === 'seek') player.seekTo(action.time, true);
   else if (action.type === 'play') player.playVideo();
+  else if (action.type === 'setRate') player.setPlaybackRate(action.rate);
   else player.pauseVideo();
 }
 
@@ -82,6 +96,7 @@ export function usePlayer({
   nativeControls,
   enabled,
   onBlocked,
+  settings = DEFAULT_SETTINGS,
 }: {
   videoId: string;
   title: string;
@@ -90,11 +105,13 @@ export function usePlayer({
   nativeControls: boolean;
   enabled: boolean;
   onBlocked: (videoId: string) => void;
+  settings?: PlayerSettings;
 }) {
   const mountRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<PlayerStatus>('loading');
   const [slow, setSlow] = useState(false);
-  const [state, setState] = useState<PlayerState>(() => initialState(startTime));
+  const [rates, setRates] = useState<number[]>([]);
+  const [state, setState] = useState<PlayerState>(() => initialState(startTime, settings));
   const stateRef = useRef(state);
   const playerRef = useRef<YTPlayer | null>(null);
   const blockedRef = useRef(onBlocked);
@@ -147,6 +164,7 @@ export function usePlayer({
               setSlow(false);
               setStatus('ready');
               player.getIframe().title = titleRef.current;
+              setRates(player.getAvailablePlaybackRates());
               dispatch({ type: 'ready', now: performance.now() });
               poll = window.setInterval(() => {
                 try {
@@ -198,11 +216,22 @@ export function usePlayer({
       prev: () => dispatch({ type: 'prev', now: performance.now() }),
       next: () => dispatch({ type: 'next', now: performance.now() }),
       replay: () => dispatch({ type: 'replay', now: performance.now() }),
-      toggle: () => dispatch({ type: 'toggle' }),
+      toggle: () => dispatch({ type: 'toggle', now: performance.now() }),
+      jump: (index: number) => dispatch({ type: 'jump', index, now: performance.now() }),
       hold: (open: boolean) => dispatch({ type: open ? 'hold' : 'release' }),
+      setRate: (rate: number) => dispatch({ type: 'rate', rate }),
+      setRepeat: (repeat: RepeatMode) => dispatch({ type: 'repeat', repeat }),
+      setAutoPause: (on: boolean) => dispatch({ type: 'autoPause', on }),
+      getTime: (): number | null => {
+        try {
+          return playerRef.current?.getCurrentTime() ?? null;
+        } catch {
+          return null;
+        }
+      },
     }),
     [dispatch],
   );
 
-  return { mountRef, status, slow, state, act };
+  return { mountRef, status, slow, state, rates, act };
 }

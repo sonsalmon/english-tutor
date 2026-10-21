@@ -18,7 +18,7 @@ function loadBlocked(): string[] {
   }
 }
 
-function rememberBlocked(id: string): void {
+export function rememberBlocked(id: string): void {
   void reportBlockedVideo(id);
   try {
     const next = [...loadBlocked().filter((v) => v !== id), id].slice(-MAX_BLOCKED);

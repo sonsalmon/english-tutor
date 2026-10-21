@@ -17,7 +17,8 @@ export type Route =
   | 'summary'
   | 'history'
   | 'replay'
-  | 'chat';
+  | 'chat'
+  | 'clip';
 const ROUTES: Route[] = [
   'home',
   'person',
@@ -35,6 +36,7 @@ const ROUTES: Route[] = [
   'history',
   'replay',
   'chat',
+  'clip',
 ];
 
 function segments(hash: string): string[] {
