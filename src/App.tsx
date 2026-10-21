@@ -1,10 +1,12 @@
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { AppShell } from './components/AppShell';
-import { getLearnerProfile, getTimeLimits, type LearnerProfile, type TimeLimits } from './lib/api';
+import { DEFAULT_TIME_LIMITS, getLearnerProfile, getTimeLimits, type LearnerProfile, type TimeLimits } from './lib/api';
+import { timeLimitFor } from './lib/callTime';
 import type { Retry } from './lib/instructions';
 import { takePendingLatency } from './lib/latency';
 import { PARK_ID } from './lib/partners';
 import { go, useRoute, useRouteParam } from './lib/router';
+import { loadShareWordbook } from './lib/shareWordbook';
 import { setupPartner, type CallSetup, type FinishedCall } from './lib/setup';
 import { Chat } from './screens/Chat';
 import { Feed } from './screens/Feed';
@@ -26,7 +28,7 @@ export function App() {
   const route = useRoute();
   const param = useRouteParam();
   const [profile, setProfile] = useState<LearnerProfile | null>(null);
-  const [limits, setLimits] = useState<TimeLimits>({ call: 600, teachback: 900, smalltalk: 300 });
+  const [limits, setLimits] = useState<TimeLimits>(DEFAULT_TIME_LIMITS);
   const [setup, setSetup] = useState<CallSetup | null>(null);
   const [callKey, setCallKey] = useState(0);
   const [finished, setFinished] = useState<FinishedCall | null>(null);
@@ -111,6 +113,7 @@ export function App() {
             partnerId={param}
             brief={profile?.brief ?? ''}
             interests={profile?.interests}
+            wordbook={loadShareWordbook() ? profile?.wordbook ?? null : null}
             profileReady={profile !== null}
             onCall={callPerson}
           />
@@ -124,7 +127,8 @@ export function App() {
               brief={profile?.brief ?? ''}
               practiceWords={profile?.practice_words ?? []}
               interests={profile?.interests}
-              timeLimit={setup.kind === 'teachback' ? limits.teachback : setup.kind === 'smalltalk' ? limits.smalltalk : limits.call}
+              wordbook={loadShareWordbook() ? profile?.wordbook ?? null : null}
+              timeLimit={timeLimitFor(setup.kind, limits)}
               onFinished={onFinished}
             />
           </Suspense>

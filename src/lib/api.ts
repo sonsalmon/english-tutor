@@ -17,7 +17,19 @@ export type LearnerProfile = {
   load_failed?: boolean;
   wordbook?: Wordbook;
 };
-export type TimeLimits = { call: number; teachback: number; smalltalk: number };
+// smalltalk(친구 통화)는 제한이 없어 null이다.
+export type TimeLimits = { call: number; teachback: number; smalltalk: number | null };
+export const DEFAULT_TIME_LIMITS: TimeLimits = { call: 600, teachback: 900, smalltalk: null };
+
+export function parseTimeLimits(data: any): TimeLimits {
+  const limits = data?.time_limits;
+  const smalltalk = Number(limits?.smalltalk);
+  return {
+    call: Number(limits?.call) || DEFAULT_TIME_LIMITS.call,
+    teachback: Number(limits?.teachback) || DEFAULT_TIME_LIMITS.teachback,
+    smalltalk: smalltalk > 0 ? smalltalk : null,
+  };
+}
 export type Lesson = {
   date: string;
   dates: string[];
@@ -265,13 +277,9 @@ export async function getTimeLimits(): Promise<TimeLimits> {
     const serverDate = Date.parse(res.headers.get('date') || '');
     if (!Number.isNaN(serverDate)) clockOffsetMs = serverDate - (sentAt + Date.now()) / 2;
     const data = await res.json();
-    return {
-      call: Number(data?.time_limits?.call) || 600,
-      teachback: Number(data?.time_limits?.teachback) || 900,
-      smalltalk: Number(data?.time_limits?.smalltalk) || 300,
-    };
+    return parseTimeLimits(data);
   } catch {
-    return { call: 600, teachback: 900, smalltalk: 300 };
+    return DEFAULT_TIME_LIMITS;
   }
 }
 

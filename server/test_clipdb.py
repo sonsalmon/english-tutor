@@ -201,6 +201,28 @@ class SearchDb(unittest.TestCase):
         self.assertEqual(clipdb.search("completely unrelated", path=self.path), [])
         self.assertEqual(clipdb.search("brand new", path=self.path)[0]["video_id"], "v3")
 
+    def test_random_segments_are_sentence_length_one_per_video_and_read_only(self):
+        import hashlib
+        import random
+
+        before = hashlib.sha256(self.path.read_bytes()).hexdigest()
+        hits = clipdb.random_segments(10, rng=random.Random(1), path=self.path)
+
+        self.assertEqual(sorted(h["video_id"] for h in hits), ["v1", "v2"])
+        for h in hits:
+            self.assertTrue(6 <= len(h["text"].split()) <= 20)
+        self.assertEqual(hashlib.sha256(self.path.read_bytes()).hexdigest(), before)
+
+    def test_random_segments_skip_excluded_videos_and_failed_videos(self):
+        import random
+
+        self.save("v4", "@office", "Broken", [seg(0.0, 3.0, "this one has six words in it")], status="error")
+        hits = clipdb.random_segments(10, exclude_videos={"v1"}, rng=random.Random(2), path=self.path)
+
+        self.assertEqual([h["video_id"] for h in hits], ["v2"])
+        self.assertEqual(clipdb.random_segments(0, path=self.path), [])
+        self.assertEqual(clipdb.random_segments(3, path=self.path.parent / "missing.db"), [])
+
     def test_available_and_env_path(self):
         self.assertTrue(clipdb.available(self.path))
         with mock.patch.dict(os.environ, {"CLIPDB_PATH": str(self.path)}):

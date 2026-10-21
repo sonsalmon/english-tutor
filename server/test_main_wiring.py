@@ -305,7 +305,9 @@ EMPTY_PROFILE = {
     "weak_points": [],
     "next_goal": "",
     "practice_words": [],
+    "wordbook": {"words": [], "phrases": []},
 }
+EMPTY_BOOK = {"words": [], "phrases": []}
 
 PRON_RESULT = {
     "date": "2026-10-20",
@@ -329,7 +331,7 @@ PRON_RESULT = {
 
 class LearnerProfileEndpointTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        patcher = mock.patch.object(main, "practice_words", return_value=[])
+        patcher = mock.patch.object(main, "bridge_lists", return_value=([], EMPTY_BOOK))
         self.practice = patcher.start()
         self.addCleanup(patcher.stop)
         pron_patcher = mock.patch.object(pron, "latest_result", return_value=None)
@@ -341,15 +343,24 @@ class LearnerProfileEndpointTest(unittest.IsolatedAsyncioTestCase):
 
         release = threading.Event()
         self.addCleanup(release.set)
-        self.practice.side_effect = lambda: release.wait(5) and []
+        self.practice.side_effect = lambda: release.wait(5) and ([], EMPTY_BOOK)
         with mock.patch.object(main, "PRACTICE_DEADLINE_SEC", 0.1), \
                 mock.patch.object(main, "load_profile", return_value=None):
             body = await main.learner_profile_endpoint()
 
         self.assertEqual(body["practice_words"], [])
+        self.assertEqual(body["wordbook"], EMPTY_BOOK)
+
+    async def test_wordbook_for_friends_is_passed_through(self):
+        book = {"words": [{"lemma": "mitigate", "gloss": "완화하다"}], "phrases": [{"text": "short shift", "gloss": "짧은 근무"}]}
+        self.practice.return_value = ([], book)
+        with mock.patch.object(main, "load_profile", return_value=None):
+            body = await main.learner_profile_endpoint()
+
+        self.assertEqual(body["wordbook"], book)
 
     async def test_readgloss_practice_words_are_passed_through(self):
-        self.practice.return_value = [{"lemma": "mitigate", "gloss": "완화하다", "source": "lookup"}]
+        self.practice.return_value = ([{"lemma": "mitigate", "gloss": "완화하다", "source": "lookup"}], EMPTY_BOOK)
         with mock.patch.object(main, "load_profile", return_value=None):
             body = await main.learner_profile_endpoint()
 

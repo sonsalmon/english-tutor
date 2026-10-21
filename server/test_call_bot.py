@@ -32,20 +32,32 @@ class ParseCallConfigTest(unittest.TestCase):
             self.assertEqual(config.time_limit, 900)
             self.assertEqual(mission.time_limit, 600)
 
-    def test_smalltalk_has_opener_and_its_own_time_limit(self):
+    def test_smalltalk_has_opener_and_no_time_limit(self):
+        # 친구 통화는 서버 시간 제한이 없다(옵션 환경 변수를 줘도 무시).
         with mock.patch.dict(os.environ, {"SESSION_TIME_LIMIT": "600", "TEACHBACK_TIME_LIMIT": "900", "SMALLTALK_TIME_LIMIT": "420"}):
             config = parse_call_config({"system_instruction": INSTRUCTION, "mode": "smalltalk"})
             mission = parse_call_config({"system_instruction": INSTRUCTION, "mode": "mission"})
 
             self.assertTrue(config.opener)
-            self.assertEqual(config.time_limit, 420)
+            self.assertIsNone(config.time_limit)
             self.assertEqual(mission.time_limit, 600)
 
-    def test_smalltalk_time_limit_defaults_to_300(self):
-        env = {k: v for k, v in os.environ.items() if k != "SMALLTALK_TIME_LIMIT"}
+    def test_time_limit_by_mode(self):
+        env = {"SESSION_TIME_LIMIT": "600", "TEACHBACK_TIME_LIMIT": "900"}
+        limits = {mode: call_bot.time_limit_for_mode(mode, env) for mode in call_bot.MODES}
+
+        self.assertEqual(limits, {"mission": 600, "freetalk": 600, "teachback": 900, "smalltalk": None})
+        self.assertEqual(call_bot.time_limit_for_mode(None, env), 600)
+
+    def test_pause_limit_defaults_to_600(self):
+        env = {k: v for k, v in os.environ.items() if k != "PAUSE_LIMIT_SEC"}
         with mock.patch.dict(os.environ, env, clear=True):
-            self.assertEqual(call_bot.smalltalk_time_limit_from_env(), 300)
             self.assertEqual(call_bot.pause_limit_from_env(), 600)
+
+    def test_llm_gave_up_matches_the_pipecat_message(self):
+        self.assertTrue(call_bot.llm_gave_up("Max consecutive failures (3) reached, treating as fatal error"))
+        self.assertFalse(call_bot.llm_gave_up("Connection error (failure 1/3): closed"))
+        self.assertFalse(call_bot.llm_gave_up(None))
 
     def test_smalltalk_mission_name_comes_from_instruction(self):
         config = parse_call_config({"system_instruction": 'You are Ms. Park. trying to: "Small Talk"', "mode": "smalltalk"})
@@ -143,6 +155,17 @@ class CallClockTest(unittest.TestCase):
         self.time.t += 1
 
         self.assertEqual(self.clock.check(180, 600), ("pause_limit", 0.0))
+
+    def test_check_without_time_limit_never_ends_but_still_enforces_pause_limit(self):
+        self.clock.start()
+        self.time.t += 100000
+        self.assertEqual(self.clock.check(None, 600), (None, None))
+        self.clock.pause()
+        self.time.t += 599
+        self.assertEqual(self.clock.check(None, 600), (None, 1))
+        self.time.t += 1
+
+        self.assertEqual(self.clock.check(None, 600), ("pause_limit", 0.0))
 
     def test_resume_gives_back_the_remaining_session_time(self):
         self.clock.start()

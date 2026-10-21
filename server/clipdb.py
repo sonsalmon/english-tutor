@@ -8,6 +8,7 @@ VTT 정리·DB 쓰기 보조 함수도 여기 두어 빌더와 테스트가 같�
 import html
 import logging
 import os
+import random
 import re
 import sqlite3
 from pathlib import Path
@@ -230,6 +231,54 @@ def available(path: Optional[Path] = None) -> bool:
             conn.close()
     except sqlite3.Error:
         return False
+
+
+def random_segments(
+    count: int,
+    min_words: int = 6,
+    max_words: int = 20,
+    exclude_videos: Optional[set] = None,
+    path: Optional[Path] = None,
+    rng: Optional[random.Random] = None,
+) -> List[Dict[str, Any]]:
+    """길이가 min_words~max_words인 문장 세그먼트를 무작위로 count개 뽑는다. 영상당 최대 1개, DB는 읽기 전용.
+
+    전체 정렬(ORDER BY random())을 피해 rowid를 무작위로 고른 뒤 그 뒤의 첫 세그먼트를 읽는다(73만 행에서도 빠르다).
+    """
+    p = Path(path) if path else db_path()
+    if count <= 0 or not p.is_file():
+        return []
+    rng = rng or random.Random()
+    taken = set(exclude_videos or ())
+    sql = (
+        'SELECT s.video_id, v.title AS title, c.title AS channel, c.genre AS genre, '
+        's.start AS start, s."end" AS "end", s.text AS text '
+        "FROM segments s JOIN videos v ON v.id = s.video_id "
+        "LEFT JOIN channels c ON c.handle = v.channel_handle "
+        "WHERE s.rowid >= ? AND v.status = 'ok' LIMIT 1"
+    )
+    hits: List[Dict[str, Any]] = []
+    try:
+        conn = _open_ro(p)
+        try:
+            top = conn.execute("SELECT MAX(rowid) FROM segments").fetchone()[0] or 0
+            for _ in range(count * 40):
+                if len(hits) >= count or top <= 0:
+                    break
+                row = conn.execute(sql, (rng.randint(1, top),)).fetchone()
+                if row is None or row["video_id"] in taken:
+                    continue
+                words = len(re.findall(r"[A-Za-z][A-Za-z'’-]*", row["text"]))
+                if not min_words <= words <= max_words:
+                    continue
+                taken.add(row["video_id"])
+                hits.append({k: row[k] for k in ("video_id", "title", "channel", "genre", "start", "end", "text")})
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        logger.warning("clipdb random failed: %s", e)
+        return []
+    return hits
 
 
 def _fts_phrase(phrase: str) -> str:
