@@ -3,14 +3,17 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { CaptionSheet, CHIP, CHIP_OFF, CHIP_ON, ENG_LABEL, SIZE_LABEL, SyncControl } from '../components/CaptionSheet';
 import { mmss } from '../components/ClipPlayer';
 import { rememberBlocked } from '../components/ClipList';
+import { KoLine } from '../components/KoLine';
 import { WordText } from '../components/WordText';
 import { getClipSegments, type ClipLine, type ClipSegments } from '../lib/api';
 import { lineFill, loadSync, saveSync, shiftLines, stepSync } from '../lib/captionTune';
 import { canAutoScroll, mergeSegments } from '../lib/clipLines';
 import { closeClip, parseClipParam, type ClipTarget } from '../lib/clipRoute';
 import { loadPrefs, nextEngMode, nextRepeat, nextTextSize, savePrefs, stepRate, visibleRates, type EngMode, type TextSize } from '../lib/playerPrefs';
+import { KO_MODE_LABEL, loadKoSettings, nextKoMode, saveKoSettings } from '../lib/koLines';
 import { REPEAT_TIMES, type RepeatMode } from '../lib/playerMachine';
 import { keyCommand, SHORTCUTS } from '../lib/studyKeys';
+import { useKoLines } from '../lib/useKoLines';
 import { usePlayer } from '../lib/usePlayer';
 
 const MORE_AT_OFFSET_S = 85;
@@ -73,6 +76,7 @@ function Study({ target }: { target: ClipTarget }) {
   const ccButton = useRef<HTMLButtonElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
   const currentId = useRef<number | null>(null);
+  const [ko, setKo] = useState(loadKoSettings);
   const [revealedId, setRevealedId] = useState<number | null>(null);
   const [help, setHelp] = useState(false);
   const [moreBusy, setMoreBusy] = useState<'before' | 'after' | null>(null);
@@ -111,6 +115,11 @@ function Study({ target }: { target: ClipTarget }) {
   const lastIndex = state.lines.length - 1;
   const atEnd = state.held && state.index === lastIndex && !data?.hasMoreAfter;
   const masked = eng !== 'show' && line !== null && revealedId !== line.id;
+  const koLine = useKoLines(videoId, state.lines, state.index, ko);
+
+  useEffect(() => {
+    saveKoSettings(ko);
+  }, [ko]);
 
   useEffect(() => {
     savePrefs({ rate: state.rate, repeat: state.repeat, autoPause: state.autoPause, engMode: eng, textSize: size });
@@ -162,8 +171,8 @@ function Study({ target }: { target: ClipTarget }) {
     );
   }
 
-  const latest = useRef({ state, visible, ready, eng, help, withLines, syncMs });
-  latest.current = { state, visible, ready, eng, help, withLines, syncMs };
+  const latest = useRef({ state, visible, ready, eng, ko, help, withLines, syncMs });
+  latest.current = { state, visible, ready, eng, ko, help, withLines, syncMs };
   useEffect(() => {
     const dialogOpen = () => document.querySelector('[role="dialog"]') !== null;
     const onKeyDown = (e: KeyboardEvent) => {
@@ -175,7 +184,10 @@ function Study({ target }: { target: ClipTarget }) {
       const cur = latest.current;
       if (command === 'help') setHelp((v) => !v);
       else if (command === 'close') (cur.help ? setHelp(false) : closeClip());
-      else if (!cur.ready || !cur.withLines) return;
+      else if (command === 'ko') {
+        if (!cur.withLines || !cur.ko.enabled) return;
+        setKo({ ...cur.ko, mode: nextKoMode(cur.ko.mode) });
+      } else if (!cur.ready || !cur.withLines) return;
       else if (command === 'toggle') act.toggle();
       else if (command === 'prev') act.prev();
       else if (command === 'next') act.next();
@@ -351,6 +363,7 @@ function Study({ target }: { target: ClipTarget }) {
                     <WordText text={line.text} onOpenChange={act.hold} />
                   </p>
                 )}
+                <KoLine line={koLine} />
               </div>
               <p role="status" className="mt-2 flex min-h-11 items-center gap-3 text-sm text-surface/80">
                 <span>{statusText}</span>
@@ -436,6 +449,16 @@ function Study({ target }: { target: ClipTarget }) {
                   </button>
                   <SyncControl syncMs={syncMs} onChange={setSyncMs} hint={<Kbd>, .</Kbd>} />
                 </div>
+                {ko.enabled && (
+                  <button
+                    type="button"
+                    onClick={() => setKo({ ...ko, mode: nextKoMode(ko.mode) })}
+                    aria-pressed={ko.mode !== 'hide'}
+                    className={`${CHIP} ${ko.mode !== 'hide' ? CHIP_ON : CHIP_OFF}`}
+                  >
+                    한국어 {KO_MODE_LABEL[ko.mode]} <Kbd>K</Kbd>
+                  </button>
+                )}
               </div>
             </>
           )}

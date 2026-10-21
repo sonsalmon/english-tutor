@@ -491,6 +491,32 @@ export async function getClipSegments(videoId: string, at: number, signal?: Abor
   };
 }
 
+export type KoTranslation = { items: { id: number; ko: string; cached: boolean }[]; capped: boolean; unavailable: boolean };
+
+// 줄의 한국어 번역. 서버가 꺼져 있으면(404) unavailable, 하루 한도를 다 쓰면(429) capped로 알린다. 그 밖의 실패는 던진다.
+export async function translateClipLines(
+  videoId: string,
+  plan: { lines: { id: number; text: string }[]; before: string[]; after: string[] },
+  signal?: AbortSignal,
+): Promise<KoTranslation> {
+  const res = await fetch('/api/clips/translate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ video_id: videoId, ...plan }),
+    signal,
+  });
+  if (res.status === 404) return { items: [], capped: false, unavailable: true };
+  if (res.status === 429) return { items: [], capped: true, unavailable: false };
+  if (!res.ok) throw new Error(await errorMessage(res, '번역을 가져오지 못했어요.'));
+  const data = await res.json();
+  const items = (Array.isArray(data?.items) ? data.items : []).filter((i: any) => Number.isFinite(i?.id) && typeof i?.ko === 'string' && i.ko !== '');
+  return {
+    items: items.map((i: any) => ({ id: i.id, ko: i.ko, cached: i.cached === true })),
+    capped: data?.capped === true,
+    unavailable: false,
+  };
+}
+
 // 문화 DB가 없거나 검색어가 없으면 서버가 200으로 status만 다르게 준다. 화면은 ok일 때만 보여 준다.
 export async function getCallCulture(stem: string, signal?: AbortSignal): Promise<CultureResult> {
   const res = await fetch(`/api/calls/${encodeURIComponent(stem)}/culture`, { signal });

@@ -34,7 +34,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCRequestHandler,
 )
 
-from server import call_bot, chat, clipdb, culture_filter, culturedb, feed, native_expr, people, phrase_gloss, pron, review, summary_jobs, tts, wordbook, youtube
+from server import call_bot, chat, clip_translate, clipdb, culture_filter, culturedb, feed, native_expr, people, phrase_gloss, pron, review, summary_jobs, tts, wordbook, youtube
 from server.call_bot import parse_call_config, run_bot, time_limit_for_mode
 from server import partner_memory
 from server.history import list_calls, live_cost_of, load_call, totals as call_totals
@@ -92,6 +92,7 @@ async def lifespan(app: FastAPI):
 # 유료 통화(/api/offer)를 열거나 수업 기록(/api/lesson)을 읽지 못하게 한다.
 app = FastAPI(lifespan=lifespan)
 app.include_router(phrase_gloss.router)
+app.include_router(clip_translate.router)
 app.include_router(people.router)
 app.include_router(review.router)
 app.include_router(wordbook.router)

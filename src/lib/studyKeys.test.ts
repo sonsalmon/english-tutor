@@ -26,6 +26,8 @@ describe('단축키 표', () => {
       ['C', 'eng'],
       [',', 'syncEarlier'],
       ['.', 'syncLater'],
+      ['k', 'ko'],
+      ['K', 'ko'],
       ['?', 'help'],
       ['Escape', 'close'],
     ];
