@@ -17,8 +17,8 @@ const MEMORY: PartnerMemory = {
 };
 
 describe('partner smalltalk and freetalk prompts', () => {
-  test('block A, block B and the story bank are present for all six friends', () => {
-    expect(FRIENDS.length).toBe(6);
+  test('block A, block B and the story bank are present for all friends', () => {
+    expect(FRIENDS.length).toBe(7);
     for (const p of FRIENDS) {
       for (const text of [smallTalkInstruction('', [], p), freeTalkInstruction('', '', null, [], p)]) {
         expect(text).toContain('CONVERSATION DYNAMICS');
