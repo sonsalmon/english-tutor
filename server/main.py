@@ -32,7 +32,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCRequestHandler,
 )
 
-from server import chat, clipdb, culturedb, pron, tts, youtube
+from server import chat, clipdb, culturedb, phrase_gloss, pron, tts, youtube
 from server.call_bot import parse_call_config, run_bot, smalltalk_time_limit_from_env
 from server import partner_memory
 from server.history import list_calls, live_cost_of, load_call, totals as call_totals
@@ -91,6 +91,7 @@ async def lifespan(app: FastAPI):
 # CORS 미들웨어를 두지 않는다: 화면은 같은 출처에서만 부른다. 다른 웹 페이지가 이 서버로
 # 유료 통화(/api/offer)를 열거나 수업 기록(/api/lesson)을 읽지 못하게 한다.
 app = FastAPI(lifespan=lifespan)
+app.include_router(phrase_gloss.router)
 
 # Serve static files
 # app.mount("/static", StaticFiles(directory="frontend"), name="static")
