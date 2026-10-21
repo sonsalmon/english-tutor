@@ -1,6 +1,7 @@
-import { ChevronLeft, ChevronRight, ExternalLink, Pause, Play, RotateCcw, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ExternalLink, GraduationCap, Pause, Play, RotateCcw, X } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { getClipSegments, type Clip, type ClipSegments } from '../lib/api';
+import { openClip } from '../lib/clipRoute';
 import { usePlayer } from '../lib/usePlayer';
 import { WordText } from './WordText';
 
@@ -191,14 +192,26 @@ export function ClipPlayer({ clip, onClose, onBlocked }: { clip: Clip; onClose: 
             </p>
           )}
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="flex min-h-11 shrink-0 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-sm font-semibold hover:bg-paper"
-        >
-          <X size={18} aria-hidden />
-          닫기
-        </button>
+        <div className="flex shrink-0 flex-col gap-2">
+          {withLines && !blocked && status !== 'failed' && (
+            <button
+              type="button"
+              onClick={() => openClip(clip.id, line?.start ?? startTime(clip))}
+              className="flex min-h-11 items-center gap-1.5 rounded-full border border-ink bg-ink px-3 text-sm font-semibold text-surface"
+            >
+              <GraduationCap size={18} aria-hidden />
+              공부하기
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex min-h-11 items-center justify-center gap-1.5 rounded-full border border-line bg-surface px-3 text-sm font-semibold hover:bg-paper"
+          >
+            <X size={18} aria-hidden />
+            닫기
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -111,7 +111,14 @@ export type Clip = {
   source?: 'db' | 'search';
 };
 export type ClipLine = { id: number; start: number; end: number; text: string };
-export type ClipSegments = { lines: ClipLine[]; atId: number | null; hasMoreBefore: boolean; hasMoreAfter: boolean };
+export type ClipSegments = {
+  lines: ClipLine[];
+  atId: number | null;
+  hasMoreBefore: boolean;
+  hasMoreAfter: boolean;
+  title?: string;
+  channel?: string;
+};
 export type ClipStatus = 'ok' | 'no_key' | 'no_query' | 'error';
 export type ClipResult = { query: string; clips: Clip[]; status: ClipStatus };
 
@@ -477,6 +484,8 @@ export async function getClipSegments(videoId: string, at: number, signal?: Abor
     atId: Number.isFinite(data?.at_id) ? data.at_id : null,
     hasMoreBefore: data?.has_more_before === true,
     hasMoreAfter: data?.has_more_after === true,
+    title: typeof data?.title === 'string' ? data.title : undefined,
+    channel: typeof data?.channel === 'string' ? data.channel : undefined,
   };
 }
 
