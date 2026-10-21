@@ -349,6 +349,12 @@ class PartnerHistoryTest(HistoryDirs):
         self.assertEqual(by_stem, {"2026-10-20-090000": "priya", "2026-10-20-100000": None, "2026-10-20-110000": None})
         self.assertEqual(history.load_call("2026-10-20-090000")["call"]["partner"], "priya")
 
+    def test_brian_header_is_read(self):
+        self.write("2026-10-20-090000", "- partner: brian\n")
+
+        self.assertEqual(history.load_call("2026-10-20-090000")["call"]["partner"], "brian")
+        self.assertEqual(history.partner_of(self.sessions / "2026-10-20-090000.md"), "brian")
+
     def test_partner_of_and_turns(self):
         self.write("2026-10-20-090000", "- partner: omar\n")
         path = self.sessions / "2026-10-20-090000.md"
