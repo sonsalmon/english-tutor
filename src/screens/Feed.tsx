@@ -1,152 +1,14 @@
-import { ChevronDown, ExternalLink, Play, Volume2 } from 'lucide-react';
+import { ChevronDown, GraduationCap } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { FeedPlayer } from '../components/FeedPlayer';
 import { StarButton } from '../components/StarButton';
 import { WordText } from '../components/WordText';
+import { openClip } from '../lib/clipRoute';
 import { getFeed, loadSeen, rememberSeen, reportBlockedVideo, saveSeen, type FeedClip, type FeedFilter, type NativeInfo } from '../lib/apiFeed';
 
 type Load = { status: 'loading' | 'ready' | 'off' | 'error'; message?: string };
 
-const YT_ORIGINS = new Set(['https://www.youtube-nocookie.com', 'https://www.youtube.com']);
-
 const reducedMotion = (): boolean => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-function watchUrl(clip: FeedClip): string {
-  return `https://www.youtube.com/watch?v=${encodeURIComponent(clip.video_id)}&t=${Math.floor(clip.start)}s`;
-}
-
-function embedUrl(clip: FeedClip, sound: boolean): string {
-  const params = new URLSearchParams({
-    autoplay: '1',
-    mute: sound ? '0' : '1',
-    controls: '0',
-    rel: '0',
-    playsinline: '1',
-    modestbranding: '1',
-    enablejsapi: '1',
-    start: String(Math.floor(clip.start)),
-    end: String(Math.ceil(clip.end) + 1),
-    origin: location.origin,
-  });
-  return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(clip.video_id)}?${params}`;
-}
-
-// 활성 카드의 영상. 움직임 줄이기를 켠 사람에게는 누를 때까지 재생하지 않고, 켜 있지 않으면 음소거로 자동 재생한다.
-function Video({ clip, active, onBlocked }: { clip: FeedClip; active: boolean; onBlocked: () => void }) {
-  const frame = useRef<HTMLIFrameElement>(null);
-  const [started, setStarted] = useState(false);
-  const [sound, setSound] = useState(false);
-  const [blocked, setBlocked] = useState(false);
-  const [replay, setReplay] = useState(0);
-  const blockedHandler = useRef(onBlocked);
-  blockedHandler.current = onBlocked;
-  const reported = useRef(false);
-  const auto = active && !reducedMotion();
-  const playing = active && (auto || started);
-
-  useEffect(() => {
-    if (!active) {
-      setStarted(false);
-      setSound(false);
-    }
-  }, [active]);
-
-  useEffect(() => {
-    if (!playing) return;
-    const listen = () => frame.current?.contentWindow?.postMessage(JSON.stringify({ event: 'listening', id: 1, channel: 'widget' }), 'https://www.youtube-nocookie.com');
-    const onMessage = (e: MessageEvent) => {
-      if (!YT_ORIGINS.has(e.origin) || e.source !== frame.current?.contentWindow || typeof e.data !== 'string') return;
-      try {
-        if ((JSON.parse(e.data) as { event?: unknown }).event === 'onError') {
-          setBlocked(true);
-          if (!reported.current) {
-            reported.current = true;
-            blockedHandler.current();
-          }
-        }
-      } catch {
-        // 영상 플레이어가 아닌 메시지는 무시한다.
-      }
-    };
-    window.addEventListener('message', onMessage);
-    const el = frame.current;
-    el?.addEventListener('load', listen);
-    return () => {
-      window.removeEventListener('message', onMessage);
-      el?.removeEventListener('load', listen);
-    };
-  }, [playing, replay]);
-
-  const unmute = () => {
-    setSound(true);
-    const post = (func: string, args: unknown[] = []) =>
-      frame.current?.contentWindow?.postMessage(JSON.stringify({ event: 'command', func, args }), 'https://www.youtube-nocookie.com');
-    post('unMute');
-    post('setVolume', [100]);
-  };
-
-  return (
-    <div>
-    <div className="relative aspect-video w-full overflow-hidden rounded-xl bg-black">
-      {blocked ? (
-        <div role="alert" className="flex size-full flex-col items-center justify-center gap-3 p-4 text-center text-white">
-          <p className="font-semibold">이 영상은 앱 안에서 틀 수 없어요.</p>
-          <a href={watchUrl(clip)} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center gap-1.5 rounded-full bg-white px-4 text-sm font-semibold text-ink">
-            <ExternalLink size={18} aria-hidden />
-            YouTube에서 보기
-          </a>
-        </div>
-      ) : playing ? (
-        <>
-          <iframe
-            key={`${clip.id}:${replay}`}
-            ref={frame}
-            src={embedUrl(clip, sound)}
-            title={clip.title}
-            allow="autoplay; encrypted-media; picture-in-picture"
-            className="size-full border-0"
-          />
-        </>
-      ) : (
-        <button
-          type="button"
-          onClick={() => {
-            setStarted(true);
-            setSound(true);
-          }}
-          disabled={!active}
-          aria-label={`영상 재생, ${clip.title}`}
-          className="group relative block size-full"
-        >
-          <img src={`https://i.ytimg.com/vi/${encodeURIComponent(clip.video_id)}/hqdefault.jpg`} alt="" loading="lazy" className="size-full object-cover opacity-80" />
-          <span className="absolute inset-0 grid place-items-center">
-            <span className="grid size-14 place-items-center rounded-full bg-black/60 text-white">
-              <Play size={28} aria-hidden />
-            </span>
-          </span>
-        </button>
-      )}
-    </div>
-    {playing && !blocked && (
-      <div className="mt-2 flex items-center justify-between gap-2">
-        <button
-          type="button"
-          onClick={() => setReplay((n) => n + 1)}
-          className="flex min-h-11 items-center gap-1.5 rounded-full bg-white/15 px-4 text-sm font-semibold text-white"
-        >
-          <Play size={18} aria-hidden />
-          다시 보기
-        </button>
-        {!sound && (
-          <button type="button" onClick={unmute} className="flex min-h-11 items-center gap-1.5 rounded-full bg-white px-4 text-sm font-semibold text-ink">
-            <Volume2 size={18} aria-hidden />
-            소리 켜기
-          </button>
-        )}
-      </div>
-    )}
-    </div>
-  );
-}
 
 const KIND_LABEL: Record<string, string> = { idiom: '관용구', phrasal_verb: '구동사', chunk: '고정 표현', discourse_marker: '담화 표지' };
 const REGISTER_LABEL: Record<string, string> = { casual: '편한 말', neutral: '보통', work: '일하는 자리' };
@@ -198,6 +60,8 @@ function NativePanel({ info }: { info: NativeInfo }) {
 
 function Card({ clip, index, count, active, last, loadingMore, onNext, onBlocked }: { clip: FeedClip; index: number; count: number; active: boolean; last: boolean; loadingMore: boolean; onNext: () => void; onBlocked: () => void }) {
   const units = clip.term && clip.term.trim().split(/\s+/).length >= 2 ? [{ text: clip.term }] : undefined;
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const source = { video_id: clip.video_id, t: Math.max(0, Math.floor(clip.start)), title: clip.title };
   return (
     <article
       aria-posinset={index + 1}
@@ -206,7 +70,7 @@ function Card({ clip, index, count, active, last, loadingMore, onNext, onBlocked
       className="relative flex h-full shrink-0 snap-start snap-always flex-col overflow-y-auto bg-ink px-5 pt-[4.75rem] pb-5 text-white"
     >
       <div className="flex min-h-[18rem] flex-1 flex-col justify-center gap-2">
-        <Video clip={clip} active={active} onBlocked={onBlocked} />
+        <FeedPlayer clip={clip} active={active} autoplay={!reducedMotion()} hold={sheetOpen} onBlocked={onBlocked} />
         <p className="truncate text-sm text-white/70">
           {clip.channel}
           {clip.channel && clip.title ? ' · ' : ''}
@@ -215,13 +79,21 @@ function Card({ clip, index, count, active, last, loadingMore, onNext, onBlocked
       </div>
       {clip.native && <NativePanel info={clip.native} />}
       <p lang="en" className="py-4 text-[22px] leading-snug font-semibold break-words lg:text-2xl">
-        <WordText text={clip.text} units={units} />
+        <WordText text={clip.text} units={units} source={source} onOpenChange={setSheetOpen} />
       </p>
-      <div className="flex items-center gap-3">
-        <span className="rounded-full bg-white/15 px-3 py-1.5 text-sm font-semibold">{SOURCE_LABEL[clip.source]}</span>
+      <div className="flex items-center gap-2">
+        <span className="rounded-full bg-white/15 px-3 py-1.5 text-sm font-semibold whitespace-nowrap">{SOURCE_LABEL[clip.source]}</span>
         <span className="flex-1" />
+        <button
+          type="button"
+          onClick={() => openClip(clip.video_id, clip.start)}
+          className="flex min-h-11 items-center gap-1.5 rounded-full bg-white/15 px-3 text-sm font-semibold whitespace-nowrap"
+        >
+          <GraduationCap size={18} aria-hidden />
+          공부하기
+        </button>
         <span className="rounded-full bg-white">
-          <StarButton kind="phrase" text={clip.term ?? clip.text} gloss={clip.native?.meaning_ko ?? ''} />
+          <StarButton kind="phrase" text={clip.term ?? clip.text} gloss={clip.native?.meaning_ko ?? ''} sentence={clip.text} source={source} />
         </span>
         <button
           type="button"
@@ -388,7 +260,7 @@ export function Feed() {
             : null;
 
   return (
-    <main className="relative mx-auto h-[calc(100dvh-4rem-env(safe-area-inset-bottom))] w-full max-w-[480px] overflow-hidden bg-ink lg:h-dvh lg:max-w-[calc(100dvh*9/16)]">
+    <main className="study relative mx-auto h-[calc(100dvh-4rem-env(safe-area-inset-bottom))] w-full max-w-[480px] overflow-hidden bg-ink lg:h-dvh lg:max-w-[calc(100dvh*9/16)]">
       <h1 className="sr-only">클립</h1>
       <div role="tablist" aria-label="클립 종류" className="absolute top-3 left-5 z-10 flex gap-2">
         {chip('mine', '내 표현')}

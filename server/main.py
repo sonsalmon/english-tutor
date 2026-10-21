@@ -14,6 +14,7 @@
 
 import asyncio
 import json
+import math
 import os
 import re
 import logging
@@ -33,7 +34,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCRequestHandler,
 )
 
-from server import call_bot, chat, clipdb, culture_filter, culturedb, feed, native_expr, people, phrase_gloss, pron, review, summary_jobs, tts, wordbook, youtube
+from server import call_bot, chat, clip_translate, clipdb, culture_filter, culturedb, feed, native_expr, people, phrase_gloss, pron, review, summary_jobs, tts, wordbook, youtube
 from server.call_bot import parse_call_config, run_bot, time_limit_for_mode
 from server import partner_memory
 from server.history import list_calls, live_cost_of, load_call, totals as call_totals
@@ -91,6 +92,7 @@ async def lifespan(app: FastAPI):
 # 유료 통화(/api/offer)를 열거나 수업 기록(/api/lesson)을 읽지 못하게 한다.
 app = FastAPI(lifespan=lifespan)
 app.include_router(phrase_gloss.router)
+app.include_router(clip_translate.router)
 app.include_router(people.router)
 app.include_router(review.router)
 app.include_router(wordbook.router)
@@ -644,6 +646,8 @@ def _db_clips(tutoring: dict):
                     "channel": hit.get("channel") or "",
                     "thumbnail": f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg",
                     "start": int(hit.get("start") or 0),
+                    "start_f": float(hit.get("start") or 0),
+                    "end": float(hit.get("end") or 0),
                     "text": hit.get("text") or "",
                     "phrase": phrase,
                     "source": "db",
@@ -694,6 +698,20 @@ async def call_clips_endpoint(stem: str):
         seen.add(c.get("id"))
         clips.append({**c, "source": "search"})
     return {"query": query, "clips": clips, "status": "ok", "source": "mixed" if db_clips else "search"}
+
+
+CLIP_VIDEO_ID_RE = re.compile(r"[A-Za-z0-9_-]{6,20}")
+
+
+@app.get("/api/clips/segments")
+async def clip_segments_endpoint(video_id: str, at: float = 0.0, before: float = 90.0, after: float = 90.0, limit: int = 200):
+    """자막 DB에서 영상의 at초 앞뒤 줄. 영상 id나 숫자가 이상하면 400, 영상이 없거나 자막이 없으면 404."""
+    if not CLIP_VIDEO_ID_RE.fullmatch(video_id) or not all(math.isfinite(v) for v in (at, before, after)):
+        raise HTTPException(status_code=400, detail="영상 id나 시각이 틀렸어요.")
+    found = await asyncio.to_thread(clipdb.segments_around, video_id, at, before, after, limit)
+    if found is None:
+        raise HTTPException(status_code=404, detail="이 영상의 자막 줄이 없어요.")
+    return found
 
 
 MAX_CULTURE_TERMS = 6
@@ -815,6 +833,27 @@ async def word_endpoint(raw: Request):
     return result
 
 
+MAX_SOURCE_SECONDS = 86400
+MAX_SOURCE_TITLE_CHARS = 200
+
+
+def _clip_source(body: dict) -> tuple:
+    """저장 요청의 선택 필드 source {video_id, t, title}를 (youtu.be 시각 링크, 영상 제목)으로 바꾼다. 없으면 ("", "")."""
+    source = body.get("source")
+    if source is None:
+        return "", ""
+    if not isinstance(source, dict):
+        raise HTTPException(status_code=400, detail="출처 형식이 틀렸어요.")
+    video_id, at, title = source.get("video_id"), source.get("t", 0), source.get("title", "")
+    if not isinstance(video_id, str) or not CLIP_VIDEO_ID_RE.fullmatch(video_id):
+        raise HTTPException(status_code=400, detail="영상 ID 형식이 틀렸어요.")
+    if isinstance(at, bool) or not isinstance(at, (int, float)) or not 0 <= at <= MAX_SOURCE_SECONDS:
+        raise HTTPException(status_code=400, detail="시각은 0 이상 86400 이하 숫자여야 해요.")
+    if not isinstance(title, str) or len(title) > MAX_SOURCE_TITLE_CHARS:
+        raise HTTPException(status_code=400, detail="영상 제목은 문자열 200자 이하여야 해요.")
+    return f"https://youtu.be/{video_id}?t={int(at)}", title.strip()
+
+
 @app.post("/api/word/save")
 async def word_save_endpoint(raw: Request):
     """찾은 단어를 readgloss 단어장에 저장한다. 다리가 꺼져 있으면 503."""
@@ -829,7 +868,8 @@ async def word_save_endpoint(raw: Request):
         raise HTTPException(status_code=400, detail="뜻은 문자열 200자 이하여야 해요.")
     if not isinstance(sentence, str) or len(sentence) > MAX_SENTENCE_CHARS:
         raise HTTPException(status_code=400, detail="문장은 문자열 1000자 이하여야 해요.")
-    saved = await asyncio.to_thread(save_word, lemma.strip().lower(), word, gloss, sentence)
+    url, _ = _clip_source(body)
+    saved = await asyncio.to_thread(save_word, lemma.strip().lower(), word, gloss, sentence, url)
     if not saved:
         raise HTTPException(status_code=503, detail=READGLOSS_SAVE_OFF_DETAIL)
     return {"saved": True}
@@ -852,7 +892,11 @@ async def phrase_save_endpoint(raw: Request):
         raise HTTPException(status_code=400, detail="문장은 글자가 있는 2자 이상 1000자 이하여야 해요.")
     if not isinstance(translation, str) or len(translation) > MAX_TRANSLATION_CHARS:
         raise HTTPException(status_code=400, detail="번역은 문자열 300자 이하여야 해요.")
-    if not await asyncio.to_thread(save_phrase, text, translation.strip()):
+    sentence = body.get("sentence", "")
+    if not isinstance(sentence, str) or len(sentence) > MAX_SENTENCE_CHARS:
+        raise HTTPException(status_code=400, detail="문장은 문자열 1000자 이하여야 해요.")
+    url, title = _clip_source(body)
+    if not await asyncio.to_thread(save_phrase, text, translation.strip(), " ".join(sentence.split()), url, title):
         raise HTTPException(status_code=503, detail=READGLOSS_PHRASE_OFF_DETAIL)
     return {"saved": True}
 

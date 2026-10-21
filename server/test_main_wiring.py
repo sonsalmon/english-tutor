@@ -483,7 +483,29 @@ class PhraseEndpointsTest(unittest.TestCase):
             res = self.client.post("/api/phrase/save", json={"text": "  I can't   make it. ", "translation": " 못 가요. "})
 
         self.assertEqual((res.status_code, res.json()), (200, {"saved": True}))
-        save.assert_called_once_with("I can't make it.", "못 가요.")
+        save.assert_called_once_with("I can't make it.", "못 가요.", "", "", "")
+
+    def test_save_passes_sentence_and_clip_source(self):
+        body = {"text": "piece of cake", "translation": "식은 죽 먹기", "sentence": "  Oh, that's a  piece of cake! ", "source": {"video_id": "abcDEF12345", "t": 66, "title": " Friends S3 "}}
+        with mock.patch.object(main, "save_phrase", return_value=True) as save:
+            res = self.client.post("/api/phrase/save", json=body)
+
+        self.assertEqual((res.status_code, res.json()), (200, {"saved": True}))
+        save.assert_called_once_with("piece of cake", "식은 죽 먹기", "Oh, that's a piece of cake!", "https://youtu.be/abcDEF12345?t=66", "Friends S3")
+
+    def test_save_rejects_bad_sentence_and_source(self):
+        bad = [
+            {"text": "Circle back", "sentence": "x" * 1001},
+            {"text": "Circle back", "sentence": 4},
+            {"text": "Circle back", "source": {"video_id": "abcDEF12345", "t": -5}},
+            {"text": "Circle back", "source": []},
+        ]
+        with mock.patch.object(main, "save_phrase", return_value=True) as save:
+            for body in bad:
+                with self.subTest(body=str(body)[:50]):
+                    self.assertEqual(self.client.post("/api/phrase/save", json=body).status_code, 400)
+
+        save.assert_not_called()
 
     def test_save_translation_may_be_empty_or_missing(self):
         with mock.patch.object(main, "save_phrase", return_value=True) as save:
@@ -578,7 +600,37 @@ class WordEndpointsTest(unittest.TestCase):
             res = self.post("/api/word/save", body)
 
         self.assertEqual((res.status_code, res.json()), (200, {"saved": True}))
-        save.assert_called_once_with("leverage", "Leverages", "활용하다", "We leverage it.")
+        save.assert_called_once_with("leverage", "Leverages", "활용하다", "We leverage it.", "")
+
+    def test_save_turns_clip_source_into_a_youtu_be_link(self):
+        body = {"word": "leverage", "lemma": "leverage", "gloss": "활용", "sentence": "We leverage it.", "source": {"video_id": "abcDEF12345", "t": 66.9, "title": "Friends S3"}}
+        with mock.patch.object(main, "save_word", return_value=True) as save:
+            res = self.post("/api/word/save", body)
+
+        self.assertEqual(res.status_code, 200)
+        save.assert_called_once_with("leverage", "leverage", "활용", "We leverage it.", "https://youtu.be/abcDEF12345?t=66")
+
+    def test_save_rejects_bad_source(self):
+        good = {"word": "leverage", "lemma": "leverage", "gloss": "", "sentence": "x"}
+        bad = [
+            "abcDEF12345",
+            {"t": 1},
+            {"video_id": "a b", "t": 1},
+            {"video_id": 5, "t": 1},
+            {"video_id": "abcDEF12345", "t": -1},
+            {"video_id": "abcDEF12345", "t": True},
+            {"video_id": "abcDEF12345", "t": "9"},
+            {"video_id": "abcDEF12345", "t": 86401},
+            {"video_id": "abcDEF12345", "t": 1, "title": "x" * 201},
+            {"video_id": "abcDEF12345", "t": 1, "title": 3},
+        ]
+        with mock.patch.object(main, "save_word", return_value=True) as save:
+            for source in bad:
+                with self.subTest(source=str(source)[:50]):
+                    self.assertEqual(self.post("/api/word/save", {**good, "source": source}).status_code, 400)
+            self.assertEqual(self.post("/api/word/save", {**good, "source": None}).status_code, 200)
+
+        self.assertEqual(save.call_count, 1)
 
     def test_save_rejects_bad_fields(self):
         good = {"word": "leverage", "lemma": "leverage", "gloss": "활용", "sentence": "x"}
@@ -773,7 +825,7 @@ class ClipsAndTtsEndpointsTest(unittest.TestCase):
             body["clips"][1],
             {
                 "id": "v1", "title": "Tv1", "channel": "Ch", "thumbnail": "https://i.ytimg.com/vi/v1/mqdefault.jpg",
-                "start": 12, "text": "let's wrap up", "phrase": "wrap up", "source": "db",
+                "start": 12, "start_f": 12.7, "end": 12.7 + 3, "text": "let's wrap up", "phrase": "wrap up", "source": "db",
             },
         )
         clips.assert_not_called()
@@ -1094,6 +1146,71 @@ class ChatCloseWiringTest(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(main.partner_memory, "update") as update:
             self.assertEqual(await main.chat_close("jake", _JsonRequest()), {"status": "nothing"})
         update.assert_not_called()
+
+
+class ClipSegmentsEndpointTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / "captions.db"
+        conn = main.clipdb.connect(path)
+        self.addCleanup(conn.close)
+        main.clipdb.upsert_channel(conn, "@tv", "A Show", "tv")
+        main.clipdb.save_video(
+            conn,
+            {"id": "vid-seg1", "channel_handle": "@tv", "title": "T", "published": "2026-01-01T00:00:00Z", "duration_sec": 30},
+            "ok",
+            "manual",
+            [{"start": i * 3.0, "end": i * 3.0 + 3.0, "text": f"line {i}"} for i in range(5)],
+            "2026-10-20T00:00:00+00:00",
+        )
+        main.clipdb.save_video(
+            conn,
+            {"id": "vid-bad1", "channel_handle": "@tv", "title": "B", "published": None, "duration_sec": 30},
+            "no_captions",
+            None,
+            [],
+            "2026-10-20T00:00:00+00:00",
+        )
+        env = mock.patch.dict(os.environ, {"CLIPDB_PATH": str(path)})
+        env.start()
+        self.addCleanup(env.stop)
+        from fastapi.testclient import TestClient
+
+        self.client = TestClient(main.app)
+
+    def get(self, **params):
+        return self.client.get("/api/clips/segments", params=params)
+
+    def test_returns_the_lines_around_at(self):
+        res = self.get(video_id="vid-seg1", at=6, before=3, after=3)
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertEqual([line["text"] for line in body["lines"]], ["line 1", "line 2", "line 3"])
+        self.assertEqual((body["at_id"], body["caption_kind"], body["has_more_before"], body["has_more_after"]), (6000, "manual", True, True))
+
+    def test_defaults_cover_the_whole_short_video(self):
+        body = self.get(video_id="vid-seg1", at=6).json()
+        self.assertEqual(len(body["lines"]), 5)
+        self.assertEqual((body["has_more_before"], body["has_more_after"]), (False, False))
+
+    def test_limit_is_capped(self):
+        self.assertEqual(len(self.get(video_id="vid-seg1", at=6, limit=2).json()["lines"]), 2)
+
+    def test_unknown_video_and_video_without_captions_are_404(self):
+        self.assertEqual(self.get(video_id="vid-none", at=0).status_code, 404)
+        self.assertEqual(self.get(video_id="vid-bad1", at=0).status_code, 404)
+
+    def test_bad_video_id_or_numbers_are_rejected(self):
+        self.assertEqual(self.get(video_id="a b", at=0).status_code, 400)
+        self.assertEqual(self.get(video_id="abc", at=0).status_code, 400)
+        self.assertEqual(self.get(video_id="vid-seg1", at="nan").status_code, 400)
+        self.assertEqual(self.get(video_id="vid-seg1", at="inf").status_code, 400)
+        self.assertEqual(self.get(video_id="vid-seg1", at="abc").status_code, 422)
+
+    def test_missing_database_is_404(self):
+        with mock.patch.dict(os.environ, {"CLIPDB_PATH": "/nonexistent/captions.db"}):
+            self.assertEqual(self.get(video_id="vid-seg1", at=0).status_code, 404)
 
 
 if __name__ == "__main__":

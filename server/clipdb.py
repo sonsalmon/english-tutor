@@ -430,3 +430,83 @@ def search(
         logger.warning("clipdb search failed: %s", e)
         return []
     return hits
+
+
+SEGMENT_WINDOW_MAX_SEC = 600.0
+SEGMENT_LIMIT_DEFAULT = 200
+SEGMENT_LIMIT_MAX = 400
+
+
+def segments_around(
+    video_id: str,
+    at: float,
+    before: float = 90.0,
+    after: float = 90.0,
+    limit: int = SEGMENT_LIMIT_DEFAULT,
+    path: Optional[Path] = None,
+) -> Optional[Dict[str, Any]]:
+    """영상의 at초 앞뒤 자막 줄을 시간 순으로 돌려준다. DB는 읽기 전용.
+
+    영상이 없거나 status가 ok가 아니거나 DB를 읽지 못하면 None. 줄 id는 round(start*1000)이고,
+    같은 값이 겹치면 1씩 올려 영상 안에서 유일하게 만든다. 줄이 limit보다 많으면 at 줄 둘레만 남기고,
+    창 밖이나 잘려 나간 쪽은 has_more_before/has_more_after로 알린다.
+    """
+    p = Path(path) if path else db_path()
+    if not video_id or not p.is_file():
+        return None
+    at = max(0.0, at)
+    before = min(max(0.0, before), SEGMENT_WINDOW_MAX_SEC)
+    after = min(max(0.0, after), SEGMENT_WINDOW_MAX_SEC)
+    limit = min(max(1, limit), SEGMENT_LIMIT_MAX)
+    lo, hi = max(0.0, at - before), at + after
+    try:
+        conn = _open_ro(p)
+        try:
+            video = conn.execute(
+                "SELECT v.title AS title, c.title AS channel, v.caption_kind AS caption_kind, v.duration_sec AS duration_sec "
+                "FROM videos v LEFT JOIN channels c ON c.handle = v.channel_handle WHERE v.id = ? AND v.status = 'ok'",
+                (video_id,),
+            ).fetchone()
+            if video is None:
+                return None
+            rows = conn.execute(
+                'SELECT start, "end", text FROM segments WHERE video_id = ? AND start BETWEEN ? AND ? ORDER BY start, rowid',
+                (video_id, lo, hi),
+            ).fetchall()
+            more_before = (
+                conn.execute("SELECT 1 FROM segments WHERE video_id = ? AND start < ? LIMIT 1", (video_id, lo)).fetchone() is not None
+            )
+            more_after = (
+                conn.execute("SELECT 1 FROM segments WHERE video_id = ? AND start > ? LIMIT 1", (video_id, hi)).fetchone() is not None
+            )
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        logger.warning("clipdb segments failed: %s", e)
+        return None
+    at_index = max((i for i, r in enumerate(rows) if r["start"] <= at + 0.001), default=0)
+    if len(rows) > limit:
+        first = min(max(0, at_index - limit // 2), len(rows) - limit)
+        more_before = more_before or first > 0
+        more_after = more_after or first + limit < len(rows)
+        at_index -= first
+        rows = rows[first : first + limit]
+    lines: List[Dict[str, Any]] = []
+    used: set = set()
+    for r in rows:
+        line_id = round(r["start"] * 1000)
+        while line_id in used:
+            line_id += 1
+        used.add(line_id)
+        lines.append({"id": line_id, "start": r["start"], "end": r["end"], "text": r["text"]})
+    return {
+        "video_id": video_id,
+        "title": video["title"] or "",
+        "channel": video["channel"] or "",
+        "caption_kind": video["caption_kind"],
+        "duration_sec": video["duration_sec"],
+        "at_id": lines[at_index]["id"] if lines else None,
+        "has_more_before": more_before,
+        "has_more_after": more_after,
+        "lines": lines,
+    }

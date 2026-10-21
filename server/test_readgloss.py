@@ -233,10 +233,19 @@ class BridgeClientTest(unittest.TestCase):
                     "translation": "못 가요.",
                     "kind": "expression",
                     "title": "English Tutor 카드",
-                    "sentence": "",
+                    "sentence": "I can't make it.",
                     "url": "",
                 },
             ),
+        )
+
+    def test_save_phrase_carries_sentence_url_and_title_from_a_clip(self):
+        self.assertTrue(readgloss.save_phrase("piece of cake", "식은 죽 먹기", "Oh, that's a piece of cake!", "https://youtu.be/abcDEF12345?t=66", "Friends S3"))
+
+        body = FakeBridge.calls[0][4]
+        self.assertEqual(
+            (body["sentence"], body["url"], body["title"]),
+            ("Oh, that's a piece of cake!", "https://youtu.be/abcDEF12345?t=66", "Friends S3"),
         )
 
     def test_stored_phrase_keys_are_whitespace_and_case_normalized(self):
@@ -269,6 +278,11 @@ class BridgeClientTest(unittest.TestCase):
             FakeBridge.calls[0][:2] + (FakeBridge.calls[0][4],),
             ("POST", "/words", {"op": "save", "lemma": "leverage", "word": "Leverages", "gloss": "활용하다", "sentence": "We leverage it.", "url": ""}),
         )
+
+    def test_save_word_sends_the_clip_url(self):
+        self.assertTrue(readgloss.save_word("leverage", "leverage", "활용하다", "We leverage it.", "https://youtu.be/abcDEF12345?t=66"))
+
+        self.assertEqual(FakeBridge.calls[0][4]["url"], "https://youtu.be/abcDEF12345?t=66")
 
     def test_lookup_and_save_are_none_false_when_bridge_refuses_or_is_down(self):
         self.token_file.write_text("wrong", encoding="utf-8")

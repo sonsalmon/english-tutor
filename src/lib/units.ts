@@ -56,6 +56,43 @@ export function extendRange(text: string, range: Range, side: 'before' | 'after'
   return { start: range.start - m[0].length, end: range.end };
 }
 
+const PLAIN_WORDS = /^[A-Za-z][A-Za-z'’-]*(?:\s+[A-Za-z][A-Za-z'’-]*)*$/;
+
+// 이어 탭한 두 범위를 하나로 묶는다. 사이에 낱말과 공백만 있고(문장부호 없음) 낱말이 MAX_PHRASE_WORDS 이하일 때만, 아니면 null.
+export function joinRanges(text: string, a: Range, b: Range): Range | null {
+  const range = { start: Math.min(a.start, b.start), end: Math.max(a.end, b.end) };
+  const body = text.slice(range.start, range.end);
+  return PLAIN_WORDS.test(body) && wordCount(body) <= MAX_PHRASE_WORDS ? range : null;
+}
+
+// 구로 묶기 모드에서 낱말을 탭할 때 고른 범위가 어떻게 바뀌는지. 같은 곳을 다시 탭하면 해제, 이미 고른 범위 안을 탭하면 그 낱말부터 다시,
+// 이어 붙일 수 없는 곳을 탭하면 그 낱말부터 다시 고른다.
+export function pickRange(text: string, current: Range | null, tapped: Range): Range | null {
+  if (!current) return tapped;
+  if (current.start === tapped.start && current.end === tapped.end) return null;
+  if (tapped.start >= current.start && tapped.end <= current.end) return tapped;
+  return joinRanges(text, current, tapped) ?? tapped;
+}
+
+export const MAX_CANDIDATES = 40;
+
+// 문장 안에서 이어진(공백만 사이에 있는) 2~MAX_PHRASE_WORDS 낱말 조합. 저장했는지 서버에 한꺼번에 물을 글(소문자, 공백 하나)이다.
+// 서버가 한 번에 받는 40개를 넘지 않게 앞에서부터 자른다.
+export function phraseCandidates(text: string): string[] {
+  const words = [...text.matchAll(WORD_TOKEN)].map((m) => ({ start: m.index, end: m.index + m[0].length, word: m[0].toLowerCase() }));
+  const found = new Set<string>();
+  for (let i = 0; i < words.length; i++) {
+    const parts = [words[i].word];
+    for (let j = i + 1; j < words.length && parts.length < MAX_PHRASE_WORDS; j++) {
+      if (!/^\s+$/.test(text.slice(words[j - 1].end, words[j].start))) break;
+      parts.push(words[j].word);
+      found.add(parts.join(' '));
+      if (found.size >= MAX_CANDIDATES) return [...found];
+    }
+  }
+  return [...found];
+}
+
 // 끝의 하이픈과 따옴표를 떼고 2~64자인 낱말만 사전에 묻는다(WordText와 StarButton이 같은 규칙을 쓴다).
 export function lookupForm(token: string): string | null {
   const word = token.replace(/’/g, "'").replace(/[-']+$/, '');

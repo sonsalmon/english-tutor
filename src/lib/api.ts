@@ -104,9 +104,22 @@ export type Clip = {
   thumbnail: string;
   published?: string;
   start?: number;
+  start_f?: number;
+  end?: number;
   text?: string;
   phrase?: string;
   source?: 'db' | 'search';
+};
+// 저장한 단어·표현이 어느 영상 몇 초에서 나왔는지. 서버가 youtu.be/<video_id>?t=<t> 링크로 바꿔 readgloss에 남긴다.
+export type SaveSource = { video_id: string; t: number; title: string };
+export type ClipLine = { id: number; start: number; end: number; text: string };
+export type ClipSegments = {
+  lines: ClipLine[];
+  atId: number | null;
+  hasMoreBefore: boolean;
+  hasMoreAfter: boolean;
+  title?: string;
+  channel?: string;
 };
 export type ClipStatus = 'ok' | 'no_key' | 'no_query' | 'error';
 export type ClipResult = { query: string; clips: Clip[]; status: ClipStatus };
@@ -326,7 +339,7 @@ export async function lookupWord(word: string, signal?: AbortSignal): Promise<Wo
   };
 }
 
-export async function saveWord(body: { word: string; lemma: string; gloss: string; sentence: string }): Promise<void> {
+export async function saveWord(body: { word: string; lemma: string; gloss: string; sentence: string; source?: SaveSource }): Promise<void> {
   await postWord('/api/word/save', body, '단어를 저장하지 못했어요.');
 }
 
@@ -457,6 +470,50 @@ export async function getCallClips(stem: string, signal?: AbortSignal): Promise<
     query: typeof data?.query === 'string' ? data.query : '',
     clips: Array.isArray(data?.clips) ? data.clips : [],
     status,
+  };
+}
+
+// 자막 DB에서 영상의 at초 앞뒤 줄. 없거나 실패하면 던진다(재생기는 일반 재생으로 열린다).
+export async function getClipSegments(videoId: string, at: number, signal?: AbortSignal): Promise<ClipSegments> {
+  const res = await fetch(`/api/clips/segments?video_id=${encodeURIComponent(videoId)}&at=${at}`, { signal });
+  if (!res.ok) throw new Error(await errorMessage(res, '자막 줄을 불러오지 못했어요.'));
+  const data = await res.json();
+  const lines: ClipLine[] = (Array.isArray(data?.lines) ? data.lines : []).filter(
+    (l: any) => Number.isFinite(l?.id) && Number.isFinite(l?.start) && Number.isFinite(l?.end) && typeof l?.text === 'string',
+  );
+  return {
+    lines,
+    atId: Number.isFinite(data?.at_id) ? data.at_id : null,
+    hasMoreBefore: data?.has_more_before === true,
+    hasMoreAfter: data?.has_more_after === true,
+    title: typeof data?.title === 'string' ? data.title : undefined,
+    channel: typeof data?.channel === 'string' ? data.channel : undefined,
+  };
+}
+
+export type KoTranslation = { items: { id: number; ko: string; cached: boolean }[]; capped: boolean; unavailable: boolean };
+
+// 줄의 한국어 번역. 서버가 꺼져 있으면(404) unavailable, 하루 한도를 다 쓰면(429) capped로 알린다. 그 밖의 실패는 던진다.
+export async function translateClipLines(
+  videoId: string,
+  plan: { lines: { id: number; text: string }[]; before: string[]; after: string[] },
+  signal?: AbortSignal,
+): Promise<KoTranslation> {
+  const res = await fetch('/api/clips/translate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ video_id: videoId, ...plan }),
+    signal,
+  });
+  if (res.status === 404) return { items: [], capped: false, unavailable: true };
+  if (res.status === 429) return { items: [], capped: true, unavailable: false };
+  if (!res.ok) throw new Error(await errorMessage(res, '번역을 가져오지 못했어요.'));
+  const data = await res.json();
+  const items = (Array.isArray(data?.items) ? data.items : []).filter((i: any) => Number.isFinite(i?.id) && typeof i?.ko === 'string' && i.ko !== '');
+  return {
+    items: items.map((i: any) => ({ id: i.id, ko: i.ko, cached: i.cached === true })),
+    capped: data?.capped === true,
+    unavailable: false,
   };
 }
 

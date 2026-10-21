@@ -3,11 +3,11 @@ import { NAV_ITEMS, hidesTabBar, navRouteOf } from '../lib/nav';
 import { go, useRouteParam, type Route } from '../lib/router';
 import { Portrait } from './ui';
 
-// 통화 화면은 사이드바·탭바 없이 전체를 쓴다. 통화 중에 다른 메뉴로 나가면 통화가 끊기기 때문이다.
+// 통화 화면은 사이드바·탭바 없이 전체를 쓴다. 통화 중에 다른 메뉴로 나가면 통화가 끊기기 때문이다. 클립 공부 화면도 전체를 쓴다.
 // 친구와의 대화(#/chat/<id>)와 폰의 통화 내역 상세(#/log/<stem>)는 탭바를 숨긴다.
 export function AppShell({ route, children }: { route: Route; children: ReactNode }) {
   const param = useRouteParam();
-  if (route === 'call') return <>{children}</>;
+  if (route === 'call' || route === 'clip') return <>{children}</>;
   const tabBarHidden = hidesTabBar(route, param);
   const current = navRouteOf(route);
   return (
