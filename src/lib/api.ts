@@ -110,6 +110,8 @@ export type Clip = {
   phrase?: string;
   source?: 'db' | 'search';
 };
+// 저장한 단어·표현이 어느 영상 몇 초에서 나왔는지. 서버가 youtu.be/<video_id>?t=<t> 링크로 바꿔 readgloss에 남긴다.
+export type SaveSource = { video_id: string; t: number; title: string };
 export type ClipLine = { id: number; start: number; end: number; text: string };
 export type ClipSegments = { lines: ClipLine[]; atId: number | null; hasMoreBefore: boolean; hasMoreAfter: boolean };
 export type ClipStatus = 'ok' | 'no_key' | 'no_query' | 'error';
@@ -330,7 +332,7 @@ export async function lookupWord(word: string, signal?: AbortSignal): Promise<Wo
   };
 }
 
-export async function saveWord(body: { word: string; lemma: string; gloss: string; sentence: string }): Promise<void> {
+export async function saveWord(body: { word: string; lemma: string; gloss: string; sentence: string; source?: SaveSource }): Promise<void> {
   await postWord('/api/word/save', body, '단어를 저장하지 못했어요.');
 }
 

@@ -1,4 +1,4 @@
-import { ReadglossOffError } from './api';
+import { ReadglossOffError, type SaveSource } from './api';
 
 // readgloss가 꺼져 있을 때(503)는 ReadglossOffError, 나머지 실패는 일반 Error로 던진다.
 async function postPhrase(path: string, body: unknown, fallback: string): Promise<Response> {
@@ -46,8 +46,9 @@ export function markWordSaved(lemma: string): void {
   listeners.forEach((l) => l(savedKey('word', lemma)));
 }
 
-export async function savePhrase(text: string, translation: string): Promise<void> {
-  await postPhrase('/api/phrase/save', { text, translation }, '카드로 저장하지 못했어요.');
+// extra.sentence: 표현을 만난 문장. extra.source: 클립에서 저장했다면 그 영상과 시각.
+export async function savePhrase(text: string, translation: string, extra: { sentence?: string; source?: SaveSource } = {}): Promise<void> {
+  await postPhrase('/api/phrase/save', { text, translation, ...extra }, '카드로 저장하지 못했어요.');
   savedPhrases.add(phraseKey(text));
   listeners.forEach((l) => l(savedKey('phrase', text)));
 }

@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import type { SaveSource } from '../lib/api';
 import { extendRange, findUnits, lookupForm, WORD_TOKEN, type Range, type Unit } from '../lib/units';
 import { WordPopover } from './WordPopover';
 import { YouGlishSheet } from './YouGlishSheet';
@@ -36,7 +37,8 @@ export const WordUnitsProvider = UnitsContext.Provider;
 
 // units: 알려진 두 낱말 이상 표현(뜻이 있으면 함께). 문장에서 먼저 찾아 낱말 대신 하나의 버튼으로 만든다. 없으면 WordUnitsProvider의 목록을 쓴다.
 // onOpenChange: 단어 시트나 발음 시트가 열리고 닫힐 때 알린다(재생기가 영상을 멈췄다 되돌리는 데 쓴다).
-export function WordText({ text, units, onOpenChange }: { text: string; units?: Unit[]; onOpenChange?: (open: boolean) => void }) {
+// source: 이 글이 영상 자막이면 그 영상과 시각. 여기서 저장한 단어·표현에 출처로 붙는다.
+export function WordText({ text, units, onOpenChange, source }: { text: string; units?: Unit[]; onOpenChange?: (open: boolean) => void; source?: SaveSource }) {
   const inherited = useContext(UnitsContext);
   const [active, setActive] = useState<Active | null>(null);
   const [phrase, setPhrase] = useState<string | null>(null);
@@ -126,6 +128,7 @@ export function WordText({ text, units, onOpenChange }: { text: string; units?: 
           text={active.text}
           gloss={active.gloss}
           sentence={active.sentence}
+          source={source}
           anchor={active.anchor}
           extend={{
             before: !!extendRange(text, active.range, 'before'),

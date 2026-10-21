@@ -1,6 +1,6 @@
 import { Star } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { ReadglossOffError, saveWord } from '../lib/api';
+import { ReadglossOffError, saveWord, type SaveSource } from '../lib/api';
 import { glossPhrase, isPhraseSaved, isWordSaved, markWordSaved, onSaved as subscribeSaved, savedKey, savePhrase } from '../lib/phrases';
 import { lookupForm } from '../lib/units';
 
@@ -13,6 +13,7 @@ export function StarButton({
   text,
   gloss = '',
   sentence = '',
+  source,
   lemma,
   disabled = false,
   saved = false,
@@ -22,6 +23,7 @@ export function StarButton({
   text: string;
   gloss?: string;
   sentence?: string;
+  source?: SaveSource;
   lemma?: string;
   disabled?: boolean;
   // 같은 항목을 다른 버튼이 이미 저장했으면 true로 넘겨 채운 별로 맞춘다.
@@ -67,10 +69,10 @@ export function StarButton({
     setMessage('');
     try {
       if (kind === 'word') {
-        await saveWord({ word: word!, lemma: wordKey, gloss, sentence });
+        await saveWord({ word: word!, lemma: wordKey, gloss, sentence, source });
         markWordSaved(wordKey);
       } else {
-        await savePhrase(text, (gloss || (await glossPhrase(text))).trim().slice(0, 300));
+        await savePhrase(text, (gloss || (await glossPhrase(text))).trim().slice(0, 300), { sentence: sentence || undefined, source });
       }
       setStatus('saved');
       onSavedRef.current?.();

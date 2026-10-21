@@ -483,7 +483,29 @@ class PhraseEndpointsTest(unittest.TestCase):
             res = self.client.post("/api/phrase/save", json={"text": "  I can't   make it. ", "translation": " 못 가요. "})
 
         self.assertEqual((res.status_code, res.json()), (200, {"saved": True}))
-        save.assert_called_once_with("I can't make it.", "못 가요.")
+        save.assert_called_once_with("I can't make it.", "못 가요.", "", "", "")
+
+    def test_save_passes_sentence_and_clip_source(self):
+        body = {"text": "piece of cake", "translation": "식은 죽 먹기", "sentence": "  Oh, that's a  piece of cake! ", "source": {"video_id": "abcDEF12345", "t": 66, "title": " Friends S3 "}}
+        with mock.patch.object(main, "save_phrase", return_value=True) as save:
+            res = self.client.post("/api/phrase/save", json=body)
+
+        self.assertEqual((res.status_code, res.json()), (200, {"saved": True}))
+        save.assert_called_once_with("piece of cake", "식은 죽 먹기", "Oh, that's a piece of cake!", "https://youtu.be/abcDEF12345?t=66", "Friends S3")
+
+    def test_save_rejects_bad_sentence_and_source(self):
+        bad = [
+            {"text": "Circle back", "sentence": "x" * 1001},
+            {"text": "Circle back", "sentence": 4},
+            {"text": "Circle back", "source": {"video_id": "abcDEF12345", "t": -5}},
+            {"text": "Circle back", "source": []},
+        ]
+        with mock.patch.object(main, "save_phrase", return_value=True) as save:
+            for body in bad:
+                with self.subTest(body=str(body)[:50]):
+                    self.assertEqual(self.client.post("/api/phrase/save", json=body).status_code, 400)
+
+        save.assert_not_called()
 
     def test_save_translation_may_be_empty_or_missing(self):
         with mock.patch.object(main, "save_phrase", return_value=True) as save:
@@ -578,7 +600,37 @@ class WordEndpointsTest(unittest.TestCase):
             res = self.post("/api/word/save", body)
 
         self.assertEqual((res.status_code, res.json()), (200, {"saved": True}))
-        save.assert_called_once_with("leverage", "Leverages", "활용하다", "We leverage it.")
+        save.assert_called_once_with("leverage", "Leverages", "활용하다", "We leverage it.", "")
+
+    def test_save_turns_clip_source_into_a_youtu_be_link(self):
+        body = {"word": "leverage", "lemma": "leverage", "gloss": "활용", "sentence": "We leverage it.", "source": {"video_id": "abcDEF12345", "t": 66.9, "title": "Friends S3"}}
+        with mock.patch.object(main, "save_word", return_value=True) as save:
+            res = self.post("/api/word/save", body)
+
+        self.assertEqual(res.status_code, 200)
+        save.assert_called_once_with("leverage", "leverage", "활용", "We leverage it.", "https://youtu.be/abcDEF12345?t=66")
+
+    def test_save_rejects_bad_source(self):
+        good = {"word": "leverage", "lemma": "leverage", "gloss": "", "sentence": "x"}
+        bad = [
+            "abcDEF12345",
+            {"t": 1},
+            {"video_id": "a b", "t": 1},
+            {"video_id": 5, "t": 1},
+            {"video_id": "abcDEF12345", "t": -1},
+            {"video_id": "abcDEF12345", "t": True},
+            {"video_id": "abcDEF12345", "t": "9"},
+            {"video_id": "abcDEF12345", "t": 86401},
+            {"video_id": "abcDEF12345", "t": 1, "title": "x" * 201},
+            {"video_id": "abcDEF12345", "t": 1, "title": 3},
+        ]
+        with mock.patch.object(main, "save_word", return_value=True) as save:
+            for source in bad:
+                with self.subTest(source=str(source)[:50]):
+                    self.assertEqual(self.post("/api/word/save", {**good, "source": source}).status_code, 400)
+            self.assertEqual(self.post("/api/word/save", {**good, "source": None}).status_code, 200)
+
+        self.assertEqual(save.call_count, 1)
 
     def test_save_rejects_bad_fields(self):
         good = {"word": "leverage", "lemma": "leverage", "gloss": "활용", "sentence": "x"}

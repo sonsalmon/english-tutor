@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { ClipLine } from './api';
-import { indexOfId, lineIndexAt } from './clipLines';
+import { indexOfId, lineIndexAt, lineSource } from './clipLines';
 
 const lines: ClipLine[] = [
   { id: 1000, start: 1, end: 3, text: 'one' },
@@ -42,5 +42,15 @@ describe('indexOfId', () => {
     expect(indexOfId(lines, 123)).toBe(-1);
     expect(indexOfId(lines, null)).toBe(-1);
     expect(indexOfId(lines, undefined)).toBe(-1);
+  });
+});
+
+describe('lineSource', () => {
+  test('영상 ID·줄 시작 초(내림)·제목을 담는다', () => {
+    expect(lineSource('abcDEF12345', 'Friends S3', { id: 66500, start: 66.5, end: 69, text: 'x' })).toEqual({ video_id: 'abcDEF12345', t: 66, title: 'Friends S3' });
+  });
+
+  test('음수 시작은 0초', () => {
+    expect(lineSource('abcDEF12345', 't', { id: 0, start: -0.2, end: 1, text: 'x' }).t).toBe(0);
   });
 });
