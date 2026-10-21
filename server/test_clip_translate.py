@@ -35,6 +35,10 @@ class ClipTranslateTest(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
         os.environ.pop("CLIP_TRANSLATE_ENABLED", None)
+        # 하루 한도는 날짜별로 세므로, 자정을 넘기면 시험이 실패하지 않게 오늘을 고정한다.
+        today = mock.patch.object(clip_translate, "_today", return_value="2026-10-22")
+        today.start()
+        self.addCleanup(today.stop)
         self.client = TestClient(main.app)
 
     def post(self, model, lines=None, **extra):
@@ -91,6 +95,16 @@ class ClipTranslateTest(unittest.TestCase):
         self.post(fake_model())
         tables = {r[0] for r in sqlite3.connect(self.cache).execute("SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertTrue({"translations", "usage"} <= tables)
+
+    def test_daily_cap_is_counted_per_day_and_resets_on_the_next_day(self):
+        os.environ["CLIP_TRANSLATE_DAILY_CAP"] = "1"
+        self.post(fake_model())
+        self.assertEqual(self.post(fake_model(), lines=[{"id": 2000, "text": "Other."}]).status_code, 429)
+
+        with mock.patch.object(clip_translate, "_today", return_value="2026-10-23"):
+            res = self.post(fake_model(), lines=[{"id": 2000, "text": "Other."}])
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["items"][0]["cached"], False)
 
     def test_daily_cap_stops_the_model_and_cached_lines_still_work(self):
         os.environ["CLIP_TRANSLATE_DAILY_CAP"] = "2"

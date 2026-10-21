@@ -3,6 +3,7 @@ import type { ClipLine } from './api';
 import {
   clampSync,
   formatSync,
+  keepRevealed,
   lineFill,
   loadSync,
   parseSyncMap,
@@ -123,6 +124,25 @@ describe('줄 시각 밀기', () => {
     expect(run(0, justBeforeEnd).held).toBe(true);
     expect(run(1000, justBeforeEnd).held).toBe(false);
     expect(run(1000, justBeforeEnd + 1).held).toBe(true);
+  });
+});
+
+describe('흐림 모드에서 탭해 보인 줄', () => {
+  test('그 줄에 머물는 동안은 보인다', () => {
+    expect(keepRevealed(7, 7)).toBe(7);
+  });
+
+  test('다른 줄로 가면 잊어, 돌아와도 다시 가려진다', () => {
+    let revealed: number | null = 7;
+    revealed = keepRevealed(revealed, 8);
+    expect(revealed).toBeNull();
+    revealed = keepRevealed(revealed, 7);
+    expect(revealed).toBeNull();
+  });
+
+  test('탭한 적 없거나 줄이 없으면 null', () => {
+    expect(keepRevealed(null, 7)).toBeNull();
+    expect(keepRevealed(7, null)).toBeNull();
   });
 });
 

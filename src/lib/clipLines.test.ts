@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { ClipLine, ClipSegments } from './api';
-import { canAutoScroll, indexOfId, lineIndexAt, lineSource, mergeSegments } from './clipLines';
+import { shiftLines } from './captionTune';
+import { canAutoScroll, indexOfId, lineIndexAt, lineSource, mergeSegments, sourceLine } from './clipLines';
 
 const lines: ClipLine[] = [
   { id: 1000, start: 1, end: 3, text: 'one' },
@@ -92,5 +93,20 @@ describe('lineSource', () => {
 
   test('음수 시작은 0초', () => {
     expect(lineSource('abcDEF12345', 't', { id: 0, start: -0.2, end: 1, text: 'x' }).t).toBe(0);
+  });
+
+  test('싱크가 0이 아니어도 저장 시각은 줄의 원래 시작이다(밀린 줄을 그대로 넣으면 틀린다)', () => {
+    const original = [{ id: 66500, start: 66.5, end: 69, text: 'x' }];
+    const shifted = shiftLines(original, 1500);
+    expect(lineSource('abcDEF12345', 't', shifted[0]).t).toBe(68);
+    expect(lineSource('abcDEF12345', 't', sourceLine(original, shifted[0])).t).toBe(66);
+    expect(lineSource('abcDEF12345', 't', sourceLine(original, shiftLines(original, -2000)[0])).t).toBe(66);
+  });
+});
+
+describe('sourceLine', () => {
+  test('같은 id가 없으면 받은 줄 그대로', () => {
+    const stray = { id: 5, start: 1, end: 2, text: 'y' };
+    expect(sourceLine(lines, stray)).toBe(stray);
   });
 });

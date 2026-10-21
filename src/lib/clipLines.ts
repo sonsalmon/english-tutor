@@ -39,7 +39,12 @@ export function mergeSegments(prev: ClipSegments, next: ClipSegments, side: 'bef
   };
 }
 
-// 이 줄에서 저장한 단어·표현에 붙일 출처: 영상 ID, 줄 시작 초(내림), 영상 제목.
+// 싱크로 시각이 밀린 줄(shown)의 원래 자막 줄. 같은 id가 없으면 shown을 그대로 돌려준다.
+export function sourceLine(original: readonly ClipLine[], shown: ClipLine): ClipLine {
+  return original.find((l) => l.id === shown.id) ?? shown;
+}
+
+// 이 줄에서 저장한 단어·표현에 붙일 출처: 영상 ID, 줄 시작 초(내림), 영상 제목. 싱크로 밀린 줄이 아니라 원래 줄(sourceLine)을 넣는다.
 export function lineSource(videoId: string, title: string, line: ClipLine): SaveSource {
   return { video_id: videoId, t: Math.max(0, Math.floor(line.start)), title };
 }

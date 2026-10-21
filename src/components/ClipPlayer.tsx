@@ -1,5 +1,5 @@
 import { ChevronLeft, ChevronRight, ExternalLink, GraduationCap, Pause, Play, RotateCcw, SkipForward, X } from 'lucide-react';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { getClipSegments, type Clip, type ClipSegments } from '../lib/api';
 import { openClip } from '../lib/clipRoute';
 import { lineSource } from '../lib/clipLines';
@@ -99,9 +99,18 @@ export function ClipPlayer({
   const line = withLines && state.index >= 0 ? state.lines[state.index] : null;
   const ready = status === 'ready';
   const blocked = status === 'blocked';
+  const root = useRef<HTMLDivElement>(null);
+  const shown = line !== null;
+
+  // 줄 정보가 도착하면 카드가 커지므로, 줄 이동 버튼이 화면 아래로 밀리지 않게 카드 전체가 보이는 위치로 스크롤한다.
+  useEffect(() => {
+    if (!shown) return;
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    root.current?.scrollIntoView({ block: 'nearest', behavior: reduce ? 'auto' : 'smooth' });
+  }, [shown]);
 
   return (
-    <div className="p-3">
+    <div ref={root} className="p-3">
       {blocked ? (
         <div role="alert" className="flex aspect-video w-full flex-col items-center justify-center gap-3 rounded-lg border border-line bg-paper p-4 text-center">
           <p className="font-semibold">이 영상은 앱 안에서 틀 수 없어요.</p>

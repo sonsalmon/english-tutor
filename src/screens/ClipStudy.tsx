@@ -6,8 +6,8 @@ import { rememberBlocked } from '../components/ClipList';
 import { KoLine } from '../components/KoLine';
 import { WordText } from '../components/WordText';
 import { getClipSegments, type ClipLine, type ClipSegments } from '../lib/api';
-import { lineFill, loadSync, saveSync, shiftLines, stepSync } from '../lib/captionTune';
-import { canAutoScroll, lineSource, mergeSegments } from '../lib/clipLines';
+import { keepRevealed, lineFill, loadSync, saveSync, shiftLines, stepSync } from '../lib/captionTune';
+import { canAutoScroll, lineSource, mergeSegments, sourceLine } from '../lib/clipLines';
 import { closeClip, parseClipParam, type ClipTarget } from '../lib/clipRoute';
 import { loadPrefs, nextEngMode, nextRepeat, nextTextSize, savePrefs, stepRate, visibleRates, type EngMode, type TextSize } from '../lib/playerPrefs';
 import { KO_MODE_LABEL, loadKoSettings, nextKoMode, saveKoSettings } from '../lib/koLines';
@@ -115,6 +115,9 @@ function Study({ target }: { target: ClipTarget }) {
   const visible = visibleRates(rates);
   const lastIndex = state.lines.length - 1;
   const atEnd = state.held && state.index === lastIndex && !data?.hasMoreAfter;
+  // 탭해서 보인 줄은 그 줄에 머물는 동안만 보인다. 다른 줄로 가면 잊는다(렌더 중에 바로 반영해 깜박임이 없다).
+  const keptReveal = keepRevealed(revealedId, line?.id ?? null);
+  if (keptReveal !== revealedId) setRevealedId(keptReveal);
   const masked = eng !== 'show' && line !== null && revealedId !== line.id;
   const koLine = useKoLines(videoId, state.lines, state.index, ko);
 
@@ -206,10 +209,11 @@ function Study({ target }: { target: ClipTarget }) {
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.key === ' ' && !dialogOpen()) e.preventDefault();
     };
-    window.addEventListener('keydown', onKeyDown);
+    // keydown은 캡처 단계에서 받는다. 단어·구 시트가 document에서 Esc로 먼저 닫히면 여기서는 시트가 이미 없어 공부 화면까지 닫히기 때문이다.
+    window.addEventListener('keydown', onKeyDown, true);
     window.addEventListener('keyup', onKeyUp);
     return () => {
-      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keydown', onKeyDown, true);
       window.removeEventListener('keyup', onKeyUp);
     };
   }, [act]);
@@ -296,7 +300,7 @@ function Study({ target }: { target: ClipTarget }) {
               </a>
             </div>
           ) : (
-            <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-black">
+            <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-black lg:w-[min(100%,calc((100dvh_-_35rem)*1.7778))]">
               <div ref={mountRef} className={`absolute inset-0 [&_iframe]:size-full [&_iframe]:border-0 ${withLines && !tapFirst ? '[&_iframe]:pointer-events-none' : ''}`} />
               {!ready && (
                 <div role="status" aria-label="영상을 불러오는 중" className="absolute inset-0 flex items-center justify-center bg-black">
@@ -341,7 +345,7 @@ function Study({ target }: { target: ClipTarget }) {
           {withLines && !blocked && line && (
             <>
               <LineProgress line={line} labels={data.lines[state.index] ?? line} getTime={act.getTime} />
-              <div ref={cardRef} className={`mt-3 rounded-2xl border-l-4 border-marker bg-surface/10 p-4 ${masked ? '' : 'line-fill'}`}>
+              <div ref={cardRef} className={`mt-3 rounded-2xl border-l-4 border-marker bg-surface/10 p-4 lg:p-3 ${masked ? '' : 'line-fill'}`}>
                 {masked ? (
                   <button
                     type="button"
@@ -364,12 +368,12 @@ function Study({ target }: { target: ClipTarget }) {
                   </button>
                 ) : (
                   <p key={line.id} lang="en" className={`line-in min-h-14 ${SIZE_CLASS[size]} leading-snug font-semibold break-words`}>
-                    <WordText text={line.text} onOpenChange={act.hold} source={lineSource(videoId, data?.title ?? '', line)} learn />
+                    <WordText text={line.text} onOpenChange={act.hold} source={lineSource(videoId, data.title ?? '', sourceLine(data.lines, line))} learn />
                   </p>
                 )}
                 <KoLine line={koLine} />
               </div>
-              <p role="status" className="mt-2 flex min-h-11 items-center gap-3 text-sm text-surface/80">
+              <p role="status" className="mt-2 flex min-h-11 items-center gap-3 text-sm text-surface/80 lg:mt-1 lg:min-h-8">
                 <span>{statusText}</span>
                 {atEnd && (
                   <button type="button" onClick={() => act.jump(0)} className="min-h-11 rounded-full px-3 font-semibold underline">
@@ -401,69 +405,71 @@ function Study({ target }: { target: ClipTarget }) {
                 </button>
               </div>
 
-              <div role="group" aria-label="재생 속도" className="mt-3 grid grid-cols-5 gap-2">
-                {visible.map((r) => (
+              <div className="mt-3 lg:flex lg:flex-wrap lg:gap-2">
+                <div role="group" aria-label="재생 속도" className="grid grid-cols-5 gap-2 lg:flex">
+                  {visible.map((r) => (
+                    <button
+                      key={r}
+                      type="button"
+                      onClick={() => act.setRate(r)}
+                      aria-pressed={state.rate === r}
+                      aria-label={`속도 ${r}배`}
+                      disabled={!ready}
+                      className={`${CHIP} px-0 lg:w-14 ${state.rate === r ? CHIP_ON : CHIP_OFF}`}
+                    >
+                      {r}x
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2 lg:contents">
                   <button
-                    key={r}
                     type="button"
-                    onClick={() => act.setRate(r)}
-                    aria-pressed={state.rate === r}
-                    aria-label={`속도 ${r}배`}
-                    disabled={!ready}
-                    className={`${CHIP} px-0 ${state.rate === r ? CHIP_ON : CHIP_OFF}`}
+                    onClick={() => act.setRepeat(nextRepeat(state.repeat))}
+                    aria-pressed={state.repeat !== 'off'}
+                    className={`${CHIP} ${state.repeat !== 'off' ? CHIP_ON : CHIP_OFF}`}
                   >
-                    {r}x
+                    {repeatLabel(state.repeat, state.pass)} <Kbd>R</Kbd>
                   </button>
-                ))}
+                  <button
+                    type="button"
+                    onClick={() => act.setAutoPause(!state.autoPause)}
+                    aria-pressed={state.autoPause}
+                    className={`${CHIP} ${state.autoPause ? CHIP_ON : CHIP_OFF}`}
+                  >
+                    줄마다 멈춤 {state.autoPause ? '켬' : '끔'} <Kbd>Q</Kbd>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEng(nextEngMode(eng))}
+                    aria-pressed={eng !== 'show'}
+                    className={`${CHIP} ${eng !== 'show' ? CHIP_ON : CHIP_OFF}`}
+                  >
+                    영어 자막 {ENG_LABEL[eng]} <Kbd>C</Kbd>
+                  </button>
+                  <div className="hidden items-center gap-2 lg:flex">
+                    <button
+                      type="button"
+                      onClick={() => setSize(nextTextSize(size))}
+                      aria-label={`글자 크기 ${SIZE_LABEL[size]}, 누르면 바뀝니다`}
+                      className={`${CHIP} ${size !== 'md' ? CHIP_ON : CHIP_OFF}`}
+                    >
+                      글자 {SIZE_LABEL[size]}
+                    </button>
+                    <SyncControl syncMs={syncMs} onChange={setSyncMs} hint={<Kbd>, .</Kbd>} />
+                  </div>
+                  {ko.enabled && (
+                    <button
+                      type="button"
+                      onClick={() => setKo({ ...ko, mode: nextKoMode(ko.mode) })}
+                      aria-pressed={ko.mode !== 'hide'}
+                      className={`${CHIP} ${ko.mode !== 'hide' ? CHIP_ON : CHIP_OFF}`}
+                    >
+                      한국어 {KO_MODE_LABEL[ko.mode]} <Kbd>K</Kbd>
+                    </button>
+                  )}
+                </div>
               </div>
               {ready && !visible.includes(state.rate) && <p className="mt-2 text-sm text-surface/80">이 영상은 {state.rate}배를 지원하지 않아요.</p>}
-              <div className="mt-2 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => act.setRepeat(nextRepeat(state.repeat))}
-                  aria-pressed={state.repeat !== 'off'}
-                  className={`${CHIP} ${state.repeat !== 'off' ? CHIP_ON : CHIP_OFF}`}
-                >
-                  {repeatLabel(state.repeat, state.pass)} <Kbd>R</Kbd>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => act.setAutoPause(!state.autoPause)}
-                  aria-pressed={state.autoPause}
-                  className={`${CHIP} ${state.autoPause ? CHIP_ON : CHIP_OFF}`}
-                >
-                  줄마다 멈춤 {state.autoPause ? '켬' : '끔'} <Kbd>Q</Kbd>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setEng(nextEngMode(eng))}
-                  aria-pressed={eng !== 'show'}
-                  className={`${CHIP} ${eng !== 'show' ? CHIP_ON : CHIP_OFF}`}
-                >
-                  영어 자막 {ENG_LABEL[eng]} <Kbd>C</Kbd>
-                </button>
-                <div className="hidden items-center gap-2 lg:flex">
-                  <button
-                    type="button"
-                    onClick={() => setSize(nextTextSize(size))}
-                    aria-label={`글자 크기 ${SIZE_LABEL[size]}, 누르면 바뀝니다`}
-                    className={`${CHIP} ${size !== 'md' ? CHIP_ON : CHIP_OFF}`}
-                  >
-                    글자 {SIZE_LABEL[size]}
-                  </button>
-                  <SyncControl syncMs={syncMs} onChange={setSyncMs} hint={<Kbd>, .</Kbd>} />
-                </div>
-                {ko.enabled && (
-                  <button
-                    type="button"
-                    onClick={() => setKo({ ...ko, mode: nextKoMode(ko.mode) })}
-                    aria-pressed={ko.mode !== 'hide'}
-                    className={`${CHIP} ${ko.mode !== 'hide' ? CHIP_ON : CHIP_OFF}`}
-                  >
-                    한국어 {KO_MODE_LABEL[ko.mode]} <Kbd>K</Kbd>
-                  </button>
-                )}
-              </div>
             </>
           )}
 
