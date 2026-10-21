@@ -393,10 +393,10 @@ async def ice_candidate(request: SmallWebRTCPatchRequest):
 
 
 @app.get("/api/calls")
-async def calls_endpoint(limit: int = 50):
-    """저장된 통화 목록(최신순)과 누적 합계. 화면의 통화 기록과 홈 합계가 쓴다."""
+async def calls_endpoint(limit: int = 50, partner: Optional[str] = None):
+    """저장된 통화 목록(최신순)과 누적 합계. partner=<id>면 그 사람의 통화만(park는 친구 표시가 없는 통화)."""
     limit = max(1, min(limit, 200))
-    calls = await asyncio.to_thread(list_calls, limit)
+    calls = await asyncio.to_thread(list_calls, limit, partner)
     return {"totals": await asyncio.to_thread(call_totals), "calls": calls}
 
 

@@ -7,6 +7,7 @@ Gemini Live(Vertex) 통화를 돌린다. 통화가 끝나면 마이크 원음 WA
 """
 
 import asyncio
+import functools
 import logging
 import os
 import re
@@ -15,13 +16,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
-from google.genai.types import EndSensitivity, StartSensitivity
+from google.genai.types import AudioTranscriptionConfig, EndSensitivity, StartSensitivity
 
 from server.config_utils import get_project_id
 from server.lesson import session_time_limit_from_env
 from server import partner_memory
 from server.partner_memory import PARTNER_IDS, PARTNER_NAMES
 from server.pricing import UsageTotals, estimate_cost
+from server.transcript_clean import clean_learner_text
 from server.transcript_store import (
     get_transcript_dir,
     save_call_audio,
@@ -60,6 +62,9 @@ MISSION_RE = re.compile(r'trying to:\s*"([^"]+)"')
 MIN_LEARNER_WORDS = 3
 # Gemini 입력 받아쓰기가 잡음을 `{}`로 내보낼 때가 있다(2026-10-20 브라우저 시험: "{} hi, I'm ...").
 NOISE_MARK_RE = re.compile(r"\{\s*\}")
+# 입력 전사 언어 힌트(쉼표 구분 BCP-47). 빈 문자열이면 힌트를 넣지 않는다(Vertex가 거부할 때 끄는 스위치).
+LIVE_INPUT_LANGUAGES_ENV = "LIVE_INPUT_LANGUAGES"
+DEFAULT_LIVE_INPUT_LANGUAGES = "en-US,ko-KR"
 NOT_YET_RESULT = {
     "status": "ignored",
     "reason": "The learner has not practiced yet in this call. Do not end the mission. Keep the conversation going.",
@@ -331,7 +336,7 @@ class CallRecord:
     usage: UsageTotals = field(default_factory=UsageTotals)
 
     def add_user(self, text: str) -> None:
-        clean = " ".join(NOISE_MARK_RE.sub(" ", text or "").split())
+        clean = clean_learner_text(" ".join(NOISE_MARK_RE.sub(" ", text or "").split()))
         if clean:
             self.chunks.append(("Me", clean))
 
@@ -464,6 +469,27 @@ def turn_settings(mode: Optional[str] = None):
     return params, None
 
 
+def live_input_languages(env=None) -> List[str]:
+    raw = (os.environ if env is None else env).get(LIVE_INPUT_LANGUAGES_ENV)
+    return [code.strip() for code in (DEFAULT_LIVE_INPUT_LANGUAGES if raw is None else raw).split(",") if code.strip()]
+
+
+@functools.lru_cache(maxsize=1)
+def live_service_class():
+    from pipecat.services.google.gemini_live.vertex.llm import GeminiLiveVertexLLMService
+
+    class TranscriptHintedLiveService(GeminiLiveVertexLLMService):
+        """입력 전사에 언어 힌트를 넣는다. pipecat은 힌트 없는 AudioTranscriptionConfig를 만들어 짧은 추임새를 한자로 받아쓴다."""
+
+        async def _connection_task_handler(self, config):
+            languages = live_input_languages()
+            if languages:
+                config.input_audio_transcription = AudioTranscriptionConfig(language_codes=languages)
+            await super()._connection_task_handler(config)
+
+    return TranscriptHintedLiveService
+
+
 async def run_bot(webrtc_connection, config: CallConfig) -> None:
     from pipecat.frames.frames import EndFrame, LLMRunFrame
     from pipecat.pipeline.pipeline import Pipeline
@@ -473,7 +499,6 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
     from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
     from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
     from pipecat.services.google.gemini_live.llm import ProactivityConfig
-    from pipecat.services.google.gemini_live.vertex.llm import GeminiLiveVertexLLMService
     from pipecat.services.llm_service import FunctionCallParams
     from pipecat.transports.base_transport import TransportParams
     from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
@@ -497,12 +522,13 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
 
     tools = mission_tools(config)
 
-    llm = GeminiLiveVertexLLMService(
+    live_service = live_service_class()
+    llm = live_service(
         project_id=get_project_id(),
         location=os.getenv("LOCATION", "us-central1"),
         tools=tools,
         inference_on_context_initialization=config.opener,
-        settings=GeminiLiveVertexLLMService.Settings(
+        settings=live_service.Settings(
             model=model,
             voice=config.voice,
             system_instruction=config.system_instruction,

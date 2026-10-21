@@ -170,6 +170,14 @@ class CallRecordTest(unittest.TestCase):
 
         self.assertEqual(record.chunks, [("Me", "hi, I'm S park")])
 
+    def test_cjk_filler_in_learner_turn_becomes_mm_or_is_stripped(self):
+        record = CallRecord()
+        record.add_user("嗯")
+        record.add_user("嗯 I think so")
+        record.add_partner("嗯")
+
+        self.assertEqual(record.chunks, [("Me", "(mm)"), ("Me", "I think so"), ("Partner", "嗯")])
+
     def test_learner_must_say_three_words_before_mission_can_end(self):
         record = CallRecord(chunks=[("Partner", "Hello there, how are you today?"), ("Me", "Hi")])
         self.assertFalse(record.learner_has_spoken())
