@@ -1,9 +1,11 @@
-import { BookmarkPlus, Check, Volume2 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { formatUsd, ReadglossOffError, type Cost, type Tutoring } from '../lib/api';
-import { phraseStatus, savePhrase } from '../lib/phrases';
-import { WordText } from './WordText';
-import { YouGlishSheet } from './YouGlishSheet';
+import { useMemo, type ReactNode } from 'react';
+import { formatUsd, type Cost, type Tutoring } from '../lib/api';
+import { isSingleWord, wordCount, type Unit } from '../lib/units';
+import { PronounceButton } from './PronounceButton';
+import { ReviewButtons, dimmed, useCards, useReview } from './ReviewButtons';
+import { StarButton } from './StarButton';
+import { UsStyle } from './UsStyle';
+import { WordText, WordUnitsProvider } from './WordText';
 
 const CAUSES: Record<string, string> = {
   english: '영어 표현',
@@ -11,88 +13,6 @@ const CAUSES: Record<string, string> = {
   both: '둘 다',
   unclear: '원인 불분명',
 };
-
-const cardKey = (text: string) => text.trim().replace(/\s+/g, ' ').toLowerCase();
-const cardable = (text: string) => text.trim().length >= 2 && text.length <= 1000 && /\p{L}/u.test(text);
-
-type Cards = { available: boolean; off: boolean; saved: Set<string>; mark: (text: string) => void; turnOff: () => void };
-
-function useCards(tutoring: Tutoring): Cards {
-  const texts = useMemo(() => {
-    const all = [...tutoring.corrections.map((c) => c.better), ...tutoring.good.map((g) => g.said)].filter(cardable);
-    return [...new Set(all)].slice(0, 40);
-  }, [tutoring]);
-  const [saved, setSaved] = useState<Set<string>>(() => new Set());
-  const [off, setOff] = useState(false);
-
-  useEffect(() => {
-    if (!texts.length) return;
-    let cancelled = false;
-    phraseStatus(texts).then(
-      (flags) => {
-        if (!cancelled) setSaved(new Set(texts.filter((_, i) => flags[i]).map(cardKey)));
-      },
-      (e: unknown) => {
-        if (!cancelled && e instanceof ReadglossOffError) setOff(true);
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [texts]);
-
-  return {
-    available: texts.length > 0,
-    off,
-    saved,
-    mark: (text) => setSaved((prev) => new Set(prev).add(cardKey(text))),
-    turnOff: () => setOff(true),
-  };
-}
-
-function CardButton({ text, translation, cards }: { text: string; translation: string; cards: Cards }) {
-  const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState(false);
-  if (cards.off || !cardable(text)) return null;
-  const done = cards.saved.has(cardKey(text));
-
-  async function save() {
-    setBusy(true);
-    setFailed(false);
-    try {
-      await savePhrase(text, translation.trim().slice(0, 300));
-      cards.mark(text);
-    } catch (e) {
-      if (e instanceof ReadglossOffError) cards.turnOff();
-      else setFailed(true);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const base = 'flex min-h-11 items-center gap-1.5 rounded-full border px-3 text-sm font-semibold whitespace-nowrap';
-  return (
-    <div className="mt-3">
-      {done ? (
-        <button type="button" disabled aria-label={`카드로 저장됨, ${text}`} className={`${base} border-call bg-call/10 text-ink`}>
-          <Check size={18} aria-hidden />
-          저장됨
-        </button>
-      ) : (
-        <button
-          type="button"
-          onClick={save}
-          disabled={busy}
-          aria-label={`${failed ? '카드로 저장 다시 시도' : '카드로 저장'}, ${text}`}
-          className={`${base} border-line bg-surface text-ink hover:bg-paper disabled:text-ink-soft`}
-        >
-          <BookmarkPlus size={18} aria-hidden />
-          {busy ? '저장 중' : failed ? '저장하지 못했어요. 다시 시도' : '카드로 저장'}
-        </button>
-      )}
-    </div>
-  );
-}
 
 export function CostLine({ cost, pending = false, className = '' }: { cost?: Cost | null; pending?: boolean; className?: string }) {
   if (pending) {
@@ -112,56 +32,41 @@ export function CostLine({ cost, pending = false, className = '' }: { cost?: Cos
   );
 }
 
-function Block({ title, children }: { title: string; children: ReactNode }) {
+function Block({ title, subtitle, children }: { title: string; subtitle?: string; children: ReactNode }) {
   return (
     <section className="mt-8">
-      <h3 className="mb-3 text-lg font-bold">{title}</h3>
+      <h3 className={subtitle ? 'text-lg font-bold' : 'mb-3 text-lg font-bold'}>{title}</h3>
+      {subtitle && <p className="mt-0.5 mb-3 text-sm text-ink-soft">{subtitle}</p>}
       <div className="divide-y divide-line rounded-2xl border border-line bg-surface">{children}</div>
     </section>
   );
 }
 
-function PronounceButton({ phrase }: { phrase: string }) {
-  const [open, setOpen] = useState(false);
-  const buttonRef = useRef<HTMLButtonElement>(null);
-
-  function close() {
-    setOpen(false);
-    buttonRef.current?.focus();
-  }
-
-  return (
-    <>
-      <button
-        ref={buttonRef}
-        type="button"
-        onClick={() => setOpen(true)}
-        aria-label={`발음 듣기, ${phrase}`}
-        aria-haspopup="dialog"
-        className="-my-1 flex min-h-11 shrink-0 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-sm font-semibold whitespace-nowrap text-ink hover:bg-paper"
-      >
-        <Volume2 size={18} aria-hidden />
-        발음 듣기
-      </button>
-      {open && <YouGlishSheet phrase={phrase} onClose={close} />}
-    </>
-  );
-}
-
-export function TutoringBlocks({ tutoring, isTeachback }: { tutoring: Tutoring; isTeachback: boolean }) {
+export function TutoringBlocks({ tutoring, isTeachback, stem }: { tutoring: Tutoring; isTeachback: boolean; stem?: string | null }) {
   const retry = tutoring.retry;
   const cards = useCards(tutoring);
+  const review = useReview(stem);
+  const usStyle = tutoring.us_style ?? [];
+  const units = useMemo<Unit[]>(
+    () => tutoring.vocab.filter((v) => wordCount(v.word) >= 2).map((v) => ({ text: v.word, gloss: v.meaning_ko })),
+    [tutoring.vocab],
+  );
   return (
-    <>
+    <WordUnitsProvider value={units}>
       {cards.off && cards.available && (
         <p className="mt-6 text-sm text-ink-soft" role="status">
           readgloss가 꺼져 있어 카드로 저장할 수 없어요.
         </p>
       )}
+      {review.error && (
+        <p className="mt-4 text-sm text-ink-soft" role="alert">
+          {review.error}
+        </p>
+      )}
       {tutoring.corrections.length > 0 && (
         <Block title="고쳐 말하기">
           {tutoring.corrections.map((c, i) => (
-            <div key={i} className="p-4">
+            <div key={i} className={`p-4 ${dimmed(review, 'correction', c.better)}`}>
               <p className="text-ink-soft line-through decoration-ink-soft/50">
                 <WordText text={c.said} />
               </p>
@@ -174,7 +79,7 @@ export function TutoringBlocks({ tutoring, isTeachback }: { tutoring: Tutoring; 
                 <PronounceButton phrase={c.better} />
               </div>
               {c.why && <p className="mt-2 text-sm leading-relaxed text-ink-soft">{c.why}</p>}
-              <CardButton text={c.better} translation={c.why} cards={cards} />
+              <ReviewButtons kind="correction" text={c.better} translation={c.why} choices={['save', 'known', 'misheard']} review={review} cards={cards} />
             </div>
           ))}
         </Block>
@@ -187,10 +92,12 @@ export function TutoringBlocks({ tutoring, isTeachback }: { tutoring: Tutoring; 
                 <p className="min-w-0 font-semibold">
                   <WordText text={g.said} />
                 </p>
-                <PronounceButton phrase={g.said} />
+                <div className="-my-1 flex shrink-0 items-center gap-2">
+                  <PronounceButton phrase={g.said} />
+                  <StarButton kind={isSingleWord(g.said) ? 'word' : 'phrase'} text={g.said} gloss={g.note} />
+                </div>
               </div>
               {g.note && <p className="mt-1 text-sm leading-relaxed text-ink-soft">{g.note}</p>}
-              <CardButton text={g.said} translation={g.note} cards={cards} />
             </div>
           ))}
         </Block>
@@ -198,7 +105,7 @@ export function TutoringBlocks({ tutoring, isTeachback }: { tutoring: Tutoring; 
       {tutoring.vocab.length > 0 && (
         <Block title="기억할 단어">
           {tutoring.vocab.map((v, i) => (
-            <div key={i} className="p-4">
+            <div key={i} className={`p-4 ${dimmed(review, 'vocab', v.word)}`}>
               <div className="flex items-start justify-between gap-3">
                 <p className="min-w-0">
                   <span className="font-semibold">
@@ -206,15 +113,29 @@ export function TutoringBlocks({ tutoring, isTeachback }: { tutoring: Tutoring; 
                   </span>
                   {v.meaning_ko && <span className="ml-2 text-ink-soft">{v.meaning_ko}</span>}
                 </p>
-                <PronounceButton phrase={v.word} />
+                <div className="-my-1 flex shrink-0 items-center gap-2">
+                  <PronounceButton phrase={v.word} />
+                  <StarButton
+                    kind={isSingleWord(v.word) ? 'word' : 'phrase'}
+                    text={v.word}
+                    gloss={v.meaning_ko}
+                    sentence={v.example}
+                  />
+                </div>
               </div>
               {v.example && (
                 <p className="mt-1 text-sm text-ink-soft">
                   <WordText text={v.example} />
                 </p>
               )}
+              <ReviewButtons kind="vocab" text={v.word} choices={['known']} review={review} cards={cards} />
             </div>
           ))}
+        </Block>
+      )}
+      {usStyle.length > 0 && (
+        <Block title="미국식으로 말하기" subtitle="내가 놓친 것만 골랐어요">
+          <UsStyle items={usStyle} review={review} cards={cards} />
         </Block>
       )}
       {tutoring.pragmatics.length > 0 && (
@@ -255,6 +176,6 @@ export function TutoringBlocks({ tutoring, isTeachback }: { tutoring: Tutoring; 
           )}
         </section>
       )}
-    </>
+    </WordUnitsProvider>
   );
 }

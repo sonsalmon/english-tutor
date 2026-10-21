@@ -7,6 +7,7 @@ Gemini Live(Vertex) 통화를 돌린다. 통화가 끝나면 마이크 원음 WA
 """
 
 import asyncio
+import functools
 import logging
 import os
 import re
@@ -15,13 +16,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
-from google.genai.types import EndSensitivity, StartSensitivity
+from google.genai.types import AudioTranscriptionConfig, EndSensitivity, StartSensitivity
 
 from server.config_utils import get_project_id
 from server.lesson import session_time_limit_from_env
 from server import partner_memory
 from server.partner_memory import PARTNER_IDS, PARTNER_NAMES
 from server.pricing import UsageTotals, estimate_cost
+from server.transcript_clean import clean_learner_text
 from server.transcript_store import (
     get_transcript_dir,
     save_call_audio,
@@ -32,8 +34,6 @@ from server.transcript_store import (
 logger = logging.getLogger(__name__)
 
 MODES = ("mission", "freetalk", "teachback", "smalltalk")
-SMALLTALK_TIME_LIMIT_ENV = "SMALLTALK_TIME_LIMIT"
-DEFAULT_SMALLTALK_TIME_LIMIT = 300
 PAUSE_LIMIT_ENV = "PAUSE_LIMIT_SEC"
 DEFAULT_PAUSE_LIMIT_SEC = 600
 MAX_INSTRUCTION_CHARS = 30_000
@@ -60,6 +60,9 @@ MISSION_RE = re.compile(r'trying to:\s*"([^"]+)"')
 MIN_LEARNER_WORDS = 3
 # Gemini 입력 받아쓰기가 잡음을 `{}`로 내보낼 때가 있다(2026-10-20 브라우저 시험: "{} hi, I'm ...").
 NOISE_MARK_RE = re.compile(r"\{\s*\}")
+# 입력 전사 언어 힌트(쉼표 구분 BCP-47). 빈 문자열이면 힌트를 넣지 않는다(Vertex가 거부할 때 끄는 스위치).
+LIVE_INPUT_LANGUAGES_ENV = "LIVE_INPUT_LANGUAGES"
+DEFAULT_LIVE_INPUT_LANGUAGES = "en-US,ko-KR"
 NOT_YET_RESULT = {
     "status": "ignored",
     "reason": "The learner has not practiced yet in this call. Do not end the mission. Keep the conversation going.",
@@ -155,10 +158,23 @@ def vad_summary(overrides: dict) -> Optional[str]:
     return " ".join(parts) or None
 
 
-def smalltalk_time_limit_from_env(env=None) -> int:
-    """가벼운 대화 통화의 제한 시간(초). `SMALLTALK_TIME_LIMIT`(기본 300)."""
-    env = os.environ if env is None else env
-    return int(env.get(SMALLTALK_TIME_LIMIT_ENV, str(DEFAULT_SMALLTALK_TIME_LIMIT)))
+def time_limit_for_mode(mode: Optional[str], env=None) -> Optional[int]:
+    """통화 모드별 서버 제한 시간(초). 친구 통화(smalltalk)는 제한이 없어 None이다.
+
+    나머지는 `SESSION_TIME_LIMIT`(기본 180), `TEACHBACK_TIME_LIMIT`(기본 900)을 따른다.
+    """
+    if mode == "smalltalk":
+        return None
+    return session_time_limit_from_env("teachback" if mode == "teachback" else None, env)
+
+
+# pipecat Gemini Live 서비스가 재연결을 포기할 때 ErrorFrame에 담는 문장(MAX_CONSECUTIVE_FAILURES).
+GAVE_UP_MARK = "Max consecutive failures"
+
+
+def llm_gave_up(error_text: Any) -> bool:
+    """Gemini 연결을 되살리지 못해 이 통화는 더 이어 갈 수 없는 오류인지."""
+    return GAVE_UP_MARK in str(error_text or "")
 
 
 def pause_limit_from_env(env=None) -> int:
@@ -214,11 +230,16 @@ class CallClock:
             return 0.0
         return self._now() - self._started - self.paused_total()
 
-    def check(self, time_limit: float, pause_limit: float) -> Tuple[Optional[str], float]:
-        """(끝낼 이유, 다음 확인까지 기다릴 초). 이유는 "time_limit"·"pause_limit"·None."""
+    def check(self, time_limit: Optional[float], pause_limit: float) -> Tuple[Optional[str], Optional[float]]:
+        """(끝낼 이유, 다음 확인까지 기다릴 초). 이유는 "time_limit"·"pause_limit"·None.
+
+        time_limit이 None이면 시간 제한이 없다: 멈추지 않은 동안은 기다릴 시간도 None(변화가 올 때까지)이다.
+        """
         if self.paused:
             wait = pause_limit - self.paused_for()
             return ("pause_limit", 0.0) if wait <= 0 else (None, wait)
+        if time_limit is None:
+            return (None, None)
         wait = time_limit - self.elapsed()
         return ("time_limit", 0.0) if wait <= 0 else (None, wait)
 
@@ -240,10 +261,8 @@ class CallConfig:
         return self.mode != "teachback"
 
     @property
-    def time_limit(self) -> int:
-        if self.mode == "smalltalk":
-            return smalltalk_time_limit_from_env()
-        return session_time_limit_from_env("teachback" if self.mode == "teachback" else None)
+    def time_limit(self) -> Optional[int]:
+        return time_limit_for_mode(self.mode)
 
 
 PARTNER_MEMORY_MODES = ("smalltalk", "freetalk")
@@ -331,7 +350,7 @@ class CallRecord:
     usage: UsageTotals = field(default_factory=UsageTotals)
 
     def add_user(self, text: str) -> None:
-        clean = " ".join(NOISE_MARK_RE.sub(" ", text or "").split())
+        clean = clean_learner_text(" ".join(NOISE_MARK_RE.sub(" ", text or "").split()))
         if clean:
             self.chunks.append(("Me", clean))
 
@@ -464,6 +483,27 @@ def turn_settings(mode: Optional[str] = None):
     return params, None
 
 
+def live_input_languages(env=None) -> List[str]:
+    raw = (os.environ if env is None else env).get(LIVE_INPUT_LANGUAGES_ENV)
+    return [code.strip() for code in (DEFAULT_LIVE_INPUT_LANGUAGES if raw is None else raw).split(",") if code.strip()]
+
+
+@functools.lru_cache(maxsize=1)
+def live_service_class():
+    from pipecat.services.google.gemini_live.vertex.llm import GeminiLiveVertexLLMService
+
+    class TranscriptHintedLiveService(GeminiLiveVertexLLMService):
+        """입력 전사에 언어 힌트를 넣는다. pipecat은 힌트 없는 AudioTranscriptionConfig를 만들어 짧은 추임새를 한자로 받아쓴다."""
+
+        async def _connection_task_handler(self, config):
+            languages = live_input_languages()
+            if languages:
+                config.input_audio_transcription = AudioTranscriptionConfig(language_codes=languages)
+            await super()._connection_task_handler(config)
+
+    return TranscriptHintedLiveService
+
+
 async def run_bot(webrtc_connection, config: CallConfig) -> None:
     from pipecat.frames.frames import EndFrame, LLMRunFrame
     from pipecat.pipeline.pipeline import Pipeline
@@ -473,7 +513,6 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
     from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
     from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
     from pipecat.services.google.gemini_live.llm import ProactivityConfig
-    from pipecat.services.google.gemini_live.vertex.llm import GeminiLiveVertexLLMService
     from pipecat.services.llm_service import FunctionCallParams
     from pipecat.transports.base_transport import TransportParams
     from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
@@ -497,12 +536,13 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
 
     tools = mission_tools(config)
 
-    llm = GeminiLiveVertexLLMService(
+    live_service = live_service_class()
+    llm = live_service(
         project_id=get_project_id(),
         location=os.getenv("LOCATION", "us-central1"),
         tools=tools,
         inference_on_context_initialization=config.opener,
-        settings=GeminiLiveVertexLLMService.Settings(
+        settings=live_service.Settings(
             model=model,
             voice=config.voice,
             system_instruction=config.system_instruction,
@@ -575,9 +615,22 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
                 await asyncio.wait_for(clock_changed.wait(), timeout=wait)
             except asyncio.TimeoutError:
                 pass
-        logger.info("Session ended: %s (limit %ss, pause limit %ss)", reason, config.time_limit, pause_limit)
+        logger.info("Session ended: %s (limit %s, pause limit %ss)", reason, config.time_limit or "none", pause_limit)
         data = {"type": "time_limit"} if reason == "time_limit" else {"type": "time_limit", "reason": reason}
         await worker.queue_frames([RTVIServerMessageFrame(data=data), EndFrame()])
+
+    # 제한 시간이 없는 친구 통화에서 Gemini 연결이 끝내 살아나지 않으면 통화를 끝내 화면이 '다시 걸까요?'를 보이게 한다.
+    # (pipecat은 그냥 두면 말 없는 통화로 계속 열려 있다.)
+    gave_up = False
+
+    @worker.event_handler("on_pipeline_error")
+    async def on_pipeline_error(worker_, frame):
+        nonlocal gave_up
+        if gave_up or not llm_gave_up(getattr(frame, "error", "")):
+            return
+        gave_up = True
+        logger.warning("Gemini connection lost for good; ending the call")
+        await worker.queue_frames([EndFrame()])
 
     # 클라이언트가 sendClientMessage("pause"|"resume")을 보내면 RTVIProcessor가 on_client_message를 부른다.
     @worker.rtvi.event_handler("on_client_message")

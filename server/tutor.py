@@ -28,11 +28,12 @@ import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from google import genai
 from google.genai import types
 
+from server import known as known_store
 from server.config_utils import get_project_id
 from server.partner_memory import PARTNER_NAMES
 from server.pricing import UsageTotals
@@ -62,6 +63,15 @@ MAX_CORRECTIONS = 5
 MAX_GOOD = 3
 MAX_VOCAB = 6
 MAX_PRAGMATICS = 4
+MAX_US_STYLE = 3
+MAX_US_SAID = 160
+MAX_US_KOREAN_WAY = 140
+MAX_US_NATURAL = 80
+MAX_US_NATURAL_WORDS = 10
+MAX_US_WHY = 240
+# said가 전문의 한 줄과 이만큼 겹쳐야 실제로 한 말로 본다. natural이 이만큼 겹치면 이미 말한 표현으로 본다.
+US_SAID_OVERLAP = 0.7
+US_NATURAL_SAID_OVERLAP = 0.8
 MAX_PHRASES = 4
 MAX_UNANSWERED = 8
 MAX_CLIP_QUERY = 100
@@ -85,7 +95,7 @@ _CONTRACT_HINT = """{
   "corrections": [{"said": "...", "better": "...", "why": "한국어 한두 문장"}],
   "good": [{"said": "...", "note": "왜 좋았는지 한 줄"}],
   "vocab": [{"word": "...", "meaning_ko": "...", "example": "...", "etymology": "어근이 있으면 한 줄, 없으면 빈 문자열"}],
-  "pragmatics": [{"pattern": "...", "note": "미국 직장 화용 차이 한 줄(한국어)"}],
+  "us_style": [{"said": "학습자가 실제로 한 말", "korean_way": "한국어로 이렇게 생각했다는 설명 한 줄", "natural": "미국에서 자연스러운 표현 하나(2-8 words)", "why": "문화·말하는 틀의 차이를 한국어 한두 문장"}],
   "retry": {"goal": "다음 통화에서 쓸 목표 한두 줄(영어)", "target_phrases": ["...", "..."]},
   "clip_query": "3-8 word English YouTube search query",
   "topic_keywords": ["kitchen", "cutting board", "busy week"],
@@ -104,7 +114,12 @@ Analysis rules:
 - corrections: the {max_corrections} most useful fixes. "said" is the learner's phrase (lightly cleaned); "better" is a natural American phrasing; "why" is ONE short Korean sentence.
 - good: up to {max_good} things the learner said well. "note" is one short Korean sentence on why it worked.
 - vocab: up to {max_vocab} useful words/expressions from the call. "meaning_ko" in Korean; "example" a short English sentence; "etymology" one short Korean line about the root if the word has a recognizable one, otherwise "".
-- pragmatics: American workplace pragmatic/register differences worth knowing (e.g., lead with the bottom line, apologize less, accept praise gracefully). "note" is one short Korean sentence.
+- us_style: 0-{max_us_style} items; an empty list is the normal, correct answer. Each item is ONE sentence the learner actually said (or reached for in Korean) where an American would say it differently because of a cultural or framing difference, and the learner did not manage it. "said" is quoted from a Me line (or from the raw verbatim transcription below). "korean_way" is ONE short Korean line on how the learner was thinking in Korean. "natural" is ONE natural American expression (2-8 words) that the learner did NOT say anywhere in this call; if the learner said the same expression or a close variant at any point, leave the item out. "why" is one or two short Korean sentences on the cultural or framing difference. Plain grammar slips and transcription errors belong in corrections, not here. Forbidden: general advice about relationships, politeness, confidence or sharing feelings; any expression in the ALREADY KNOWN list; anything not tied to a sentence the learner said.
+  Good example: said "How old are you?", korean_way "한국에서는 첫 만남에 나이로 서로의 위치를 확인한다", natural "So, what do you do?", why "영어권의 첫 대화는 나이 대신 일과 취미로 서로를 알아가요. 나이는 사적인 질문으로 들릴 수 있어요."
+  Good example: said "I'm sorry for your trouble.", korean_way "수고하셨어요/죄송합니다를 그대로 옮겼다", natural "Thanks for jumping on this.", why "한국어는 상대의 수고에 미안함으로 답하지만 영어는 고마움으로 답해요."
+  Bad example: "Sharing personal feelings helps build relationships." (general advice, no expression)
+  Bad example: natural "Sorry?" when the learner already said "Sorry?" in this call.
+- "(mm)" and "(unclear)" in Me lines are short sounds or noise. Ignore them.
 - Include corrections that the Partner already pointed out during the call.
 - retry.goal: 1-2 English sentences describing what to focus on in the next call of the same scene.
 - retry.target_phrases: 2-4 short English phrases the learner should try to use next time.
@@ -136,6 +151,7 @@ def build_prompt(transcript: str) -> str:
         max_good=MAX_GOOD,
         max_vocab=MAX_VOCAB,
         max_gaps=MAX_THINKING_GAPS,
+        max_us_style=MAX_US_STYLE,
         contract=_CONTRACT_HINT,
         transcript=transcript,
     )
@@ -272,11 +288,12 @@ def _spoken_words(transcript: str) -> set:
     return {w for line in _SPOKEN_LINE_RE.findall(transcript) for w in _long_words(line)}
 
 
-def normalize_friend_message(value: Any, transcript: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def normalize_friend_message(value: Any, transcript: Optional[str] = None, *, verbatim: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """friend_message 정리: 길이 상한, 빈 항목 제외, 최대 5개. 쓸 만한 phrase가 하나도 없으면 None.
 
     transcript가 있으면 phrase의 3글자 이상 단어 중 절반 미만이 전문(Me·Partner 줄)에 나오면 지어낸 표현으로 보고 버린다.
-    note는 확인하지 않는다."""
+    학습자가 이번 통화에서 직접 말한 표현(Me 줄·받아쓰기 원문)도 버린다. note는 확인하지 않는다."""
+    lines = _learner_line_tokens(transcript, verbatim) if transcript is not None else None
     if not isinstance(value, dict):
         return None
     spoken = _spoken_words(transcript) if transcript is not None else None
@@ -292,6 +309,8 @@ def normalize_friend_message(value: Any, transcript: Optional[str] = None) -> Op
             words = _long_words(phrase)
             if sum(w in spoken for w in words) * 2 < len(words):
                 continue
+        if lines is not None and _used_by_learner(phrase, lines):
+            continue
         phrases.append({"phrase": phrase, "note": _capped(item.get("note"), MAX_FRIEND_NOTE)})
         if len(phrases) >= MAX_FRIEND_PHRASES:
             break
@@ -304,9 +323,119 @@ def normalize_friend_message(value: Any, transcript: Optional[str] = None) -> Op
     }
 
 
-def normalize_tutor_json(raw: Any, transcript: Optional[str] = None) -> Dict[str, Any]:
-    """모델 출력을 고정 계약 모양으로 정리한다(누락 키 기본값, 개수 제한)."""
+_ME_LINE_RE = re.compile(r"^\s*\**Me\**:\**[ \t]*(.*)$", re.MULTILINE)
+
+
+def _tokens(text: str) -> List[str]:
+    return _WORD_RE.findall(text.lower().replace("\u2019", "'"))
+
+
+def _learner_line_tokens(transcript: str, verbatim: Optional[str]) -> List[set]:
+    """학습자가 말한 줄(전문의 Me 줄과 받아쓰기 원문)마다 낙말 집합."""
+    lines = _ME_LINE_RE.findall(transcript or "") + (verbatim or "").splitlines()
+    return [set(_tokens(line)) for line in lines if line.strip()]
+
+
+def _overlap(words: List[str], line: set) -> float:
+    return sum(w in line for w in words) / len(words) if words else 0.0
+
+
+def _used_by_learner(text: str, lines: List[set]) -> bool:
+    """표현의 낱말(3글자 이상)이 전부 학습자가 말한 한 줄 안에 들어 있으면 이미 쓴 표현이다(단어 하나라도 새로 고친 표현은 남긴다)."""
+    words = _long_words(text) or _tokens(text)
+    return bool(words) and any(_overlap(words, line) >= 1.0 for line in lines)
+
+
+def _content_words(text: str) -> set:
+    """축약(’s·’m 등)과 3글자 미만 낱말을 떼고 남은 낱말 집합(“It’s so tiring”과 “It is so tiring”이 같게 나온다)."""
+    return {w for w in (t.split("'")[0] for t in _tokens(text)) if len(w) >= 3}
+
+
+def _repeats_correction(row: Dict[str, str], corrections: List[Dict[str, str]]) -> bool:
+    """단순 문법 실수는 고쳐 말하기 몰이다: said가 교정의 said와 겹치거나 natural이 교정의 better와 사실상 같으면 True."""
+    said_words = _tokens(row["said"])
+    natural = _content_words(row["natural"])
+    for c in corrections:
+        if said_words and _overlap(said_words, set(_tokens(c.get("said", "")))) >= US_SAID_OVERLAP:
+            return True
+        better = _content_words(c.get("better", ""))
+        if natural and natural == better:
+            return True
+    return False
+
+
+def normalize_us_style(
+    value: Any,
+    transcript: Optional[str] = None,
+    *,
+    verbatim: Optional[str] = None,
+    known: Iterable[str] = (),
+    gap_english: Iterable[str] = (),
+    corrections: Iterable[Dict[str, str]] = (),
+) -> List[Dict[str, str]]:
+    """us_style 정리: 모델이 지어내거나 학습자가 이미 한 말을 가르치는 항목을 버린다(최대 3개).
+
+    transcript가 있으면 (1) said가 전문·받아쓰기의 한 줄과 70% 이상 겹치지 않으면, (2) natural의 낙말이 한 줄 안에
+    80% 이상 있으면 버린다. known에 있는 표현이거나 thinking_gaps의 english와 같은 natural도 버린다(thinking_gaps 우선).
+    corrections와 같은 말을 다루는 항목(said 겹침, natural≈better)도 버린다(단순 문법 실수는 고쳐 말하기 몰).
+    """
+    if not isinstance(value, list):
+        return []
+    lines = _learner_line_tokens(transcript, verbatim) if transcript is not None else None
+    known_keys = known_store.keys_of(known)
+    gap_keys = known_store.keys_of(gap_english)
+    corrections = list(corrections)
+    rows: List[Dict[str, str]] = []
+    seen: set = set()
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        row = {
+            "said": _capped(item.get("said"), MAX_US_SAID),
+            "korean_way": _capped(item.get("korean_way"), MAX_US_KOREAN_WAY),
+            "natural": _capped(item.get("natural"), MAX_US_NATURAL),
+            "why": _capped(item.get("why"), MAX_US_WHY),
+        }
+        key = known_store.make_key(row["natural"])
+        if not (row["said"] and row["natural"] and row["why"] and key) or len(key.split()) > MAX_US_NATURAL_WORDS:
+            continue
+        if key in seen or key in gap_keys or known_store.is_known(row["natural"], known_keys):
+            continue
+        if _repeats_correction(row, corrections):
+            continue
+        if lines is not None:
+            said_words = _tokens(row["said"])
+            if not said_words or not any(_overlap(said_words, line) >= US_SAID_OVERLAP for line in lines):
+                continue
+            nat_words = _long_words(row["natural"]) or _tokens(row["natural"])
+            if any(_overlap(nat_words, line) >= US_NATURAL_SAID_OVERLAP for line in lines):
+                continue
+        seen.add(key)
+        rows.append(row)
+        if len(rows) >= MAX_US_STYLE:
+            break
+    return rows
+
+
+def _drop_known(rows: List[Dict[str, str]], field: str, known_keys: set) -> List[Dict[str, str]]:
+    return [r for r in rows if not known_store.is_known(r.get(field, ""), known_keys)]
+
+
+def normalize_tutor_json(
+    raw: Any,
+    transcript: Optional[str] = None,
+    *,
+    verbatim: Optional[str] = None,
+    known: Iterable[str] = (),
+) -> Dict[str, Any]:
+    """모델 출력을 고정 계약 모양으로 정리한다(누락 키 기본값, 개수 제한).
+
+    pragmatics는 항상 빈 목록이다(일반 조언은 내지 않고 us_style가 대신한다). known은 학습자가 이미 아는 표현이라
+    corrections의 better·vocab의 word·us_style의 natural에서 빠진다.
+    """
     data = extract_json(raw)
+    known = list(known)
+    known_keys = known_store.keys_of(known)
 
     retry_raw = data.get("retry") if isinstance(data.get("retry"), dict) else {}
     phrases = [
@@ -315,15 +444,29 @@ def normalize_tutor_json(raw: Any, transcript: Optional[str] = None) -> Dict[str
         if _clean_str(p)
     ][:MAX_PHRASES]
 
+    thinking_gaps = normalize_thinking_gaps(data.get("thinking_gaps"))
+    corrections = _drop_known(_rows(data, "corrections", ["said", "better", "why"], MAX_CORRECTIONS), "better", known_keys)
+    vocab = _drop_known(_rows(data, "vocab", ["word", "meaning_ko", "example", "etymology"], MAX_VOCAB), "word", known_keys)
+    if transcript is not None:
+        lines = _learner_line_tokens(transcript, verbatim)
+        vocab = [r for r in vocab if not _used_by_learner(r["word"], lines)]
     return {
         "clip_query": normalize_clip_query(_clean_str(data.get("clip_query"))),
-        "corrections": _rows(data, "corrections", ["said", "better", "why"], MAX_CORRECTIONS),
+        "corrections": corrections,
         "good": _rows(data, "good", ["said", "note"], MAX_GOOD),
-        "vocab": _rows(data, "vocab", ["word", "meaning_ko", "example", "etymology"], MAX_VOCAB),
-        "pragmatics": _rows(data, "pragmatics", ["pattern", "note"], MAX_PRAGMATICS),
-        "thinking_gaps": normalize_thinking_gaps(data.get("thinking_gaps")),
+        "vocab": vocab,
+        "pragmatics": [],
+        "us_style": normalize_us_style(
+            data.get("us_style"),
+            transcript,
+            verbatim=verbatim,
+            known=known,
+            gap_english=[g["english"] for g in thinking_gaps],
+            corrections=corrections,
+        ),
+        "thinking_gaps": thinking_gaps,
         "topic_keywords": normalize_topic_keywords(data.get("topic_keywords")),
-        "friend_message": normalize_friend_message(data.get("friend_message"), transcript),
+        "friend_message": normalize_friend_message(data.get("friend_message"), transcript, verbatim=verbatim),
         "retry": {
             "goal": _clean_str(retry_raw.get("goal")),
             "target_phrases": phrases,
@@ -343,6 +486,7 @@ def is_empty_result(data: Dict[str, Any]) -> bool:
         or data.get("good")
         or data.get("vocab")
         or data.get("pragmatics")
+        or data.get("us_style")
         or retry.get("goal")
         or retry.get("target_phrases")
     )
@@ -423,6 +567,11 @@ def with_verbatim(prompt: str, verbatim: Optional[str]) -> str:
     return prompt + _VERBATIM_SECTION.format(verbatim=verbatim)
 
 
+def with_known(prompt: str, known: Iterable[str]) -> str:
+    """프롬프트 끝에 ALREADY KNOWN 구간을 붙인다(아는 표현이 없으면 그대로)."""
+    return prompt + known_store.prompt_block(list(known))
+
+
 def transcribe_verbatim(wav_path, *, model_name: Optional[str] = None) -> str:
     """마이크 원음 WAV를 교정 없이 들린 그대로 받아쓴다(Vertex, TUTOR_MODEL)."""
     data = Path(wav_path).read_bytes()
@@ -476,20 +625,22 @@ def analyze_transcript(
     generate_text: Optional[Callable[[str], Any]] = None,
     model_name: Optional[str] = None,
     verbatim: Optional[str] = None,
+    known: Iterable[str] = (),
 ) -> Dict[str, Any]:
     """대화 전문을 분석해 계약 JSON을 돌려준다.
 
     generate_text를 주면 그걸 호출한다(테스트용). 없으면 Vertex AI 텍스트 모델을
-    한 번 부르고, 파싱에 실패하면 한 번 더 시도한다.
+    한 번 부르고, 파싱에 실패하면 한 번 더 시도한다. known은 학습자가 이미 아는 표현(프롬프트와 코드 필터 둘 다에 쓴다).
     """
     if generate_text is None:
         generate_text = make_generate_text(model_name)
 
-    prompt = with_verbatim(build_prompt(transcript), verbatim)
+    known = list(known)
+    prompt = with_known(with_verbatim(build_prompt(transcript), verbatim), known)
     last_error: Optional[Exception] = None
     for attempt in range(2):
         try:
-            result = normalize_tutor_json(generate_text(prompt), transcript)
+            result = normalize_tutor_json(generate_text(prompt), transcript, verbatim=verbatim, known=known)
             if is_empty_result(result):
                 raise ValueError("빈 결과(5개 섹션이 모두 비었습니다)")
             return result
@@ -529,17 +680,20 @@ def run_tutoring(
     *,
     generate_text: Optional[Callable[[str], Any]] = None,
     transcribe: Optional[Callable[[Any], str]] = None,
+    known: Optional[Iterable[str]] = None,
 ) -> Tuple[Dict[str, Any], bool]:
     """전문 파일을 읽어 분석·저장하고 (계약 JSON, 저장 성공 여부)를 돌려준다.
 
     분석이 실패(빈 결과 포함)하면 예외를 그대로 올리며, 이때 저장은 하지 않아
-    기존 JSON을 빈 내용으로 덮어쓰지 않는다.
+    기존 JSON을 빈 내용으로 덮어쓰지 않는다. known을 주지 않으면 알려 준 표현 저장소와 학습자 카드에서 읽는다.
     """
     path = Path(transcript_path)
     text = path.read_text(encoding="utf-8")
+    if known is None:
+        known = known_store.analysis_expressions()
     with track_usage() as usage:
         verbatim = _verbatim_for(path, get_tutoring_dir(), transcribe)
-        data = analyze_transcript(text, generate_text=generate_text, verbatim=verbatim)
+        data = analyze_transcript(text, generate_text=generate_text, verbatim=verbatim, known=known)
     _add_cost(data, usage)
     saved = save_tutoring(data, path) is not None
     return data, saved
@@ -648,7 +802,9 @@ def normalize_teachback_json(raw: Any, *, max_unanswered: int = MAX_UNANSWERED) 
     """
     data = extract_json(raw)
     result = normalize_tutor_json(data)
-    result.pop("clip_query", None)  # teach-back 계약은 그대로 둔다
+    result["pragmatics"] = _rows(data, "pragmatics", ["pattern", "note"], MAX_PRAGMATICS)  # teach-back 계약은 그대로 둔다
+    result.pop("us_style", None)
+    result.pop("clip_query", None)
     result.pop("thinking_gaps", None)
     result.pop("topic_keywords", None)
     result.pop("friend_message", None)
@@ -821,7 +977,8 @@ if __name__ == "__main__":
     assert normalize_clip_query("coworkers small talk, weekend!") == "coworkers small talk weekend"
     assert normalize_clip_query("Seoul") == "" and normalize_clip_query("a " * 11) == ""
     _out = analyze_transcript("Me: I am agree", generate_text=lambda _prompt: _fake)
-    assert set(_out) == {"corrections", "good", "vocab", "pragmatics", "retry", "clip_query", "thinking_gaps", "topic_keywords", "friend_message"}, _out
+    assert set(_out) == {"corrections", "good", "vocab", "pragmatics", "us_style", "retry", "clip_query", "thinking_gaps", "topic_keywords", "friend_message"}, _out
+    assert _out["pragmatics"] == [] and _out["us_style"] == [], _out
     assert _out["clip_query"] == "" and _out["thinking_gaps"] == [] and _out["topic_keywords"] == [], _out
     assert normalize_topic_keywords([" Cutting-Board! ", "talk", "Small Talk", "kitchen", "kitchen", "x" * 31, 5, "a1"]) == ["cutting board", "kitchen", "a"]
     assert "topic_keywords" not in normalize_teachback_json({"topic_keywords": ["kitchen"]})

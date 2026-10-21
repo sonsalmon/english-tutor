@@ -32,20 +32,32 @@ class ParseCallConfigTest(unittest.TestCase):
             self.assertEqual(config.time_limit, 900)
             self.assertEqual(mission.time_limit, 600)
 
-    def test_smalltalk_has_opener_and_its_own_time_limit(self):
+    def test_smalltalk_has_opener_and_no_time_limit(self):
+        # 친구 통화는 서버 시간 제한이 없다(옵션 환경 변수를 줘도 무시).
         with mock.patch.dict(os.environ, {"SESSION_TIME_LIMIT": "600", "TEACHBACK_TIME_LIMIT": "900", "SMALLTALK_TIME_LIMIT": "420"}):
             config = parse_call_config({"system_instruction": INSTRUCTION, "mode": "smalltalk"})
             mission = parse_call_config({"system_instruction": INSTRUCTION, "mode": "mission"})
 
             self.assertTrue(config.opener)
-            self.assertEqual(config.time_limit, 420)
+            self.assertIsNone(config.time_limit)
             self.assertEqual(mission.time_limit, 600)
 
-    def test_smalltalk_time_limit_defaults_to_300(self):
-        env = {k: v for k, v in os.environ.items() if k != "SMALLTALK_TIME_LIMIT"}
+    def test_time_limit_by_mode(self):
+        env = {"SESSION_TIME_LIMIT": "600", "TEACHBACK_TIME_LIMIT": "900"}
+        limits = {mode: call_bot.time_limit_for_mode(mode, env) for mode in call_bot.MODES}
+
+        self.assertEqual(limits, {"mission": 600, "freetalk": 600, "teachback": 900, "smalltalk": None})
+        self.assertEqual(call_bot.time_limit_for_mode(None, env), 600)
+
+    def test_pause_limit_defaults_to_600(self):
+        env = {k: v for k, v in os.environ.items() if k != "PAUSE_LIMIT_SEC"}
         with mock.patch.dict(os.environ, env, clear=True):
-            self.assertEqual(call_bot.smalltalk_time_limit_from_env(), 300)
             self.assertEqual(call_bot.pause_limit_from_env(), 600)
+
+    def test_llm_gave_up_matches_the_pipecat_message(self):
+        self.assertTrue(call_bot.llm_gave_up("Max consecutive failures (3) reached, treating as fatal error"))
+        self.assertFalse(call_bot.llm_gave_up("Connection error (failure 1/3): closed"))
+        self.assertFalse(call_bot.llm_gave_up(None))
 
     def test_smalltalk_mission_name_comes_from_instruction(self):
         config = parse_call_config({"system_instruction": 'You are Ms. Park. trying to: "Small Talk"', "mode": "smalltalk"})
@@ -144,6 +156,17 @@ class CallClockTest(unittest.TestCase):
 
         self.assertEqual(self.clock.check(180, 600), ("pause_limit", 0.0))
 
+    def test_check_without_time_limit_never_ends_but_still_enforces_pause_limit(self):
+        self.clock.start()
+        self.time.t += 100000
+        self.assertEqual(self.clock.check(None, 600), (None, None))
+        self.clock.pause()
+        self.time.t += 599
+        self.assertEqual(self.clock.check(None, 600), (None, 1))
+        self.time.t += 1
+
+        self.assertEqual(self.clock.check(None, 600), ("pause_limit", 0.0))
+
     def test_resume_gives_back_the_remaining_session_time(self):
         self.clock.start()
         self.time.t += 170
@@ -169,6 +192,14 @@ class CallRecordTest(unittest.TestCase):
         record.add_user("{ }")
 
         self.assertEqual(record.chunks, [("Me", "hi, I'm S park")])
+
+    def test_cjk_filler_in_learner_turn_becomes_mm_or_is_stripped(self):
+        record = CallRecord()
+        record.add_user("嗯")
+        record.add_user("嗯 I think so")
+        record.add_partner("嗯")
+
+        self.assertEqual(record.chunks, [("Me", "(mm)"), ("Me", "I think so"), ("Partner", "嗯")])
 
     def test_learner_must_say_three_words_before_mission_can_end(self):
         record = CallRecord(chunks=[("Partner", "Hello there, how are you today?"), ("Me", "Hi")])
@@ -462,8 +493,8 @@ class PartnerConfigTest(unittest.TestCase):
     def parse(self, **extra):
         return parse_call_config({"system_instruction": INSTRUCTION, "mode": "smalltalk", **extra})
 
-    def test_six_ids_are_kept(self):
-        for pid in ("priya", "omar", "lukas", "carmen", "jake", "chloe"):
+    def test_seven_ids_are_kept(self):
+        for pid in ("priya", "omar", "lukas", "carmen", "jake", "chloe", "brian"):
             self.assertEqual(self.parse(partner=pid).partner, pid)
 
     def test_other_values_mean_ms_park(self):
@@ -476,6 +507,12 @@ class PartnerConfigTest(unittest.TestCase):
 
         self.assertIsNone(config.partner)
 
+    def test_brian_is_accepted_for_smalltalk_and_freetalk_only(self):
+        for mode, expected in (("smalltalk", "brian"), ("freetalk", "brian"), ("mission", None), ("teachback", None)):
+            with self.subTest(mode=mode):
+                config = parse_call_config({"system_instruction": INSTRUCTION, "mode": mode, "partner": "brian"})
+                self.assertEqual(config.partner, expected)
+
     def test_only_smalltalk_and_freetalk_keep_a_partner(self):
         for mode, expected in (("smalltalk", "omar"), ("freetalk", "omar"), ("mission", None), ("teachback", None)):
             with self.subTest(mode=mode):
@@ -483,7 +520,7 @@ class PartnerConfigTest(unittest.TestCase):
                 self.assertEqual(config.partner, expected)
 
     def test_opener_text_uses_the_partner_name(self):
-        names = {"priya": "Priya", "omar": "Omar", "lukas": "Lukas", "carmen": "Carmen", "jake": "Jake", "chloe": "Chloe"}
+        names = {"priya": "Priya", "omar": "Omar", "lukas": "Lukas", "carmen": "Carmen", "jake": "Jake", "chloe": "Chloe", "brian": "Brian"}
         for pid, name in names.items():
             self.assertEqual(call_bot.opener_text(pid), f"[The learner just joined the call. Start as {name}.]")
         for value in (None, "park"):

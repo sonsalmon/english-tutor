@@ -1,6 +1,8 @@
 import { ExternalLink, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { getCallClips, type Clip, type ClipResult } from '../lib/api';
+import { reportBlockedVideo } from '../lib/apiFeed';
+import { getPhraseClips } from '../lib/review';
 
 const MAX_CLIPS = 5;
 
@@ -36,6 +38,7 @@ function loadBlocked(): string[] {
 }
 
 function rememberBlocked(id: string): void {
+  void reportBlockedVideo(id);
   try {
     const next = [...loadBlocked().filter((v) => v !== id), id].slice(-MAX_BLOCKED);
     localStorage.setItem(BLOCKED_KEY, JSON.stringify(next));
@@ -50,7 +53,7 @@ function Matched({ clip }: { clip: Clip }) {
   if (clip.source !== 'db' || !clip.text) return null;
   return (
     <span className="mt-1 block text-sm break-words">
-      <span lang="en" className="line-clamp-2">“{clip.text}”</span>
+      <span lang="en" className="line-clamp-4">“{clip.text}”</span>
       <span className="text-ink-soft">{mmss(clip.start ?? 0)}부터</span>
     </span>
   );
@@ -216,14 +219,54 @@ function ClipCard({ clip, onPlay }: { clip: Clip; onPlay: () => void }) {
   );
 }
 
+function ClipRows({ clips }: { clips: Clip[] }) {
+  const [playing, setPlaying] = useState<string | null>(null);
+  return (
+    <ul className="divide-y divide-line overflow-hidden rounded-2xl border border-line bg-surface">
+      {clips.map((clip) => (
+        <li key={clip.id}>
+          {playing === clip.id ? (
+            <Player clip={clip} onClose={() => setPlaying(null)} onBlocked={rememberBlocked} />
+          ) : (
+            <ClipCard clip={clip} onPlay={() => setPlaying(clip.id)} />
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// 표현 하나를 말하는 장면. 자막 DB가 없거나 찾은 게 없거나 불러오지 못하면 영역을 통째로 숨긴다.
+export function PhraseClips({ phrase }: { phrase: string }) {
+  const [state, setState] = useState<{ phrase: string; clips: Clip[] | null }>({ phrase: '', clips: null });
+
+  useEffect(() => {
+    const controller = new AbortController();
+    getPhraseClips(phrase, 3, controller.signal).then(
+      (result) => setState({ phrase, clips: result.status === 'ok' ? result.clips : [] }),
+      () => {
+        if (!controller.signal.aborted) setState({ phrase, clips: [] });
+      },
+    );
+    return () => controller.abort();
+  }, [phrase]);
+
+  const clips = state.phrase === phrase ? state.clips : null;
+  if (clips && clips.length === 0) return null;
+  return (
+    <div className="mt-4">
+      <h5 className="text-sm font-semibold text-ink-soft">예시 클립</h5>
+      <div className="mt-2">{clips ? <ClipRows clips={clips} /> : <Skeleton />}</div>
+    </div>
+  );
+}
+
 export function ClipList({ stem }: { stem: string }) {
   const [state, setState] = useState<State>({ stem: '', result: null, failed: false });
-  const [playing, setPlaying] = useState<string | null>(null);
   const [blockedAtLoad, setBlockedAtLoad] = useState<string[]>([]);
 
   useEffect(() => {
     const controller = new AbortController();
-    setPlaying(null);
     getCallClips(stem, controller.signal).then(
       (result) => {
         setBlockedAtLoad(loadBlocked());
@@ -272,17 +315,7 @@ export function ClipList({ stem }: { stem: string }) {
         ) : clips.length === 0 ? (
           <Quiet>찾은 영상이 없어요.</Quiet>
         ) : (
-          <ul className="divide-y divide-line overflow-hidden rounded-2xl border border-line bg-surface">
-            {clips.map((clip) => (
-              <li key={clip.id}>
-                {playing === clip.id ? (
-                  <Player clip={clip} onClose={() => setPlaying(null)} onBlocked={rememberBlocked} />
-                ) : (
-                  <ClipCard clip={clip} onPlay={() => setPlaying(clip.id)} />
-                )}
-              </li>
-            ))}
-          </ul>
+          <ClipRows clips={clips} />
         )}
       </div>
     </section>

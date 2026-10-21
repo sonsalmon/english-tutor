@@ -32,18 +32,17 @@ from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCRequestHandler,
 )
 
-from server import chat, clipdb, culturedb, pron, tts, youtube
-from server.call_bot import parse_call_config, run_bot, smalltalk_time_limit_from_env
+from server import chat, clipdb, culture_filter, culturedb, feed, native_expr, people, phrase_gloss, pron, review, tts, wordbook, youtube
+from server.call_bot import parse_call_config, run_bot, time_limit_for_mode
 from server import partner_memory
 from server.history import list_calls, live_cost_of, load_call, totals as call_totals
 from server.pricing import combine_cost
 from server.readgloss import (
     LEMMA_RE,
     WORD_RE,
+    bridge_lists,
     lookup_word,
     normalize_phrase,
-    practice_words,
-    push_tutoring,
     save_phrase,
     save_word,
     stored_phrase_keys,
@@ -54,7 +53,6 @@ from server.lesson import (
     LessonError,
     get_lesson,
     lesson_text,
-    session_time_limit_from_env,
 )
 from server.learner_profile import ProfileError, load_profile, profile_brief, update_profile
 from server.tutor import (
@@ -91,6 +89,11 @@ async def lifespan(app: FastAPI):
 # CORS 미들웨어를 두지 않는다: 화면은 같은 출처에서만 부른다. 다른 웹 페이지가 이 서버로
 # 유료 통화(/api/offer)를 열거나 수업 기록(/api/lesson)을 읽지 못하게 한다.
 app = FastAPI(lifespan=lifespan)
+app.include_router(phrase_gloss.router)
+app.include_router(people.router)
+app.include_router(review.router)
+app.include_router(wordbook.router)
+app.include_router(feed.router)
 
 # Serve static files
 # app.mount("/static", StaticFiles(directory="frontend"), name="static")
@@ -102,13 +105,13 @@ if os.path.exists("dist/audio-processors"):
     app.mount("/audio-processors", StaticFiles(directory="dist/audio-processors"), name="audio-processors")
 @app.get("/api/status")
 async def get_status():
-    """화면이 통화 제한 시간(초)을 미리 알고 남은 시간을 보여 주는 데 쓴다."""
+    """화면이 통화 제한 시간(초)을 미리 알고 남은 시간을 보여 주는 데 쓴다. 친구 통화(smalltalk)는 제한이 없어 null이다."""
     return {
         "mode": "local",
         "time_limits": {
-            "call": session_time_limit_from_env(None),
-            "teachback": session_time_limit_from_env("teachback"),
-            "smalltalk": smalltalk_time_limit_from_env(),
+            "call": time_limit_for_mode("mission"),
+            "teachback": time_limit_for_mode("teachback"),
+            "smalltalk": time_limit_for_mode("smalltalk"),
         },
     }
 
@@ -123,6 +126,7 @@ async def learner_profile_endpoint():
         card = None
         broken = True
     pron_result = await asyncio.to_thread(pron.latest_result)
+    practice, wordbook_lists = await _bridge_lists_within(PRACTICE_DEADLINE_SEC)
     return {
         "load_failed": broken,
         "brief": "\n".join(part for part in (pron.pron_brief(pron_result), profile_brief(card)) if part),
@@ -133,20 +137,32 @@ async def learner_profile_endpoint():
             {"pattern": p["pattern"], "example": p["example"]} for p in (card["weak_points"][:3] if card else [])
         ],
         "next_goal": card["next_goal"] if card else "",
-        "practice_words": await _practice_words_within(PRACTICE_DEADLINE_SEC),
+        "practice_words": practice,
+        "wordbook": wordbook_lists,
+        "native_expressions": await asyncio.to_thread(_native_hints, wordbook_lists),
     }
+
+
+def _native_hints(wordbook_lists: dict) -> list:
+    """친구 통화·채팅에 줄 원어민 표현 2개. 목록 파일이 없으면 빈 목록."""
+    entries = native_expr.load()
+    if not entries:
+        return []
+    saved = [str(p.get("text") or "") for p in wordbook_lists.get("phrases") or []]
+    return native_expr.pick_for_friend(entries, saved, native_expr.recent_learner_text())
 
 
 # 다리가 멈춰 있어도 홈 화면(기억 요약)이 오래 기다리지 않게 전체 시간을 자른다.
 PRACTICE_DEADLINE_SEC = 3.0
 
 
-async def _practice_words_within(seconds: float) -> list:
+async def _bridge_lists_within(seconds: float) -> tuple:
+    """(통화에 써 볼 단어, 친구에게 보여 줄 단어장). 다리가 느리면 둘 다 빈 값."""
     try:
-        return await asyncio.wait_for(asyncio.to_thread(practice_words), timeout=seconds)
+        return await asyncio.wait_for(asyncio.to_thread(bridge_lists), timeout=seconds)
     except asyncio.TimeoutError:
         logger.info("readgloss practice words skipped: bridge too slow")
-        return []
+        return [], {"words": [], "phrases": []}
 
 
 # 백그라운드 카드 갱신 작업. 참조를 안 잡으면 끝나기 전에 수거될 수 있다.
@@ -158,7 +174,7 @@ def _update_profile_sync(tutoring: dict) -> bool:
 
 
 def _schedule_profile_update(tutoring: dict) -> None:
-    """요약 응답을 늦추지 않도록 카드 갱신을 뒤에서 돌린다. 실패해도 클라이언트에는 영향 없다."""
+    """카드 갱신을 뒤에서 돌린다(검토가 끝난 뒤 review가 부른다). 실패해도 클라이언트에는 영향 없다."""
 
     async def _run():
         try:
@@ -202,26 +218,24 @@ _TUTOR_CACHE_TTL_SEC = 10.0
 
 # 이미 학습자 카드 갱신을 걸어 둔 통화 전문 파일명.
 _PROFILE_UPDATED: "set[str]" = set()
-# 이미 readgloss 단어장에 넣은 통화 전문 파일명.
-_READGLOSS_PUSHED: "set[str]" = set()
+
+
+def _card_update_once(stem: str, tutoring: dict) -> None:
+    """검토가 끝난 통화(또는 15분이 지난 통화)의 카드 갱신을 통화당 한 번만 건다."""
+    name = f"{stem}.md"
+    if name in _PROFILE_UPDATED:
+        return
+    _PROFILE_UPDATED.add(name)
+    _schedule_profile_update(tutoring)
+
+
+review.configure(_card_update_once)
 
 
 def _verbatim_text(path: Path) -> str:
     """튜터링이 원음을 받아써 둔 글(없으면 빈 글)."""
     verbatim = get_tutoring_dir() / f"{path.stem}.verbatim.txt"
     return verbatim.read_text(encoding="utf-8") if verbatim.is_file() else ""
-
-
-async def _push_to_readgloss(path: Path, tutoring: dict) -> Optional[dict]:
-    """통화당 한 번 튜터링의 새 단어·고친 표현을 readgloss 단어장에 넣는다. 다리가 꺼져 있으면 None(다음 요청 때 다시 시도)."""
-    if path.name in _READGLOSS_PUSHED:
-        return None
-    _READGLOSS_PUSHED.add(path.name)
-    saved = await asyncio.to_thread(push_tutoring, tutoring, f"English Tutor 통화 {path.stem[:10]}")
-    if saved is None:
-        _READGLOSS_PUSHED.discard(path.name)
-        return None
-    return {"saved": saved}
 
 
 @app.get("/api/lesson")
@@ -304,14 +318,14 @@ async def tutor_endpoint(request: Request):
             )
             data["saved"] = saved
             data["stem"] = path.stem
-            data["readgloss"] = await _push_to_readgloss(path, data)
+            data["readgloss"] = None
             data["cost"] = combine_cost(await asyncio.to_thread(live_cost_of, path), data.get("cost_usd"))
             _TUTOR_CACHE[cache_key] = (time.time(), data)
-            # 카드는 영어 교정만 반영한다. unanswered는 보안 지식 공백이라 제외.
+            # 카드는 영어 교정만 반영한다. unanswered는 보안 지식 공백이라 제외. 갱신은 요약 검토가 끝난 뒤(review.finish) 또는 15분 뒤에 건다.
             if path.name not in _PROFILE_UPDATED:
-                _PROFILE_UPDATED.add(path.name)
-                _schedule_profile_update(
-                    {k: v for k, v in data.items() if k not in ("saved", "stem", "lesson_date", "unanswered", "readgloss", "cost", "cost_usd")}
+                review.defer_card_update(
+                    path.stem,
+                    {k: v for k, v in data.items() if k not in ("saved", "stem", "lesson_date", "unanswered", "readgloss", "cost", "cost_usd")},
                 )
             return JSONResponse(data)
 
@@ -325,14 +339,15 @@ async def tutor_endpoint(request: Request):
         data["practice_used"] = (
             words_used(path.read_text(encoding="utf-8"), practice, _verbatim_text(path)) if practice else []
         )
-        data["readgloss"] = await _push_to_readgloss(path, data)
+        # readgloss 단어장에는 자동으로 넣지 않는다. 사용자가 항목의 저장·별 버튼을 눌러야 들어간다(필드는 옛 클라이언트 호환으로 유지).
+        data["readgloss"] = None
         data["cost"] = combine_cost(await asyncio.to_thread(live_cost_of, path), data.get("cost_usd"))
         _TUTOR_CACHE[path.name] = (time.time(), data)
-        # 같은 통화를 다시 분석해도 카드는 한 번만 갱신한다(misses·count 중복 방지).
+        # 같은 통화를 다시 분석해도 카드는 한 번만 갱신한다(misses·count 중복 방지). 갱신은 요약 검토가 끝난 뒤(review.finish) 또는 15분 뒤에 건다.
         if path.name not in _PROFILE_UPDATED:
-            _PROFILE_UPDATED.add(path.name)
-            _schedule_profile_update(
-                {k: v for k, v in data.items() if k not in ("saved", "stem", "practice_used", "readgloss", "cost", "cost_usd")}
+            review.defer_card_update(
+                path.stem,
+                {k: v for k, v in data.items() if k not in ("saved", "stem", "practice_used", "readgloss", "cost", "cost_usd")},
             )
     except LessonError as e:
         logger.error(f"Lesson fetch failed: {e}")
@@ -393,10 +408,10 @@ async def ice_candidate(request: SmallWebRTCPatchRequest):
 
 
 @app.get("/api/calls")
-async def calls_endpoint(limit: int = 50):
-    """저장된 통화 목록(최신순)과 누적 합계. 화면의 통화 기록과 홈 합계가 쓴다."""
+async def calls_endpoint(limit: int = 50, partner: Optional[str] = None):
+    """저장된 통화 목록(최신순)과 누적 합계. partner=<id>면 그 사람의 통화만(park는 친구 표시가 없는 통화)."""
     limit = max(1, min(limit, 200))
-    calls = await asyncio.to_thread(list_calls, limit)
+    calls = await asyncio.to_thread(list_calls, limit, partner)
     return {"totals": await asyncio.to_thread(call_totals), "calls": calls}
 
 
@@ -639,6 +654,9 @@ async def call_clips_endpoint(stem: str):
 
 MAX_CULTURE_TERMS = 6
 MAX_CULTURE_FALLBACK_WORDS = 3
+# 통화 주제와 맞는 것만 남기려고 DB에서 더 많이 가져온 뒤 culture_filter가 추린다.
+CULTURE_CANDIDATE_BLEND = 12
+CULTURE_CANDIDATE_BANK = 8
 
 
 def _culture_terms(tutoring: dict) -> list:
@@ -688,11 +706,12 @@ async def call_culture_endpoint(stem: str):
     terms = _culture_terms(call.get("tutoring") or {})
     if not terms:
         return {**empty, "status": "no_terms"}
-    found = await asyncio.to_thread(culturedb.search, terms)
-    return {"status": "ok", "terms": terms, "blend": found.get("blend", []), "bank": found.get("bank", []), "attribution": culturedb.ATTRIBUTION}
+    found = await asyncio.to_thread(culturedb.search, terms, CULTURE_CANDIDATE_BLEND, CULTURE_CANDIDATE_BANK)
+    found = culture_filter.filter_found(found, call.get("tutoring") or {})
+    return {"status": "ok", "terms": terms, "blend": found["blend"], "bank": found["bank"], "attribution": culturedb.ATTRIBUTION}
 
 
-ALLOWED_TTS_VOICES = frozenset({"Kore", "Leda", "Charon", "Iapetus", "Sulafat", "Fenrir", "Zephyr"})
+ALLOWED_TTS_VOICES = frozenset({"Kore", "Leda", "Charon", "Iapetus", "Sulafat", "Fenrir", "Zephyr", "Achird"})
 
 
 @app.post("/api/tts")

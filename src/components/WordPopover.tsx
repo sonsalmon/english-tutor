@@ -2,6 +2,8 @@ import { Check, Volume2, X } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ReadglossOffError, lookupWord, saveWord, type WordInfo } from '../lib/api';
+import { glossPhrase, isPhraseSaved, markWordSaved, savePhrase } from '../lib/phrases';
+import { StarButton } from './StarButton';
 import { useWide } from './ui';
 
 // 한 번 찾은 단어는 이 세션 동안 다시 묻지 않는다. 실패한 조회는 담지 않아 다시 누르면 재시도한다.
@@ -16,22 +18,35 @@ type Saving = 'idle' | 'saving' | 'saved' | 'error';
 
 const MARGIN = 12;
 
+const phraseInfo = (text: string, gloss: string): WordInfo => ({ word: text, lemma: text, gloss, senses: [] });
+
+export type Extend = { before: boolean; after: boolean; onExtend: (side: 'before' | 'after') => void };
+
+// kind="word": readgloss 사전에서 뜻을 찾는다. kind="phrase": 사전을 건너뛰고 gloss를 쓰고, 없으면 서버에 짧은 뜻을 묻는다.
 export function WordPopover({
-  word,
+  kind,
+  text: word,
+  gloss,
   sentence,
   anchor,
+  extend,
   onClose,
   onPronounce,
 }: {
-  word: string;
+  kind: 'word' | 'phrase';
+  text: string;
+  gloss?: string;
   sentence: string;
   anchor: HTMLElement;
+  extend?: Extend;
   onClose: () => void;
   onPronounce: (phrase: string) => void;
 }) {
   const wide = useWide();
   const key = word.toLowerCase();
+  const isPhrase = kind === 'phrase';
   const [lookup, setLookup] = useState<Lookup>(() => {
+    if (isPhrase) return gloss !== undefined ? { status: 'ready', info: phraseInfo(word, gloss) } : { status: 'loading' };
     const hit = cache.get(key);
     return hit ? { status: 'ready', info: hit } : { status: 'loading' };
   });
@@ -43,7 +58,26 @@ export function WordPopover({
   closeNow.current = onClose;
 
   useEffect(() => {
-    if (cache.has(key)) return;
+    if (!isPhrase) return;
+    let cancelled = false;
+    isPhraseSaved(word).then(
+      (yes) => {
+        if (!cancelled && yes) setSaving('saved');
+      },
+      () => {},
+    );
+    if (gloss === undefined) {
+      glossPhrase(word).then((g) => {
+        if (!cancelled) setLookup({ status: 'ready', info: phraseInfo(word, g) });
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [isPhrase, word, gloss]);
+
+  useEffect(() => {
+    if (isPhrase || cache.has(key)) return;
     const controller = new AbortController();
     lookupWord(word, controller.signal).then(
       (info) => {
@@ -57,7 +91,7 @@ export function WordPopover({
       },
     );
     return () => controller.abort();
-  }, [key, word]);
+  }, [isPhrase, key, word]);
 
   useEffect(() => {
     closeRef.current?.focus();
@@ -117,7 +151,11 @@ export function WordPopover({
     if (!info || saving === 'saving' || saving === 'saved') return;
     setSaving('saving');
     try {
-      await saveWord({ word, lemma: info.lemma, gloss: info.gloss, sentence });
+      if (isPhrase) await savePhrase(word, info.gloss.trim().slice(0, 300));
+      else {
+        await saveWord({ word, lemma: info.lemma, gloss: info.gloss, sentence });
+        markWordSaved(info.lemma);
+      }
       setSaving('saved');
     } catch (e) {
       setSaving(e instanceof ReadglossOffError ? 'idle' : 'error');
@@ -160,7 +198,7 @@ export function WordPopover({
           <p lang="en" className="text-xl leading-snug font-bold break-words">
             {lemma}
           </p>
-          {key !== lemma && (
+          {!isPhrase && key !== lemma && (
             <p lang="en" className="text-sm text-ink-soft">
               눌러 본 말: {word}
             </p>
@@ -183,7 +221,9 @@ export function WordPopover({
         {(lookup.status === 'off' || lookup.status === 'error') && (
           <p className={lookup.status === 'off' ? 'leading-relaxed text-ink-soft' : 'leading-relaxed text-end-press'}>{lookup.message}</p>
         )}
-        {info && !info.gloss && senses.length === 0 && <p className="leading-relaxed text-ink-soft">사전에서 뜻을 찾지 못했어요.</p>}
+        {info && !info.gloss && senses.length === 0 && (
+          <p className="leading-relaxed text-ink-soft">{isPhrase ? '뜻을 못 찾았어요. 뜻 없이도 저장할 수 있어요.' : '사전에서 뜻을 찾지 못했어요.'}</p>
+        )}
         {info?.gloss && (
           <p className="text-lg font-semibold">
             <span className="mark">{info.gloss}</span>
@@ -197,6 +237,22 @@ export function WordPopover({
           </ul>
         )}
       </div>
+
+      {extend && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {(['before', 'after'] as const).map((side) => (
+            <button
+              key={side}
+              type="button"
+              onClick={() => extend.onExtend(side)}
+              disabled={!extend[side]}
+              className="min-h-11 rounded-full border border-dashed border-ink-soft/50 px-3 text-sm font-semibold whitespace-nowrap text-ink hover:bg-paper disabled:text-ink-soft/40"
+            >
+              {side === 'before' ? '앞 단어 붙이기' : '뒤 단어 붙이기'}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="mt-4 flex flex-wrap gap-2">
         <button
@@ -217,6 +273,18 @@ export function WordPopover({
             {saving === 'saved' && <Check size={18} aria-hidden />}
             {saving === 'saved' ? '저장했어요' : saving === 'saving' ? '저장하는 중…' : '단어장에 저장'}
           </button>
+        )}
+        {lookup.status !== 'off' && (
+          <StarButton
+            kind={kind}
+            text={word}
+            lemma={isPhrase ? undefined : lemma}
+            gloss={info?.gloss ?? ''}
+            sentence={sentence}
+            disabled={!info}
+            saved={saving === 'saved'}
+            onSaved={() => setSaving('saved')}
+          />
         )}
       </div>
       {saving === 'error' && (

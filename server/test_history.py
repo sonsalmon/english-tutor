@@ -107,6 +107,38 @@ class HistoryTest(HistoryDirs):
         )
         self.assertEqual([c["stem"] for c in history.list_calls(limit=1)], ["2026-10-20-090000"])
 
+    def test_list_filters_by_partner_and_park_means_no_partner(self):
+        self.add_call("2026-10-18-080000", "2026-10-18 08:00")
+        for stem, started, friend in (
+            ("2026-10-19-100000", "2026-10-19 10:00", "jake"),
+            ("2026-10-20-090000", "2026-10-20 09:00", "priya"),
+        ):
+            text = transcript(started).replace("- model: test-model\n", f"- model: test-model\n- partner: {friend}\n")
+            (self.sessions / f"{stem}.md").write_text(text, encoding="utf-8")
+
+        self.assertEqual([c["stem"] for c in history.list_calls(partner="park")], ["2026-10-18-080000"])
+        self.assertEqual([c["stem"] for c in history.list_calls(partner="jake")], ["2026-10-19-100000"])
+        self.assertEqual([c["stem"] for c in history.list_calls(limit=1, partner="priya")], ["2026-10-20-090000"])
+        self.assertEqual(history.list_calls(partner="nobody"), [])
+        self.assertEqual(len(history.list_calls()), 3)
+
+    def test_old_transcript_cjk_filler_in_me_lines_is_cleaned(self):
+        stem = "2026-10-20-090000"
+        head = transcript("2026-10-20 09:00").split("\n**Me:**")[0]
+        body = "\n**Me:** 嗯\n**Partner:** 嗯 ok\n**Me:** 嗯 I think so\n"
+        (self.sessions / f"{stem}.md").write_text(head + "\n" + body, encoding="utf-8")
+
+        result = history.load_call(stem)["transcript"]
+
+        self.assertEqual(
+            result,
+            [
+                {"speaker": "me", "text": "(mm)"},
+                {"speaker": "partner", "text": "嗯 ok"},
+                {"speaker": "me", "text": "I think so"},
+            ],
+        )
+
     def test_totals_math(self):
         self.add_call("2026-10-20-090000", "2026-10-20 09:00", duration="1m 40s")
         self.add_call("2026-10-20-180000", "2026-10-20 18:00", duration="0m 50s")
@@ -241,13 +273,24 @@ class CallsHttpTest(HistoryDirs):
         self.assertEqual(detail.status_code, 200)
         self.assertIsNone(detail.json()["tutoring"])
 
-    def test_status_time_limits_include_smalltalk(self):
+    def test_partner_query_filters_the_list(self):
+        self.add_call("2026-10-18-080000", "2026-10-18 08:00")
+        text = transcript("2026-10-19 10:00").replace("- model: test-model\n", "- model: test-model\n- partner: jake\n")
+        (self.sessions / "2026-10-19-100000.md").write_text(text, encoding="utf-8")
+
+        def stems(query):
+            return [c["stem"] for c in self.client.get(f"/api/calls{query}").json()["calls"]]
+
+        self.assertEqual(stems("?partner=jake"), ["2026-10-19-100000"])
+        self.assertEqual(stems("?partner=park"), ["2026-10-18-080000"])
+        self.assertEqual(len(stems("")), 2)
+
+    def test_status_time_limits_have_no_smalltalk_limit(self):
         env = {"SESSION_TIME_LIMIT": "180", "TEACHBACK_TIME_LIMIT": "900"}
         with mock.patch.dict(os.environ, env):
-            os.environ.pop("SMALLTALK_TIME_LIMIT", None)
             limits = self.client.get("/api/status").json()["time_limits"]
 
-        self.assertEqual(limits, {"call": 180, "teachback": 900, "smalltalk": 300})
+        self.assertEqual(limits, {"call": 180, "teachback": 900, "smalltalk": None})
 
     def test_cost_over_http_in_list_and_detail(self):
         self.add_call("2026-10-20-090000", "2026-10-20 09:00", cost="0.0200")
@@ -348,6 +391,12 @@ class PartnerHistoryTest(HistoryDirs):
         by_stem = {c["stem"]: c["partner"] for c in history.list_calls()}
         self.assertEqual(by_stem, {"2026-10-20-090000": "priya", "2026-10-20-100000": None, "2026-10-20-110000": None})
         self.assertEqual(history.load_call("2026-10-20-090000")["call"]["partner"], "priya")
+
+    def test_brian_header_is_read(self):
+        self.write("2026-10-20-090000", "- partner: brian\n")
+
+        self.assertEqual(history.load_call("2026-10-20-090000")["call"]["partner"], "brian")
+        self.assertEqual(history.partner_of(self.sessions / "2026-10-20-090000.md"), "brian")
 
     def test_partner_of_and_turns(self):
         self.write("2026-10-20-090000", "- partner: omar\n")

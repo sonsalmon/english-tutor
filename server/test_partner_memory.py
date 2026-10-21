@@ -381,6 +381,19 @@ class V2Test(MemoryDirCase):
     def test_prompt_asks_for_bigger_storyline(self):
         self.assertIn("bigger storyline", pm.build_prompt("priya", None, TURNS, "2026-10-20"))
 
+    def test_prompt_allows_remembering_the_learners_faith(self):
+        prompt = pm.build_prompt("brian", None, TURNS, "2026-10-21")
+
+        self.assertIn("- Faith:", prompt)
+        self.assertNotIn("Faith privacy:", prompt)
+        self.assertNotIn("never store the learner's own faith", prompt)
+        self.assertIn("memory of Brian", prompt)
+
+    def test_brian_memory_roundtrip(self):
+        self.assertTrue(pm.valid_partner("brian"))
+        self.assertTrue(pm.update("brian", TURNS, lambda p: json.dumps(v2()), NOW))
+        self.assertEqual(pm.load_memory("brian")["partner"], "brian")
+
     def test_bad_mode_and_missing_episode(self):
         self.assertFalse(pm.update("priya", TURNS, lambda p: json.dumps(v2()), NOW, mode="email"))
         self.assertFalse((self.dir / "priya.json").exists())

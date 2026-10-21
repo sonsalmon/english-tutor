@@ -15,7 +15,7 @@ import re
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -201,13 +201,67 @@ def pick_practice_words(state: dict, review: Optional[dict], now: datetime, limi
     return list(picked.values())
 
 
-def practice_words(now: Optional[datetime] = None) -> List[Dict[str, str]]:
-    """다리에서 오늘 통화에 써 볼 단어를 고른다. 다리가 없으면 []."""
+def bridge_snapshot() -> Optional[Tuple[dict, Optional[dict]]]:
+    """다리의 단어장 상태(/words)와 복습 목록(/words/review)을 한 번씩만 읽는다. 다리가 꺼져 있으면 None."""
     state = _request("GET", "/words")
     if not isinstance(state, dict):
-        return []
+        return None
     review = _request("GET", "/words/review")
-    return pick_practice_words(state, review if isinstance(review, dict) else None, now or datetime.now())
+    return state, review if isinstance(review, dict) else None
+
+
+def practice_words(now: Optional[datetime] = None) -> List[Dict[str, str]]:
+    """다리에서 오늘 통화에 써 볼 단어를 고른다. 다리가 없으면 []."""
+    snapshot = bridge_snapshot()
+    if snapshot is None:
+        return []
+    return pick_practice_words(snapshot[0], snapshot[1], now or datetime.now())
+
+
+# 친구에게 보여 주는 내 단어장(단어와 저장한 문장). 지시문 길이 때문에 개수와 글자 수를 작게 묶는다.
+WORDBOOK_WORDS = 8
+WORDBOOK_PHRASES = 5
+WORDBOOK_PHRASE_CHARS = 90
+WORDBOOK_PHRASE_WORDS = 12
+_URL_RE = re.compile(r"https?://|www\.|\b[\w.+-]+\.(?:com|net|org|io|kr|co)\b", re.IGNORECASE)
+_EMAIL_RE = re.compile(r"\S+@\S+")
+_LONG_DIGITS_RE = re.compile(r"\d{5,}|\d[\d\s().-]{7,}\d")
+
+
+def shareable_phrase(text: Any) -> str:
+    """친구에게 보여 줘도 되는 짧은 문장이면 정리한 글을, 아니면 빈 글을 돌려준다.
+
+    주소·이메일 모양, 숫자 5자리 이상, 90자·12낱말 초과, 영어 글자가 없는 글은 뺀다.
+    """
+    clean = " ".join(str(text or "").replace("<", " ").replace(">", " ").split())
+    if not clean or len(clean) > WORDBOOK_PHRASE_CHARS or len(clean.split()) > WORDBOOK_PHRASE_WORDS:
+        return ""
+    if _URL_RE.search(clean) or _EMAIL_RE.search(clean) or _LONG_DIGITS_RE.search(clean):
+        return ""
+    return clean if re.search(r"[A-Za-z]", clean) else ""
+
+
+def pick_wordbook(state: dict, review: Optional[dict], now: datetime) -> Dict[str, List[Dict[str, str]]]:
+    """친구 통화·채팅에 보여 줄 단어(최대 8)와 저장한 문장(최대 5). 읽던 문장과 페이지 주소는 넣지 않는다."""
+    words = [{"lemma": w["lemma"], "gloss": w["gloss"]} for w in pick_practice_words(state, review, now, WORDBOOK_WORDS)]
+    phrases: List[Dict[str, str]] = []
+    stored = [p for p in (state.get("phrases") or {}).values() if isinstance(p, dict)]
+    for p in sorted(stored, key=lambda p: p.get("ts") or 0, reverse=True):
+        text = shareable_phrase(p.get("text"))
+        if text and all(text.lower() != q["text"].lower() for q in phrases):
+            phrases.append({"text": text, "gloss": _gloss(str(p.get("translation") or "").replace("<", " ").replace(">", " "))})
+        if len(phrases) >= WORDBOOK_PHRASES:
+            break
+    return {"words": words, "phrases": phrases}
+
+
+def bridge_lists(now: Optional[datetime] = None) -> Tuple[List[Dict[str, str]], Dict[str, List[Dict[str, str]]]]:
+    """/api/learner-profile용: 통화에 써 볼 단어와 친구에게 보여 줄 단어장을 다리 한 번 읽기로 만든다. 다리가 없으면 둘 다 빈 값."""
+    snapshot = bridge_snapshot()
+    if snapshot is None:
+        return [], {"words": [], "phrases": []}
+    when = now or datetime.now()
+    return pick_practice_words(snapshot[0], snapshot[1], when), pick_wordbook(snapshot[0], snapshot[1], when)
 
 
 def _forms(lemma: str) -> set:

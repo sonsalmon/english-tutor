@@ -1,4 +1,4 @@
-import type { PartnerMemory } from './api';
+import type { PartnerMemory, Wordbook } from './api';
 import type { CallMode, EndReason, MissionResult } from './useCall';
 import {
   freeTalkInstruction,
@@ -54,15 +54,20 @@ export function callTitle(setup: CallSetup): string {
   return setup.topic ? freeTalkTitle(setup.topic) : 'Ms. Park과 자유 대화';
 }
 
-export function buildInstruction(setup: CallSetup, brief: string, words: PracticeWord[] = [], interests: string[] = [], memory: PartnerMemory | null = null): string {
+export function buildInstruction(setup: CallSetup, brief: string, words: PracticeWord[] = [], interests: string[] = [], memory: PartnerMemory | null = null, wordbook: Wordbook | null = null): string {
   const partner = setupPartner(setup);
   if (setup.kind === 'mission') return missionInstruction(setup.mission, brief, setup.retry, words, partner, interests);
-  if (setup.kind === 'smalltalk') return smallTalkInstruction(brief, words, partner, interests, memory, setup.chip);
+  if (setup.kind === 'smalltalk') return smallTalkInstruction(brief, words, partner, interests, memory, setup.chip, wordbook);
   if (setup.kind === 'teachback') return teachbackInstruction(setup.sections, setup.seniorMode, setup.retry, brief);
-  return freeTalkInstruction(setup.topic, brief, setup.retry, words, partner, interests, memory, setup.chip);
+  return freeTalkInstruction(setup.topic, brief, setup.retry, words, partner, interests, memory, setup.chip, wordbook);
 }
 
 // Teach-back은 수업 내용에 집중하도록 readgloss 단어를 넣지 않는다.
-export function practiceWordsFor(setup: CallSetup, words: PracticeWord[]): PracticeWord[] {
-  return setup.kind === 'teachback' ? [] : words;
+// 친구 통화는 내 단어장의 단어(최대 8개)를 써 볼 단어로 삼는다. 단어장이 비었거나 공유를 껐으면 찾아본 단어를 쓴다.
+export function practiceWordsFor(setup: CallSetup, words: PracticeWord[], wordbook: Wordbook | null = null): PracticeWord[] {
+  if (setup.kind === 'teachback') return [];
+  if (!isPark(setupPartner(setup)) && wordbook?.words?.length) {
+    return wordbook.words.slice(0, 8).map((w) => ({ lemma: w.lemma, gloss: w.gloss, source: 'wordbook' }));
+  }
+  return words;
 }

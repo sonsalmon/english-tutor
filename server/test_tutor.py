@@ -1,10 +1,13 @@
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from server import known
 from server import learner_profile as lp
 from server import main, tutor
 
@@ -81,7 +84,8 @@ class FriendMessageTest(unittest.TestCase):
     def test_phrase_not_in_transcript_is_dropped(self):
         raw = fm([fphrase("quantum entanglement is spooky"), fphrase("went to the farmers market"), fphrase("buy fresh tomatoes")])
         out = tutor.normalize_friend_message(raw, self.TRANSCRIPT)
-        self.assertEqual([p["phrase"] for p in out["phrases"]], ["went to the farmers market", "buy fresh tomatoes"])
+        # "buy fresh tomatoes"는 학습자가 그대로 말한 표현이라 빠진다.
+        self.assertEqual([p["phrase"] for p in out["phrases"]], ["went to the farmers market"])
 
     def test_natural_fix_built_from_transcript_words_stays(self):
         raw = fm([fphrase("I bought fresh tomatoes at the farmers market")])  # bought는 전문에 없지만 나머지 단어가 있다
@@ -96,11 +100,11 @@ class FriendMessageTest(unittest.TestCase):
         self.assertIsNone(tutor.normalize_friend_message(fm([fphrase("priya partner call")]), self.TRANSCRIPT))
 
     def test_normalize_tutor_json_and_analyze_pass_the_transcript(self):
-        raw = {"corrections": [{"said": "a", "better": "b", "why": "c"}], "friend_message": fm([fphrase("space shuttle launch"), fphrase("farmers market")])}
+        raw = {"corrections": [{"said": "a", "better": "b", "why": "c"}], "friend_message": fm([fphrase("space shuttle launch"), fphrase("that sounds fun")])}
         out = tutor.normalize_tutor_json(raw, self.TRANSCRIPT)
-        self.assertEqual([p["phrase"] for p in out["friend_message"]["phrases"]], ["farmers market"])
+        self.assertEqual([p["phrase"] for p in out["friend_message"]["phrases"]], ["that sounds fun"])
         got = tutor.analyze_transcript(self.TRANSCRIPT, generate_text=lambda _p: json.dumps(raw))
-        self.assertEqual([p["phrase"] for p in got["friend_message"]["phrases"]], ["farmers market"])
+        self.assertEqual([p["phrase"] for p in got["friend_message"]["phrases"]], ["that sounds fun"])
 
     def test_profile_update_prompt_excludes_friend_message(self):
         tutoring = {"corrections": [{"said": "x", "better": "y", "why": "z"}], "friend_message": fm([fphrase("zebra crossing")])}
@@ -138,10 +142,185 @@ class FriendMessageTest(unittest.TestCase):
 
     def test_analyze_transcript_returns_friend_message(self):
         reply = json.dumps({"good": [{"said": "a", "note": "b"}], "friend_message": fm([fphrase("cutting board")])})
-        out = tutor.analyze_transcript("**Me:** I bought a cutting board", generate_text=lambda _p: reply)
+        out = tutor.analyze_transcript("**Me:** I bought it\n**Partner:** A cutting board, nice!", generate_text=lambda _p: reply)
         self.assertEqual(out["friend_message"]["phrases"][0]["phrase"], "cutting board")
         reply_without = json.dumps({"good": [{"said": "a", "note": "b"}]})
         self.assertIsNone(tutor.analyze_transcript("**Me:** hi", generate_text=lambda _p: reply_without)["friend_message"])
+
+
+US_TRANSCRIPT = (
+    "# Call\n- partner: jake\n\n"
+    "**Partner:** Hey! How was your day?\n"
+    "**Me:** How old are you?\n"
+    "**Partner:** Ha, I'm 27.\n"
+    "**Me:** Sorry?\n"
+    "**Me:** I'm sorry for your trouble.\n"
+    "**Me:** I think it is good idea.\n"
+)
+
+
+def us(said, natural, why="영어권의 사고방식이 달라요.", korean_way="한국어로 생각했어요"):
+    return {"said": said, "korean_way": korean_way, "natural": natural, "why": why}
+
+
+class UsStyleTest(unittest.TestCase):
+    def norm(self, rows, **kw):
+        return tutor.normalize_us_style(rows, US_TRANSCRIPT, **kw)
+
+    def test_a_good_item_stays_with_all_four_fields(self):
+        out = self.norm([us("How old are you?", "So, what do you do?")])
+
+        self.assertEqual(len(out), 1)
+        self.assertEqual(set(out[0]), {"said", "korean_way", "natural", "why"})
+        self.assertEqual(out[0]["natural"], "So, what do you do?")
+
+    def test_said_that_is_not_in_the_transcript_is_dropped(self):
+        out = self.norm([us("Please forgive my rudeness", "Sorry about that"), us("How old are you?", "So, what do you do?")])
+
+        self.assertEqual([r["said"] for r in out], ["How old are you?"])
+
+    def test_said_overlapping_one_me_line_by_seventy_percent_counts(self):
+        # 7 of 10 words of the quote are in one Me line, 3 are not
+        out = self.norm([us("I think it is good idea for us all to go", "Sounds like a plan")])
+        self.assertEqual(out, [])
+        out = self.norm([us("I think it is good idea", "Sounds like a plan")])
+        self.assertEqual(len(out), 1)
+
+    def test_said_found_only_in_the_raw_verbatim_is_accepted_when_it_is_given(self):
+        row = us("Could you pass me the salt", "Mind passing the salt?")
+        self.assertEqual(self.norm([row]), [])
+        self.assertEqual(len(self.norm([row], verbatim="um could you pass me the salt\nokay")), 1)
+
+    def test_natural_the_learner_already_said_is_dropped(self):
+        out = self.norm([us("How old are you?", "Sorry?"), us("How old are you?", "So, what do you do?")])
+
+        self.assertEqual([r["natural"] for r in out], ["So, what do you do?"])
+
+    def test_natural_mostly_made_of_words_from_one_me_line_is_dropped(self):
+        out = self.norm([us("How old are you?", "I'm sorry for your trouble")])
+
+        self.assertEqual(out, [])
+
+    def test_natural_in_the_known_store_or_inside_a_known_phrase_is_dropped(self):
+        rows = [us("How old are you?", "Thanks for jumping on this"), us("How old are you?", "So, what do you do?")]
+
+        self.assertEqual(len(self.norm(rows, known=["Thanks for jumping on this!"])), 1)
+        self.assertEqual(len(self.norm(rows, known=["jumping on this"])), 1)
+        self.assertEqual(len(self.norm(rows, known=[])), 2)
+
+    def test_natural_equal_to_a_thinking_gap_is_left_to_thinking_gaps(self):
+        out = self.norm([us("How old are you?", "I'm swamped")], gap_english=["I'm swamped"])
+
+        self.assertEqual(out, [])
+
+    def test_empty_fields_non_dicts_and_duplicates_are_dropped_and_the_list_is_capped_at_three(self):
+        rows = [us("How old are you?", "So, what do you do?"), us("How old are you?", "so what do you do"), "junk", us("", "x y"), us("How old are you?", ""), us("How old are you?", "natural one", why="")]
+        rows += [us("How old are you?", f"natural phrase number {n}") for n in ("one", "two", "three", "four")]
+
+        out = self.norm(rows)
+
+        self.assertEqual(len(out), tutor.MAX_US_STYLE)
+        self.assertEqual(out[0]["natural"], "So, what do you do?")
+
+    def test_overlong_fields_are_cut_and_overlong_natural_is_dropped(self):
+        long_why = us("How old are you?", "So, what do you do?", why="x" * 1000)
+        too_many_words = us("How old are you?", " ".join(f"word{c}" for c in "abcdefghijk"))
+
+        out = self.norm([long_why, too_many_words])
+
+        self.assertEqual(len(out), 1)
+        self.assertEqual(len(out[0]["why"]), tutor.MAX_US_WHY)
+
+    def test_without_a_transcript_only_the_shape_and_known_checks_run(self):
+        out = tutor.normalize_us_style([us("anything", "Mind passing the salt?")])
+
+        self.assertEqual(len(out), 1)
+        self.assertEqual(tutor.normalize_us_style("junk"), [])
+
+    def test_normalize_tutor_json_forces_pragmatics_empty_and_filters_us_style(self):
+        raw = {
+            "pragmatics": [{"pattern": "Bottom line first", "note": "n"}],
+            "us_style": [us("How old are you?", "So, what do you do?"), us("How old are you?", "Sorry?")],
+            "thinking_gaps": [{"korean": "x", "english": "I'm swamped", "kind": "framing", "note": "n"}],
+            "good": [{"said": "a", "note": "b"}],
+        }
+
+        out = tutor.normalize_tutor_json(raw, US_TRANSCRIPT)
+
+        self.assertEqual(out["pragmatics"], [])
+        self.assertEqual([r["natural"] for r in out["us_style"]], ["So, what do you do?"])
+
+    def test_known_expressions_leave_corrections_vocab_and_us_style(self):
+        raw = {
+            "corrections": [{"said": "a", "better": "I just started", "why": "x"}, {"said": "b", "better": "I got swamped", "why": "y"}],
+            "vocab": [{"word": "circle back", "meaning_ko": "m", "example": "e", "etymology": ""}, {"word": "swamped", "meaning_ko": "m", "example": "e", "etymology": ""}],
+            "good": [{"said": "a", "note": "b"}],
+        }
+
+        out = tutor.normalize_tutor_json(raw, known=["i just started", "Circle back."])
+
+        self.assertEqual([c["better"] for c in out["corrections"]], ["I got swamped"])
+        self.assertEqual([v["word"] for v in out["vocab"]], ["swamped"])
+
+    def test_us_style_alone_makes_the_result_non_empty_and_old_pragmatics_still_count(self):
+        self.assertFalse(tutor.is_empty_result({"us_style": [us("a", "b c")]}))
+        self.assertFalse(tutor.is_empty_result({"pragmatics": [{"pattern": "p", "note": "n"}]}))
+        self.assertTrue(tutor.is_empty_result({"us_style": [], "pragmatics": []}))
+
+    def test_teachback_keeps_its_pragmatics_and_has_no_us_style(self):
+        raw = {"pragmatics": [{"pattern": "Check understanding", "note": "n"}], "us_style": [us("a b", "c d")], "good": [{"said": "a", "note": "b"}]}
+
+        out = tutor.normalize_teachback_json(raw)
+
+        self.assertEqual(out["pragmatics"], [{"pattern": "Check understanding", "note": "n"}])
+        self.assertNotIn("us_style", out)
+
+    def test_prompt_asks_for_us_style_and_known_expressions_are_appended_only_when_given(self):
+        prompt = tutor.build_prompt(US_TRANSCRIPT)
+
+        self.assertIn('"us_style"', prompt)
+        self.assertNotIn("ALREADY KNOWN (", prompt)
+        self.assertEqual(tutor.with_known(prompt, []), prompt)
+        appended = tutor.with_known(prompt, ["circle back", "Sorry?"])
+        self.assertTrue(appended.startswith(prompt))
+        self.assertIn("ALREADY KNOWN (", appended)
+        self.assertTrue(appended.endswith("circle back | Sorry?"))
+
+    def test_analyze_transcript_passes_known_to_the_prompt_and_the_filter(self):
+        seen = []
+        reply = json.dumps(
+            {
+                "corrections": [{"said": "a", "better": "I just started", "why": "x"}, {"said": "b", "better": "I got swamped", "why": "y"}],
+                "us_style": [us("How old are you?", "So, what do you do?"), us("How old are you?", "Sorry?")],
+            }
+        )
+
+        def generate(prompt):
+            seen.append(prompt)
+            return reply
+
+        out = tutor.analyze_transcript(US_TRANSCRIPT, generate_text=generate, known=["I just started"])
+
+        self.assertIn("ALREADY KNOWN (", seen[0])
+        self.assertEqual([c["better"] for c in out["corrections"]], ["I got swamped"])
+        self.assertEqual([r["natural"] for r in out["us_style"]], ["So, what do you do?"])
+
+    def test_run_tutoring_reads_the_store_unless_known_is_given(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        path = root / "2026-10-20-090000.md"
+        path.write_text(US_TRANSCRIPT, encoding="utf-8")
+        reply = json.dumps({"corrections": [{"said": "a", "better": "I just started", "why": "x"}, {"said": "b", "better": "I got swamped", "why": "y"}]})
+        env = {"TUTORING_DIR": str(root / "tutoring"), "AUDIO_DIR": str(root / "audio"), "KNOWN_EXPRESSIONS_PATH": str(root / "known.json")}
+        with mock.patch.dict("os.environ", env), mock.patch("server.learner_profile.load_profile", return_value=None):
+            known.add("I just started", "known", "s")
+            data, saved = tutor.run_tutoring(path, generate_text=lambda _p: reply)
+            everything, _ = tutor.run_tutoring(path, generate_text=lambda _p: reply, known=[])
+
+        self.assertTrue(saved)
+        self.assertEqual([c["better"] for c in data["corrections"]], ["I got swamped"])
+        self.assertEqual(len(everything["corrections"]), 2)
 
 
 class CultureTermsTest(unittest.TestCase):
@@ -173,6 +352,87 @@ class CultureTermsTest(unittest.TestCase):
         self.assertIn("'I'm swamped'", line)
         self.assertIn("cutting board", line)
         self.assertFalse(any("\uac00" <= ch <= "\ud7a3" for ch in line))
+
+
+
+class LearnerAlreadySaidTest(unittest.TestCase):
+    TRANSCRIPT = (
+        "# Call\n\n"
+        "**Me:** I am working in office everyday. It is so tired.\n"
+        "**Partner:** Oh man, that sounds rough.\n"
+        "**Me:** I have to wake up early tomorrow so let's call it a day.\n"
+        "**Partner:** Sounds good! Time to hit the sack. Talk later!\n"
+    )
+
+    def test_us_style_that_repeats_a_correction_is_left_to_the_correction(self):
+        raw = {
+            "corrections": [{"said": "It is so tired.", "better": "It is so tiring.", "why": "-ing"}],
+            "us_style": [us("It is so tired.", "It's so tiring.")],
+        }
+
+        out = tutor.normalize_tutor_json(raw, self.TRANSCRIPT)
+
+        self.assertEqual([c["better"] for c in out["corrections"]], ["It is so tiring."])
+        self.assertEqual([r["natural"] for r in out["us_style"]], [])
+
+    def test_us_style_about_other_words_stays_next_to_a_correction(self):
+        raw = {
+            "corrections": [{"said": "It is so tired.", "better": "It is so tiring.", "why": "-ing"}],
+            "us_style": [us("I am working in office everyday", "I work at an office")],
+        }
+
+        out = tutor.normalize_tutor_json(raw, self.TRANSCRIPT)
+
+        self.assertEqual([r["natural"] for r in out["us_style"]], ["I work at an office"])
+
+    def test_same_natural_as_a_correction_is_dropped_even_with_a_different_said(self):
+        rows = tutor.normalize_us_style(
+            [us("I am working in office everyday", "It's so tiring")],
+            self.TRANSCRIPT,
+            corrections=[{"said": "something else", "better": "It is so tiring.", "why": "w"}],
+        )
+
+        self.assertEqual(rows, [])
+
+    def test_vocab_the_learner_already_said_is_dropped(self):
+        raw = {
+            "corrections": [{"said": "a", "better": "b", "why": "c"}],
+            "vocab": [
+                {"word": "call it a day", "meaning_ko": "m", "example": "e", "etymology": ""},
+                {"word": "hit the sack", "meaning_ko": "m", "example": "e", "etymology": ""},
+            ],
+        }
+
+        out = tutor.normalize_tutor_json(raw, self.TRANSCRIPT)
+
+        self.assertEqual([v["word"] for v in out["vocab"]], ["hit the sack"])
+
+    def test_vocab_said_only_in_the_raw_verbatim_is_dropped_too(self):
+        transcript = "**Me:** Okay.\n**Partner:** See you.\n"
+        raw = {"corrections": [{"said": "a", "better": "b", "why": "c"}], "vocab": [{"word": "call it a day", "meaning_ko": "m", "example": "e", "etymology": ""}]}
+
+        self.assertEqual(len(tutor.normalize_tutor_json(raw, transcript)["vocab"]), 1)
+        self.assertEqual(tutor.normalize_tutor_json(raw, transcript, verbatim="um let's call it a day")["vocab"], [])
+
+    def test_friend_message_phrases_the_learner_said_are_dropped(self):
+        value = fm([fphrase("call it a day"), fphrase("hit the sack")])
+
+        out = tutor.normalize_friend_message(value, self.TRANSCRIPT)
+
+        self.assertEqual([p["phrase"] for p in out["phrases"]], ["hit the sack"])
+        self.assertIsNone(tutor.normalize_friend_message(fm([fphrase("call it a day")]), self.TRANSCRIPT))
+
+    def test_a_phrase_the_learner_only_partly_said_is_kept(self):
+        raw = {"corrections": [{"said": "a", "better": "b", "why": "c"}], "vocab": [{"word": "wake up early", "meaning_ko": "m", "example": "e", "etymology": ""}, {"word": "sleep in late", "meaning_ko": "m", "example": "e", "etymology": ""}]}
+
+        out = tutor.normalize_tutor_json(raw, self.TRANSCRIPT)
+
+        self.assertEqual([v["word"] for v in out["vocab"]], ["sleep in late"])
+
+    def test_without_a_transcript_nothing_is_dropped_for_being_said(self):
+        raw = {"corrections": [{"said": "a", "better": "b", "why": "c"}], "vocab": [{"word": "call it a day", "meaning_ko": "m", "example": "e", "etymology": ""}]}
+
+        self.assertEqual(len(tutor.normalize_tutor_json(raw)["vocab"]), 1)
 
 
 if __name__ == "__main__":

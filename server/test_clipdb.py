@@ -1,4 +1,5 @@
 import os
+import random
 import sys
 import tempfile
 import unittest
@@ -201,6 +202,28 @@ class SearchDb(unittest.TestCase):
         self.assertEqual(clipdb.search("completely unrelated", path=self.path), [])
         self.assertEqual(clipdb.search("brand new", path=self.path)[0]["video_id"], "v3")
 
+    def test_random_segments_are_sentence_length_one_per_video_and_read_only(self):
+        import hashlib
+        import random
+
+        before = hashlib.sha256(self.path.read_bytes()).hexdigest()
+        hits = clipdb.random_segments(10, rng=random.Random(1), path=self.path)
+
+        self.assertEqual(sorted(h["video_id"] for h in hits), ["v1", "v2"])
+        for h in hits:
+            self.assertTrue(6 <= len(h["text"].split()) <= 20)
+        self.assertEqual(hashlib.sha256(self.path.read_bytes()).hexdigest(), before)
+
+    def test_random_segments_skip_excluded_videos_and_failed_videos(self):
+        import random
+
+        self.save("v4", "@office", "Broken", [seg(0.0, 3.0, "this one has six words in it")], status="error")
+        hits = clipdb.random_segments(10, exclude_videos={"v1"}, rng=random.Random(2), path=self.path)
+
+        self.assertEqual([h["video_id"] for h in hits], ["v2"])
+        self.assertEqual(clipdb.random_segments(0, path=self.path), [])
+        self.assertEqual(clipdb.random_segments(3, path=self.path.parent / "missing.db"), [])
+
     def test_available_and_env_path(self):
         self.assertTrue(clipdb.available(self.path))
         with mock.patch.dict(os.environ, {"CLIPDB_PATH": str(self.path)}):
@@ -231,6 +254,90 @@ class MissingOrEmptyDb(unittest.TestCase):
             path.write_text("not a database", encoding="utf-8")
             self.assertFalse(clipdb.available(path))
             self.assertEqual(clipdb.search("you know", path=path), [])
+
+
+class PhraseAndGenreTest(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.db = Path(self._tmp.name) / "captions.db"
+        self.conn = clipdb.connect(self.db)
+        self.addCleanup(self.conn.close)
+        clipdb.upsert_channel(self.conn, "@show", "Show", "tv")
+        clipdb.upsert_channel(self.conn, "@pod", "Pod", "podcast")
+        clipdb.upsert_channel(self.conn, "@lec", "Lecture", "daily")
+
+    def add(self, vid, handle, text):
+        clipdb.save_video(
+            self.conn,
+            {"id": vid, "channel_handle": handle, "title": vid, "published": "2026-01-01T00:00:00Z", "duration_sec": 60},
+            "ok",
+            "auto",
+            [{"start": 1.0, "end": 4.0, "text": text}],
+            "2026-10-20T00:00:00+00:00",
+        )
+
+    def test_contains_phrase_ignores_case_and_punctuation_and_allows_simple_inflection(self):
+        self.assertTrue(clipdb.contains_phrase("Hey! Do you WORK from home?", "do you work from home"))
+        self.assertTrue(clipdb.contains_phrase("She works from home, though.", "work from home"))
+        self.assertTrue(clipdb.contains_phrase("We ended up leaving early", "end up"))
+        self.assertTrue(clipdb.contains_phrase("It was a long, long day", "long day"))
+
+    def test_contains_phrase_rejects_missing_scattered_and_empty(self):
+        self.assertFalse(clipdb.contains_phrase("or a dog person I think I'm a dog person", "do you work from home"))
+        self.assertFalse(clipdb.contains_phrase("do you ever work and then go home", "do you work from home"))
+        self.assertFalse(clipdb.contains_phrase("the universe is big", "university"))
+        self.assertFalse(clipdb.contains_phrase("anything", "  ?! "))
+
+    def test_excerpt_keeps_the_phrase_visible_in_a_long_caption(self):
+        text = "or a dog person I think I'm a dog person what do you do for work do you work from home or in an office"
+        short = clipdb.excerpt(text, "do you work from home")
+        self.assertTrue(clipdb.contains_phrase(short, "do you work from home"))
+        self.assertTrue(short.startswith("\u2026 ") and short.endswith(" \u2026"))
+        self.assertLessEqual(len(short.replace("\u2026", "").split()), 12)
+
+    def test_excerpt_leaves_short_text_alone_and_matches_inflected_forms(self):
+        self.assertEqual(clipdb.excerpt("  so what   do you do ", "what do you do"), "so what do you do")
+        long = "one two three four five six seven eight nine ten eleven twelve thirteen she works from home today fourteen fifteen sixteen"
+        self.assertIn("works from home", clipdb.excerpt(long, "work from home"))
+
+    def test_search_drops_full_text_hits_that_do_not_contain_the_phrase(self):
+        self.add("vid-aaaa1", "@show", "the universe is very big")
+        self.add("vid-bbbb1", "@show", "I study at the university")
+        hits = clipdb.search("university", 5, path=self.db)
+        self.assertEqual([h["video_id"] for h in hits], ["vid-bbbb1"])
+
+    def test_search_puts_lecture_channels_last_and_tiers_select_them(self):
+        self.add("vid-lec01", "@lec", "do you work from home or not")
+        self.add("vid-pod01", "@pod", "so do you work from home")
+        self.add("vid-tv001", "@show", "hey do you work from home")
+        phrase = "do you work from home"
+
+        preferred = clipdb.search(phrase, 5, path=self.db, tier=clipdb.TIER_PREFERRED)
+        lecture = clipdb.search(phrase, 5, path=self.db, tier=clipdb.TIER_LECTURE)
+        everything = clipdb.search(phrase, 5, path=self.db)
+
+        self.assertEqual({h["genre"] for h in preferred}, {"tv", "podcast"})
+        self.assertEqual([h["video_id"] for h in lecture], ["vid-lec01"])
+        self.assertEqual(everything[-1]["video_id"], "vid-lec01")
+        self.assertEqual(len(everything), 3)
+
+    def test_search_all_tier_does_not_use_lecture_when_preferred_fills_the_limit(self):
+        self.add("vid-lec01", "@lec", "do you work from home or not")
+        self.add("vid-pod01", "@pod", "so do you work from home")
+        hits = clipdb.search("do you work from home", 1, path=self.db)
+        self.assertEqual([h["video_id"] for h in hits], ["vid-pod01"])
+
+    def test_random_segments_prefer_non_lecture_and_fill_from_lecture_only_when_short(self):
+        for i in range(3):
+            self.add(f"vid-tv00{i}", "@show", f"this is a perfectly ordinary sentence number {i} here")
+            self.add(f"vid-lec0{i}", "@lec", f"this is a lecture style sentence number {i} here")
+        pref = clipdb.random_segments(3, path=self.db, rng=random.Random(1))
+        self.assertEqual({h["genre"] for h in pref}, {"tv"})
+        more = clipdb.random_segments(5, path=self.db, rng=random.Random(1))
+        self.assertEqual([h["genre"] for h in more].count("tv"), 3)
+        self.assertEqual(len(more), 5)
+        self.assertEqual({h["genre"] for h in clipdb.random_segments(3, path=self.db, rng=random.Random(2), tier=clipdb.TIER_LECTURE)}, {"daily"})
 
 
 if __name__ == "__main__":
