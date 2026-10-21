@@ -195,7 +195,7 @@ function CallDetailBody({ data, stem }: { data: CallDetail; stem: string }) {
               <>
                 <FriendMessage message={data.tutoring.friend_message} partnerId={data.call.partner} />
                 <TutoringBlocks tutoring={data.tutoring} isTeachback={data.call.kind === 'teachback'} stem={stem} />
-                <ThinkingGaps gaps={data.tutoring.thinking_gaps} />
+                <ThinkingGaps tutoring={data.tutoring} stem={stem} />
               </>
             ) : (
               <p className="mt-8 leading-relaxed text-ink-soft">이 통화는 저장된 요약이 없어요.</p>

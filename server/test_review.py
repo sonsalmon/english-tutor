@@ -158,6 +158,13 @@ class FinishAndTimerTest(ReviewTestBase):
         self.assertEqual(sent["us_style"], [])
         self.assertEqual(len(self.TUTORING["corrections"]), 2)
 
+    async def test_flagged_thinking_gap_is_dropped_from_the_card_update(self):
+        tutoring = {**self.TUTORING, "thinking_gaps": [{"korean": "정신없다", "english": "I'm swamped"}, {"korean": "가다", "english": "go"}]}
+        review.defer_card_update(STEM, tutoring)
+        await review.flag_endpoint(Req({"stem": STEM, "kind": "thinking_gap", "text": "I'm swamped", "state": "misheard"}))
+        await review.finish_endpoint(STEM, Req({}))
+        self.assertEqual([g["english"] for g in self.updates[0][1]["thinking_gaps"]], ["go"])
+
     async def test_unmarked_tutoring_is_handed_over_unchanged(self):
         review.defer_card_update(STEM, self.TUTORING)
         review.finish(STEM)

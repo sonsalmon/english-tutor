@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import type { Clip } from './api';
 
-export type ReviewKind = 'correction' | 'us_style' | 'vocab' | 'good';
+export type ReviewKind = 'correction' | 'us_style' | 'vocab' | 'good' | 'thinking_gap';
 export type ReviewState = 'saved' | 'known' | 'misheard';
 export type ReviewItems = Record<string, ReviewState>;
 

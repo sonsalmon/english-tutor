@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-KINDS = ("correction", "us_style", "vocab", "good")
+KINDS = ("correction", "us_style", "vocab", "good", "thinking_gap")
 STATES = ("saved", "known", "misheard")
 FLAGGED_STATES = ("known", "misheard")
 STEM_RE = re.compile(r"\d{4}-\d{2}-\d{2}-\d{6}", re.ASCII)
@@ -107,6 +107,8 @@ def filter_tutoring(stem: str, tutoring: dict) -> dict:
     out = dict(tutoring)
     out["corrections"] = [r for r in tutoring.get("corrections") or [] if keep("correction", "better")(r)]
     out["us_style"] = [r for r in tutoring.get("us_style") or [] if keep("us_style", "natural")(r)]
+    if "thinking_gaps" in tutoring:
+        out["thinking_gaps"] = [r for r in tutoring.get("thinking_gaps") or [] if keep("thinking_gap", "english")(r)]
     return out
 
 
