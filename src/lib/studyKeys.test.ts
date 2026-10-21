@@ -47,7 +47,7 @@ describe('단축키 표', () => {
   });
 
   test('도움말 목록이 단축키마다 한 줄씩 있다', () => {
-    expect(SHORTCUTS.length).toBe(11);
+    expect(SHORTCUTS.length).toBe(12);
     expect(new Set(SHORTCUTS.map((s) => s.keys)).size).toBe(SHORTCUTS.length);
   });
 });
