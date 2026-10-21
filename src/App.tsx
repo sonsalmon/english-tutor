@@ -5,7 +5,7 @@ import type { Retry } from './lib/instructions';
 import { takePendingLatency } from './lib/latency';
 import { PARK_ID } from './lib/partners';
 import { go, useRoute, useRouteParam } from './lib/router';
-import type { CallSetup, FinishedCall } from './lib/setup';
+import { setupPartner, type CallSetup, type FinishedCall } from './lib/setup';
 import { Chat } from './screens/Chat';
 import { Feed } from './screens/Feed';
 import { Home } from './screens/Home';
@@ -130,7 +130,7 @@ export function App() {
           </Suspense>
         ) : null;
       case 'summary':
-        return finished ? <Summary call={finished} onRetry={retry} /> : null;
+        return finished ? <Summary call={finished} onRetry={retry} onHome={() => go('person', false, setupPartner(finished.setup).id)} /> : null;
       case 'replay':
         return <Replay stem={param} />;
       case 'smalltalk':

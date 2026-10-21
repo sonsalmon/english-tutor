@@ -2,16 +2,31 @@ import asyncio
 import json
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from server import main, pron
+from server import main, pron, review
 
 TRANSCRIPT = Path("/nonexistent/2026-10-20-090000.md")
 TUTORING = {"corrections": [{"said": "I just start", "better": "I just started", "why": "x"}]}
+
+
+def isolate_review_state(test):
+    """튜터링·알려 준 표현 폴더를 임시 폴더로 돌리고 검토 대기 상태를 비운다."""
+    tmp = tempfile.TemporaryDirectory()
+    test.addCleanup(tmp.cleanup)
+    patcher = mock.patch.dict(
+        os.environ, {"TUTORING_DIR": tmp.name, "KNOWN_EXPRESSIONS_PATH": str(Path(tmp.name) / "known.json")}
+    )
+    patcher.start()
+    test.addCleanup(patcher.stop)
+    review._PENDING.clear()
+    review._TIMERS.clear()
+    return Path(tmp.name)
 
 
 class FakeRequest:
@@ -23,12 +38,15 @@ class FakeRequest:
 
 
 class TutorEndpointWiringTest(unittest.IsolatedAsyncioTestCase):
+    def finish(self):
+        return review.finish(TRANSCRIPT.stem)
+
     def setUp(self):
         main._TUTOR_CACHE.clear()
         main._PROFILE_UPDATED.clear()
-        main._READGLOSS_PUSHED.clear()
+        self.review_dir = isolate_review_state(self)
         patches = {
-            "push": mock.patch.object(main, "push_tutoring", return_value=2),
+            "bridge": mock.patch("server.readgloss._request", return_value=None),
             "resolve": mock.patch.object(main, "_wait_and_resolve_transcript", return_value=TRANSCRIPT),
             "run": mock.patch.object(main, "run_tutoring", side_effect=lambda path: (dict(TUTORING), True)),
             "schedule": mock.patch.object(main, "_schedule_profile_update"),
@@ -37,10 +55,41 @@ class TutorEndpointWiringTest(unittest.IsolatedAsyncioTestCase):
         for p in patches.values():
             self.addCleanup(p.stop)
 
-    async def test_fresh_tutoring_schedules_one_card_update(self):
+    async def test_fresh_tutoring_schedules_one_card_update_only_after_finish(self):
         await main.tutor_endpoint(FakeRequest({}))
+        self.mocks["schedule"].assert_not_called()
+
+        self.assertTrue(review.finish(TRANSCRIPT.stem))
+        self.assertFalse(review.finish(TRANSCRIPT.stem))
 
         self.mocks["schedule"].assert_called_once_with(TUTORING)
+
+    async def test_card_update_fires_after_the_delay_without_finish(self):
+        with mock.patch.object(review, "CARD_DELAY_SEC", 0):
+            await main.tutor_endpoint(FakeRequest({}))
+            await review._TIMERS[TRANSCRIPT.stem]
+
+        self.mocks["schedule"].assert_called_once_with(TUTORING)
+        self.assertFalse(review.finish(TRANSCRIPT.stem))
+
+    async def test_finish_leaves_out_items_the_learner_marked(self):
+        tutoring = {
+            "corrections": [
+                {"said": "a", "better": "I just started", "why": "x"},
+                {"said": "b", "better": "I got swamped", "why": "y"},
+            ],
+            "us_style": [{"said": "s", "korean_way": "k", "natural": "Thanks for jumping on this", "why": "w"}],
+        }
+        self.mocks["run"].side_effect = lambda path: (dict(tutoring), True)
+        await main.tutor_endpoint(FakeRequest({}))
+        review.apply_flag(TRANSCRIPT.stem, "correction", "I just started", "misheard")
+        review.apply_flag(TRANSCRIPT.stem, "us_style", "Thanks for jumping on this", "known")
+        review.apply_flag(TRANSCRIPT.stem, "correction", "I got swamped", "saved")
+        review.finish(TRANSCRIPT.stem)
+
+        sent = self.mocks["schedule"].call_args.args[0]
+        self.assertEqual([c["better"] for c in sent["corrections"]], ["I got swamped"])
+        self.assertEqual(sent["us_style"], [])
 
     async def test_thinking_gaps_reach_card_update_in_both_modes(self):
         gaps = [{"korean": "x", "english": "I'm swamped", "kind": "framing", "note": "n"}]
@@ -48,6 +97,7 @@ class TutorEndpointWiringTest(unittest.IsolatedAsyncioTestCase):
         res = json.loads((await main.tutor_endpoint(FakeRequest({}))).body)
 
         self.assertEqual(res["stem"], TRANSCRIPT.stem)
+        self.finish()
         self.mocks["schedule"].assert_called_once_with({**TUTORING, "thinking_gaps": gaps})
         self.mocks["schedule"].reset_mock()
         main._PROFILE_UPDATED.clear()
@@ -56,6 +106,7 @@ class TutorEndpointWiringTest(unittest.IsolatedAsyncioTestCase):
                 mock.patch.object(main, "lesson_text", return_value=""), \
                 mock.patch.object(main, "run_teachback", side_effect=lambda *a: (dict(result), True)):
             await main.tutor_endpoint(FakeRequest({"mode": "teachback"}))
+        self.finish()
         self.mocks["schedule"].assert_called_once_with({"corrections": [], "thinking_gaps": gaps})
 
     async def test_cached_result_does_not_update_card(self):
@@ -63,6 +114,7 @@ class TutorEndpointWiringTest(unittest.IsolatedAsyncioTestCase):
         await main.tutor_endpoint(FakeRequest({}))
 
         self.assertEqual(self.mocks["run"].call_count, 1)
+        self.finish()
         self.mocks["schedule"].assert_called_once()
 
     async def test_same_call_analyzed_again_after_cache_expiry_updates_card_once(self):
@@ -71,6 +123,7 @@ class TutorEndpointWiringTest(unittest.IsolatedAsyncioTestCase):
         await main.tutor_endpoint(FakeRequest({}))
 
         self.assertEqual(self.mocks["run"].call_count, 2)
+        self.finish()
         self.mocks["schedule"].assert_called_once()
 
     async def test_response_carries_cost_object_and_card_update_does_not(self):
@@ -79,6 +132,7 @@ class TutorEndpointWiringTest(unittest.IsolatedAsyncioTestCase):
             res = await main.tutor_endpoint(FakeRequest({}))
 
         self.assertEqual(json.loads(res.body)["cost"], {"live": 0.01, "tutoring": 0.002, "total": 0.012})
+        self.finish()
         self.mocks["schedule"].assert_called_once_with(TUTORING)
 
     async def test_cost_total_is_null_when_nothing_was_measured(self):
@@ -96,6 +150,7 @@ class TutorEndpointWiringTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_fresh_teachback_schedules_one_card_update_without_non_english_keys(self):
         await self._teachback()
+        self.finish()
 
         self.mocks["schedule"].assert_called_once_with({"corrections": TUTORING["corrections"]})
 
@@ -103,6 +158,7 @@ class TutorEndpointWiringTest(unittest.IsolatedAsyncioTestCase):
         await self._teachback()
         main._TUTOR_CACHE.clear()
         await self._teachback()
+        self.finish()
 
         self.mocks["schedule"].assert_called_once()
 
@@ -113,6 +169,7 @@ class TutorEndpointWiringTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.mocks["run"].call_count, 1)
         self.assertEqual(first["stem"], TRANSCRIPT.stem)
         self.assertEqual(cached["stem"], TRANSCRIPT.stem)
+        self.finish()
         self.mocks["schedule"].assert_called_once_with(TUTORING)
 
     async def test_error_after_path_known_carries_stem(self):
@@ -173,26 +230,30 @@ class TutorEndpointWiringTest(unittest.IsolatedAsyncioTestCase):
 class ReadglossWiringTest(unittest.IsolatedAsyncioTestCase):
     setUp = TutorEndpointWiringTest.setUp
 
-    async def test_fresh_tutoring_pushes_to_readgloss_once(self):
+    async def test_tutoring_never_pushes_to_readgloss(self):
         first = await main.tutor_endpoint(FakeRequest({}))
         main._TUTOR_CACHE.clear()
         await main.tutor_endpoint(FakeRequest({}))
+        review.finish(TRANSCRIPT.stem)
 
-        self.mocks["push"].assert_called_once()
-        self.assertEqual(self.mocks["push"].call_args.args[1], "English Tutor 통화 2026-10-20")
-        self.assertIn(b'"readgloss":{"saved":2}', first.body)
-
-    async def test_bridge_down_gives_null_and_retries_next_time(self):
-        self.mocks["push"].return_value = None
-        first = await main.tutor_endpoint(FakeRequest({}))
-        main._TUTOR_CACHE.clear()
-        await main.tutor_endpoint(FakeRequest({}))
-
+        self.mocks["bridge"].assert_not_called()
         self.assertIn(b'"readgloss":null', first.body)
-        self.assertEqual(self.mocks["push"].call_count, 2)
+
+    async def test_teachback_never_pushes_to_readgloss_and_waits_for_finish(self):
+        result = {"corrections": TUTORING["corrections"], "lesson_date": "2026-10-13"}
+        with mock.patch.object(main, "get_lesson", return_value={"date": "2026-10-13", "sections": []}), \
+                mock.patch.object(main, "lesson_text", return_value=""), \
+                mock.patch.object(main, "run_teachback", side_effect=lambda *a: (dict(result), True)):
+            res = await main.tutor_endpoint(FakeRequest({"mode": "teachback"}))
+
+        self.assertIn(b'"readgloss":null', res.body)
+        self.mocks["bridge"].assert_not_called()
+        self.mocks["schedule"].assert_not_called()
+        self.assertTrue(review.finish(TRANSCRIPT.stem))
 
     async def test_card_update_gets_no_readgloss_fields(self):
         await main.tutor_endpoint(FakeRequest({}))
+        review.finish(TRANSCRIPT.stem)
 
         sent = self.mocks["schedule"].call_args.args[0]
         self.assertNotIn("readgloss", sent)
@@ -548,16 +609,29 @@ class CultureEndpointTest(unittest.TestCase):
         tutoring = {
             "clip_query": "the coffee at a cafe",
             "vocab": [{"word": "latte"}, {"word": "coffee"}],
-            "thinking_gaps": [{"korean": "a", "english": "I'm swamped"}],
+            "thinking_gaps": [{"korean": "a", "english": "coffee"}],
         }
-        hits = {"blend": [{"id": "b"}], "bank": [{"id": "k"}]}
+        hits = {
+            "blend": [{"id": "b", "question": "What coffee do people drink?", "korea": [], "us": []}],
+            "bank": [{"country": "US", "topic": "coffee", "context": "cafe", "text": "x"}],
+        }
         res, s = self.get(tutoring, search=hits)
         body = res.json()
         self.assertEqual(body["status"], "ok")
         self.assertEqual(body["terms"], ["coffee", "cafe", "latte"])  # 폴백 단어는 최대 3개
         self.assertEqual((body["blend"], body["bank"]), (hits["blend"], hits["bank"]))
         self.assertEqual(body["attribution"], main.culturedb.ATTRIBUTION)
-        s.assert_called_once_with(["coffee", "cafe", "latte"])
+        s.assert_called_once_with(["coffee", "cafe", "latte"], main.CULTURE_CANDIDATE_BLEND, main.CULTURE_CANDIDATE_BANK)
+
+    def test_off_topic_notes_are_dropped_and_the_block_is_empty(self):
+        tutoring = {"topic_keywords": ["meeting", "deadline"], "clip_query": "coworkers at the beach"}
+        hits = {
+            "blend": [{"id": "b", "question": "What do people wear at the beach?", "korea": [], "us": []}],
+            "bank": [{"country": "US", "topic": "swimwear", "context": "beach", "text": "Americans wear swimwear at the beach."}],
+        }
+        res, _ = self.get(tutoring, search=hits)
+        body = res.json()
+        self.assertEqual((body["status"], body["blend"], body["bank"]), ("ok", [], []))
 
     def test_terms_capped_at_six(self):
         res, _ = self.get({"topic_keywords": ["alpha one", "bravo two", "charlie three", "delta four", "echo five", "foxtrot six", "golf seven"]})
@@ -789,9 +863,8 @@ class PartnerMemoryWiringTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         main._TUTOR_CACHE.clear()
         main._PROFILE_UPDATED.clear()
-        main._READGLOSS_PUSHED.clear()
+        isolate_review_state(self)
         patches = {
-            "push": mock.patch.object(main, "push_tutoring", return_value=0),
             "resolve": mock.patch.object(main, "_wait_and_resolve_transcript", return_value=TRANSCRIPT),
             "run": mock.patch.object(main, "run_tutoring", side_effect=lambda path: (dict(TUTORING), True)),
             "profile": mock.patch.object(main, "_schedule_profile_update"),
