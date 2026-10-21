@@ -24,6 +24,8 @@ describe('단축키 표', () => {
       [']', 'faster'],
       ['c', 'eng'],
       ['C', 'eng'],
+      ['k', 'ko'],
+      ['K', 'ko'],
       ['?', 'help'],
       ['Escape', 'close'],
     ];
@@ -43,7 +45,7 @@ describe('단축키 표', () => {
   });
 
   test('도움말 목록이 단축키마다 한 줄씩 있다', () => {
-    expect(SHORTCUTS.length).toBe(10);
+    expect(SHORTCUTS.length).toBe(11);
     expect(new Set(SHORTCUTS.map((s) => s.keys)).size).toBe(SHORTCUTS.length);
   });
 });

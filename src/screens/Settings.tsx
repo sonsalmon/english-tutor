@@ -2,6 +2,7 @@ import { History as HistoryIcon, Mic } from 'lucide-react';
 import { useState } from 'react';
 import { ScreenSettings } from '../components/ScreenSettings';
 import { List, RowLink, Screen } from '../components/ui';
+import { loadKoSettings, saveKoSettings } from '../lib/koLines';
 import { go } from '../lib/router';
 import { loadShareWordbook, saveShareWordbook } from '../lib/shareWordbook';
 import { loadShowAllFriends, saveShowAllFriends } from '../lib/visibility';
@@ -37,6 +38,11 @@ export function Settings() {
     setShareBook(value);
     saveShareWordbook(value);
   };
+  const [koEnabled, setKoEnabled] = useState(() => loadKoSettings().enabled);
+  const changeKoEnabled = (value: boolean) => {
+    setKoEnabled(value);
+    saveKoSettings({ ...loadKoSettings(), enabled: value });
+  };
   return (
     <Screen>
       <header className="flex h-11 items-center lg:mb-4 lg:h-auto">
@@ -56,6 +62,12 @@ export function Settings() {
           desc="친구가 내 단어장의 단어와 저장한 문장을 알고 대화에 가끔 써요. 단어와 짧은 문장만 가고, 읽던 글과 주소는 가지 않아요."
           checked={shareBook}
           onChange={changeShareBook}
+        />
+        <ToggleRow
+          label="클립 공부의 한국어 줄"
+          desc="클립 공부 화면에서 보는 줄만 한국어로 번역해요. 하루 300줄까지만 쓰고, 한 번 받은 줄은 다시 부르지 않아요. 끄면 번역을 한 번도 요청하지 않아요."
+          checked={koEnabled}
+          onChange={changeKoEnabled}
         />
         <ToggleRow
           label="숨긴 친구 보기"
