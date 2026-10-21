@@ -2,7 +2,7 @@ import { ChevronDown, ExternalLink, Play, Volume2 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { StarButton } from '../components/StarButton';
 import { WordText } from '../components/WordText';
-import { getFeed, loadSeen, rememberSeen, saveSeen, type FeedClip, type FeedFilter } from '../lib/apiFeed';
+import { getFeed, loadSeen, rememberSeen, saveSeen, type FeedClip, type FeedFilter, type NativeInfo } from '../lib/apiFeed';
 
 type Load = { status: 'loading' | 'ready' | 'off' | 'error'; message?: string };
 
@@ -139,6 +139,54 @@ function Video({ clip, active }: { clip: FeedClip; active: boolean }) {
   );
 }
 
+const KIND_LABEL: Record<string, string> = { idiom: '관용구', phrasal_verb: '구동사', chunk: '고정 표현', discourse_marker: '담화 표지' };
+const REGISTER_LABEL: Record<string, string> = { casual: '편한 말', neutral: '보통', work: '일하는 자리' };
+const SOURCE_LABEL: Record<FeedClip['source'], string> = { mine: '내 표현', browse: '둘러보기', native: '원어민 표현' };
+
+function NativePanel({ info }: { info: NativeInfo }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <section aria-label="원어민 표현 설명" className="rounded-xl bg-white/10 px-4 py-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 lang="en" className="text-xl leading-tight font-bold break-words">
+          {info.expression}
+        </h2>
+        {KIND_LABEL[info.kind] && <span className="rounded-full bg-white/15 px-2.5 py-0.5 text-xs font-semibold">{KIND_LABEL[info.kind]}</span>}
+      </div>
+      <p className="mt-1 text-base font-semibold">{info.meaning_ko}</p>
+      {info.why_hard && <p className="mt-1 text-sm leading-snug text-white/80">{info.why_hard}</p>}
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="mt-1 flex min-h-11 min-w-11 items-center gap-1 text-sm font-semibold underline underline-offset-2"
+      >
+        {open ? '접기' : '자세히'}
+      </button>
+      {open && (
+        <dl className="mt-1 grid gap-1 text-sm text-white/80">
+          {info.example && (
+            <div>
+              <dt className="font-semibold text-white">예문</dt>
+              <dd lang="en">{info.example}</dd>
+            </div>
+          )}
+          <div>
+            <dt className="font-semibold text-white">원어민 빈도</dt>
+            <dd>백만 낱말당 {Math.round(info.per_million)}번</dd>
+          </div>
+          {REGISTER_LABEL[info.register] && (
+            <div>
+              <dt className="font-semibold text-white">쓰는 자리</dt>
+              <dd>{REGISTER_LABEL[info.register]}</dd>
+            </div>
+          )}
+        </dl>
+      )}
+    </section>
+  );
+}
+
 function Card({ clip, index, count, active, last, loadingMore, onNext }: { clip: FeedClip; index: number; count: number; active: boolean; last: boolean; loadingMore: boolean; onNext: () => void }) {
   const units = clip.term && clip.term.trim().split(/\s+/).length >= 2 ? [{ text: clip.term }] : undefined;
   return (
@@ -146,9 +194,9 @@ function Card({ clip, index, count, active, last, loadingMore, onNext }: { clip:
       aria-posinset={index + 1}
       aria-setsize={count}
       aria-label={`클립 ${index + 1}`}
-      className="relative flex h-full shrink-0 snap-start snap-always flex-col bg-ink px-5 pt-[4.75rem] pb-5 text-white"
+      className="relative flex h-full shrink-0 snap-start snap-always flex-col overflow-y-auto bg-ink px-5 pt-[4.75rem] pb-5 text-white"
     >
-      <div className="flex min-h-0 flex-1 flex-col justify-center gap-2">
+      <div className="flex min-h-[18rem] flex-1 flex-col justify-center gap-2">
         <Video clip={clip} active={active} />
         <p className="truncate text-sm text-white/70">
           {clip.channel}
@@ -156,14 +204,15 @@ function Card({ clip, index, count, active, last, loadingMore, onNext }: { clip:
           {clip.title}
         </p>
       </div>
+      {clip.native && <NativePanel info={clip.native} />}
       <p lang="en" className="py-4 text-[22px] leading-snug font-semibold break-words lg:text-2xl">
         <WordText text={clip.text} units={units} />
       </p>
       <div className="flex items-center gap-3">
-        <span className="rounded-full bg-white/15 px-3 py-1.5 text-sm font-semibold">{clip.source === 'mine' ? '내 표현' : '둘러보기'}</span>
+        <span className="rounded-full bg-white/15 px-3 py-1.5 text-sm font-semibold">{SOURCE_LABEL[clip.source]}</span>
         <span className="flex-1" />
         <span className="rounded-full bg-white">
-          <StarButton kind="phrase" text={clip.term ?? clip.text} />
+          <StarButton kind="phrase" text={clip.term ?? clip.text} gloss={clip.native?.meaning_ko ?? ''} />
         </span>
         <button
           type="button"
@@ -295,7 +344,9 @@ export function Feed() {
         : load.status === 'error'
           ? load.message
           : clips.length === 0
-            ? '보여 드릴 클립이 없어요.'
+            ? filter === 'native'
+              ? '원어민 표현 목록이 아직 없어요.'
+              : '보여 드릴 클립이 없어요.'
             : null;
 
   return (
@@ -304,6 +355,7 @@ export function Feed() {
       <div role="tablist" aria-label="클립 종류" className="absolute top-3 left-5 z-10 flex gap-2">
         {chip('mine', '내 표현')}
         {chip('browse', '둘러보기')}
+        {chip('native', '원어민 표현')}
       </div>
       {filter === 'mine' && load.status === 'ready' && terms === 0 && (
         <p className="absolute top-[3.75rem] right-5 left-5 z-10 text-xs text-white/70">저장한 표현이 아직 없어서 둘러보기 장면으로 채웠어요.</p>

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { rememberSeen } from './apiFeed';
+import { parseNative, rememberSeen } from './apiFeed';
 import { filterWordbook } from './apiWords';
 
 describe('seen clip memory', () => {
@@ -15,6 +15,20 @@ describe('seen clip memory', () => {
 
   test('a repeated id moves to the end instead of doubling', () => {
     expect(rememberSeen(['a:1', 'b:2', 'c:3'], ['a:1'])).toEqual(['b:2', 'c:3', 'a:1']);
+  });
+});
+
+describe('native expression payload', () => {
+  test('a full payload is kept and numbers are coerced', () => {
+    const info = parseNative({ expression: 'end up', kind: 'phrasal_verb', meaning_ko: '결국 ~하게 되다', why_hard: 'x', register: 'casual', example: 'We ended up home.', per_million: '121.3' });
+    expect(info?.expression).toBe('end up');
+    expect(info?.per_million).toBeCloseTo(121.3);
+  });
+
+  test('missing expression or meaning is rejected', () => {
+    expect(parseNative({ expression: 'end up' })).toBeNull();
+    expect(parseNative({ meaning_ko: '뜻' })).toBeNull();
+    expect(parseNative(null)).toBeNull();
   });
 });
 

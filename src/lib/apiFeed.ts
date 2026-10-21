@@ -1,4 +1,13 @@
-export type FeedFilter = 'mine' | 'browse';
+export type FeedFilter = 'mine' | 'browse' | 'native';
+export type NativeInfo = {
+  expression: string;
+  kind: string;
+  meaning_ko: string;
+  why_hard: string;
+  register: string;
+  example: string;
+  per_million: number;
+};
 export type FeedClip = {
   id: string;
   video_id: string;
@@ -7,10 +16,27 @@ export type FeedClip = {
   text: string;
   title: string;
   channel: string;
-  source: 'mine' | 'browse';
+  source: 'mine' | 'browse' | 'native';
   term: string | null;
+  native: NativeInfo | null;
 };
-export type FeedPage = { available: boolean; clips: FeedClip[]; terms: number };
+export type FeedPage = { available: boolean; clips: FeedClip[]; terms: number; native: number };
+
+// 서버가 준 native 덩어리를 검증한다. 표현과 뜻이 없으면 일반 클립처럼 다룬다.
+export function parseNative(raw: any): NativeInfo | null {
+  const expression = String(raw?.expression ?? '').trim();
+  const meaning = String(raw?.meaning_ko ?? '').trim();
+  if (!expression || !meaning) return null;
+  return {
+    expression,
+    kind: String(raw?.kind ?? ''),
+    meaning_ko: meaning,
+    why_hard: String(raw?.why_hard ?? ''),
+    register: String(raw?.register ?? ''),
+    example: String(raw?.example ?? ''),
+    per_million: Number(raw?.per_million) || 0,
+  };
+}
 
 export const SEEN_KEY = 'english-tutor.feed-seen';
 export const SEEN_CAP = 200;
@@ -58,8 +84,14 @@ export async function getFeed(filter: FeedFilter, seen: string[], signal?: Abort
     text: String(c?.text ?? ''),
     title: String(c?.title ?? ''),
     channel: String(c?.channel ?? ''),
-    source: c?.source === 'mine' ? 'mine' : 'browse',
+    source: c?.source === 'mine' ? 'mine' : c?.source === 'native' && parseNative(c?.native) ? 'native' : 'browse',
     term: typeof c?.term === 'string' && c.term ? c.term : null,
+    native: c?.source === 'native' ? parseNative(c?.native) : null,
   }));
-  return { available: data?.available !== false, clips: clips.filter((c: FeedClip) => c.id && c.video_id), terms: Number(data?.terms) || 0 };
+  return {
+    available: data?.available !== false,
+    clips: clips.filter((c: FeedClip) => c.id && c.video_id),
+    terms: Number(data?.terms) || 0,
+    native: Number(data?.native) || 0,
+  };
 }

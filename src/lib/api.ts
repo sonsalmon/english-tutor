@@ -3,9 +3,12 @@ import type { CallLatency, LatencyResult } from './latency';
 
 export type WeakPoint = { pattern: string; example: string };
 // 내 단어장에서 친구 통화·채팅에 보여 주는 단어와 저장한 문장. 서버가 아직 안 주는 동안은 없다.
+export type NativeHint = { phrase: string; meaning: string };
 export type Wordbook = {
   words: { lemma: string; gloss: string }[];
   phrases: { text: string; gloss: string }[];
+  // 친구 통화·채팅에 줄 원어민 표현(서버가 통화마다 2개를 고른다). 단어장 공유 설정과 별개다.
+  native?: NativeHint[];
 };
 export type LearnerProfile = {
   brief: string;
@@ -16,6 +19,7 @@ export type LearnerProfile = {
   interests?: string[];
   load_failed?: boolean;
   wordbook?: Wordbook;
+  native_expressions?: NativeHint[];
 };
 // smalltalk(친구 통화)는 제한이 없어 null이다.
 export type TimeLimits = { call: number; teachback: number; smalltalk: number | null };

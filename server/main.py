@@ -32,7 +32,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCRequestHandler,
 )
 
-from server import chat, clipdb, culture_filter, culturedb, feed, people, phrase_gloss, pron, review, tts, wordbook, youtube
+from server import chat, clipdb, culture_filter, culturedb, feed, native_expr, people, phrase_gloss, pron, review, tts, wordbook, youtube
 from server.call_bot import parse_call_config, run_bot, time_limit_for_mode
 from server import partner_memory
 from server.history import list_calls, live_cost_of, load_call, totals as call_totals
@@ -139,7 +139,17 @@ async def learner_profile_endpoint():
         "next_goal": card["next_goal"] if card else "",
         "practice_words": practice,
         "wordbook": wordbook_lists,
+        "native_expressions": await asyncio.to_thread(_native_hints, wordbook_lists),
     }
+
+
+def _native_hints(wordbook_lists: dict) -> list:
+    """친구 통화·채팅에 줄 원어민 표현 2개. 목록 파일이 없으면 빈 목록."""
+    entries = native_expr.load()
+    if not entries:
+        return []
+    saved = [str(p.get("text") or "") for p in wordbook_lists.get("phrases") or []]
+    return native_expr.pick_for_friend(entries, saved, native_expr.recent_learner_text())
 
 
 # 다리가 멈춰 있어도 홈 화면(기억 요약)이 오래 기다리지 않게 전체 시간을 자른다.
