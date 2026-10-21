@@ -203,6 +203,7 @@ class CallEndSummaryTest(unittest.IsolatedAsyncioTestCase):
         self.gate = threading.Event()
         self.gate.set()
         self.outcomes = []
+        self.unsaved = False
         self.run = mock.patch.object(main, "run_tutoring", side_effect=self.fake_run).start()
         self.defer = mock.patch.object(main.review, "defer_card_update").start()
         self.addCleanup(mock.patch.stopall)
@@ -212,6 +213,8 @@ class CallEndSummaryTest(unittest.IsolatedAsyncioTestCase):
         outcome = self.outcomes.pop(0) if self.outcomes else None
         if outcome is not None:
             raise outcome
+        if self.unsaved:
+            return dict(TUTORING), False
         (self.tutoring / f"{Path(path).stem}.json").write_text(json.dumps(TUTORING), encoding="utf-8")
         return dict(TUTORING), True
 
@@ -283,6 +286,44 @@ class CallEndSummaryTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(self.listed(), "done")
         self.assertEqual(self.run.call_count, 2)
+
+    async def test_retry_after_a_done_job_whose_summary_file_was_not_saved_starts_a_new_job(self):
+        self.unsaved = True
+        main._on_call_saved(self.path, self.config())
+        await self.finish_job()
+
+        self.assertEqual(summary_jobs.job_status(STEM), summary_jobs.DONE)
+        self.assertEqual(self.listed(), "pending")
+
+        self.unsaved = False
+        self.gate.clear()
+        self.assertEqual(await main.call_summary_endpoint(STEM), {"summary": "running"})
+        self.gate.set()
+        await self.finish_job()
+
+        self.assertEqual(self.listed(), "done")
+        self.assertEqual(self.run.call_count, 2)
+
+    def test_job_input_is_written_before_the_transcript_is_visible(self):
+        self.path.unlink()
+        call_bot.configure_call_saved(mock.Mock())
+        self.addCleanup(call_bot.configure_call_saved, None)
+        record = CallRecord(started_at=1_792_450_000.0)
+        record.add_user("hello there my friend")
+        config = self.config("teachback", lesson_date="2026-10-13", practice_words=("hello",))
+        stem = call_bot.transcript_stem(call_bot.time.strftime("%Y-%m-%d %H:%M:%S", call_bot.time.localtime(record.started_at)))
+        real_save = call_bot.save_transcript
+        seen = []
+
+        def spy(*args, **kwargs):
+            seen.append(summary_jobs.read_spec(stem))
+            return real_save(*args, **kwargs)
+
+        with mock.patch.object(call_bot, "save_transcript", side_effect=spy):
+            saved = call_bot.finish_call(record, config, "m", ended_at=1_792_450_030.0)
+
+        self.assertEqual(saved.stem, stem)
+        self.assertEqual(seen, [summary_jobs.JobSpec("teachback", "2026-10-13", ("hello",))])
 
     async def test_page_joining_a_failed_job_gets_the_error_with_stem(self):
         self.outcomes = [main.TutoringAnalysisError("빈 결과")]

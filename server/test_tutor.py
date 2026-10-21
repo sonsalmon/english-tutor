@@ -281,6 +281,19 @@ class UsStyleTest(unittest.TestCase):
         self.assertEqual([c["better"] for c in out["corrections"]], ["I got swamped"])
         self.assertEqual([v["word"] for v in out["vocab"]], ["swamped"])
 
+    def test_known_expressions_leave_thinking_gaps(self):
+        raw = {
+            "thinking_gaps": [
+                {"korean": "정신없다", "english": "I'm swamped", "kind": "framing", "note": "n"},
+                {"korean": "도마", "english": "cutting board", "kind": "word", "note": "n"},
+            ],
+            "good": [{"said": "a", "note": "b"}],
+        }
+
+        out = tutor.normalize_tutor_json(raw, known=["I'm swamped"])
+
+        self.assertEqual([g["english"] for g in out["thinking_gaps"]], ["cutting board"])
+
     def test_us_style_alone_makes_the_result_non_empty_and_old_pragmatics_still_count(self):
         self.assertFalse(tutor.is_empty_result({"us_style": [us("a", "b c")]}))
         self.assertFalse(tutor.is_empty_result({"pragmatics": [{"pattern": "p", "note": "n"}]}))

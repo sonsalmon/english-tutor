@@ -192,7 +192,8 @@ function CallDetailBody({ data, stem, onStartSummary }: { data: CallDetail; stem
     }
   };
   // 탭을 옮겨도 화면이 열려 있는 동안은 검토가 끝난 것이 아니다(요약 탭의 블록이 언마운트되어도 유지).
-  useFinishReview(stem);
+  // 요약이 아직 없으면(정리하는 중) 보여 준 게 없으니 검토 완료로 치지 않는다.
+  useFinishReview(data.tutoring ? stem : null);
   const latency = latencyText(data.call.latency);
   const partner = partnerById(data.call.partner);
   const hasTranscript = data.transcript.length > 0 || !!data.verbatim;

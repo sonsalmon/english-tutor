@@ -201,7 +201,9 @@ def build_audio_in_filter(env=None):
         import pyrnnoise  # noqa: F401  pipecat은 없어도 import가 통과하므로 먼저 확인한다
         from pipecat.audio.filters.rnnoise_filter import RNNoiseFilter
 
-        return RNNoiseFilter()
+        noise_filter = RNNoiseFilter()
+        logger.info("Noise filter on (RNNoise)")
+        return noise_filter
     except Exception as exc:  # ImportError뿐 아니라 네이티브 라이브러리 로딩 실패도 통화를 막지 않는다
         logger.warning("RNNoise unavailable, running without noise filter: %s", exc)
         return None
@@ -482,9 +484,21 @@ def make_usage_collector(usage: UsageTotals):
     return UsageCollector()
 
 
+def job_spec_for(config: "CallConfig"):
+    """통화 정리 작업의 입력(mode·수업 날짜·연습 단어)."""
+    from server.summary_jobs import JobSpec
+
+    return JobSpec(mode=config.mode, lesson_date=config.lesson_date, practice_words=config.practice_words)
+
+
 def finish_call(record: CallRecord, config: CallConfig, model: str, ended_at: Optional[float] = None, vad: Optional[str] = None):
     ended_at = ended_at or time.time()
     started_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(record.started_at))
+    if _call_saved_hook is not None and record.learner_has_spoken():
+        # 전문(.md)이 생기는 순간부터 /api/tutor·/api/calls가 이 통화를 볼 수 있으므로, 정리 입력을 그보다 먼저 남겨 둔다.
+        from server.summary_jobs import write_spec
+
+        write_spec(transcript_stem(started_str), job_spec_for(config))
     try:
         if record.mic_pcm:
             save_call_audio(bytes(record.mic_pcm), transcript_stem(started_str), sample_rate=MIC_SAMPLE_RATE)
@@ -552,17 +566,18 @@ def mission_tools(config: CallConfig):
 
 def live_config_for(mode: str, env=None):
     """run_bot이 쓰는 (Live 모델, Gemini VAD 설정, 로컬 사용자 설정, 전문 `- vad:` 요약)을 한 번에 돌려준다."""
-    vad, user_params = turn_settings(mode)
+    vad, user_params = turn_settings(mode, env)
     return live_model_for(mode, env), vad, user_params, vad_summary(chat_vad_overrides(mode, env))
 
 
-def turn_settings(mode: Optional[str] = None):
+def turn_settings(mode: Optional[str] = None, env=None):
     """TURN_MODE에 따라 (Gemini VAD 설정, 로컬 VAD·Smart Turn 사용자 설정)을 돌려준다.
     mode가 smalltalk·freetalk이면 LIVE_VAD_CHAT_* 노브를 기본 VAD 위에 덮는다."""
     from pipecat.processors.aggregators.llm_response_universal import LLMUserAggregatorParams
     from pipecat.services.google.gemini_live.llm import GeminiVADParams
 
-    if os.getenv(TURN_MODE_ENV, "gemini") == "smart":
+    env = os.environ if env is None else env
+    if env.get(TURN_MODE_ENV, "gemini") == "smart":
         from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
         from pipecat.audio.vad.silero import SileroVADAnalyzer
         from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
@@ -578,9 +593,9 @@ def turn_settings(mode: Optional[str] = None):
     params = GeminiVADParams(
         end_sensitivity=EndSensitivity.END_SENSITIVITY_LOW,
         silence_duration_ms=1200,
-        **start_vad_settings(),
+        **start_vad_settings(env),
     )
-    overrides = chat_vad_overrides(mode) if mode else {}
+    overrides = chat_vad_overrides(mode, env) if mode else {}
     if overrides:
         params = params.model_copy(update=overrides)
     return params, None

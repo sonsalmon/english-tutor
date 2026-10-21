@@ -459,7 +459,7 @@ def normalize_tutor_json(
         if _clean_str(p)
     ][:MAX_PHRASES]
 
-    thinking_gaps = normalize_thinking_gaps(data.get("thinking_gaps"))
+    thinking_gaps = _drop_known(normalize_thinking_gaps(data.get("thinking_gaps")), "english", known_keys)
     corrections = _drop_known(_rows(data, "corrections", ["said", "better", "why"], MAX_CORRECTIONS), "better", known_keys)
     vocab = _drop_known(_rows(data, "vocab", ["word", "meaning_ko", "example", "etymology"], MAX_VOCAB), "word", known_keys)
     if transcript is not None:

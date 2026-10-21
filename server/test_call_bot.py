@@ -264,7 +264,7 @@ class LiveKnobsTest(unittest.TestCase):
         self.assertEqual(call_bot.chat_vad_overrides("smalltalk", {"LIVE_VAD_CHAT_SILENCE_MS": "3000"}), {**CHAT_DEFAULT_VAD, "silence_duration_ms": 3000})
 
     def test_chat_modes_default_to_high_end_and_500ms_without_env(self):
-        env = {k: v for k, v in os.environ.items() if not k.startswith("LIVE_VAD_CHAT_") and k != "TURN_MODE"}
+        env = {k: v for k, v in os.environ.items() if not k.startswith("LIVE_VAD_") and k != "TURN_MODE"}
         with mock.patch.dict(os.environ, env, clear=True):
             chat, _ = call_bot.turn_settings("smalltalk")
             free, _ = call_bot.turn_settings("freetalk")
@@ -303,9 +303,9 @@ class LiveKnobsTest(unittest.TestCase):
         self.assertEqual(call_bot.chat_vad_overrides("smalltalk", env), {})
 
     def test_turn_settings_applies_overrides_to_chat_only(self):
-        env = {"LIVE_VAD_CHAT_END_SENSITIVITY": "HIGH", "LIVE_VAD_CHAT_SILENCE_MS": "700"}
-        with mock.patch.dict(os.environ, env, clear=False):
-            os.environ.pop("TURN_MODE", None)
+        env = {k: v for k, v in os.environ.items() if not k.startswith("LIVE_VAD_") and k != "TURN_MODE"}
+        env.update({"LIVE_VAD_CHAT_END_SENSITIVITY": "HIGH", "LIVE_VAD_CHAT_SILENCE_MS": "700"})
+        with mock.patch.dict(os.environ, env, clear=True):
             chat, _ = call_bot.turn_settings("smalltalk")
             mission, _ = call_bot.turn_settings("mission")
             teachback, _ = call_bot.turn_settings("teachback")
@@ -315,6 +315,13 @@ class LiveKnobsTest(unittest.TestCase):
         self.assertEqual(chat.prefix_padding_ms, 500)  # 설정 안 한 노브는 새 기본값
         for params in (mission, teachback, plain):
             self.assertEqual((params.silence_duration_ms, params.end_sensitivity), (1200, call_bot.EndSensitivity.END_SENSITIVITY_LOW))
+
+    def test_live_config_for_uses_the_given_env_not_the_process_env(self):
+        with mock.patch.dict(os.environ, {"LIVE_VAD_PREFIX_MS": "900", "LIVE_VAD_START_SENSITIVITY": "HIGH"}):
+            vad = call_bot.live_config_for("mission", {})[1]
+            self.assertEqual((vad.start_sensitivity, vad.prefix_padding_ms), (call_bot.StartSensitivity.START_SENSITIVITY_LOW, 500))
+            vad = call_bot.live_config_for("mission", {"LIVE_VAD_PREFIX_MS": "700"})[1]
+            self.assertEqual(vad.prefix_padding_ms, 700)
 
     def test_start_vad_defaults_low_and_500ms(self):
         got = call_bot.start_vad_settings({})
@@ -358,7 +365,10 @@ class LiveKnobsTest(unittest.TestCase):
     def test_noise_filter_built_when_pyrnnoise_present(self):
         from pipecat.audio.filters.rnnoise_filter import RNNoiseFilter
 
-        self.assertIsInstance(call_bot.build_audio_in_filter({}), RNNoiseFilter)
+        with mock.patch.object(call_bot.logger, "info") as info:
+            self.assertIsInstance(call_bot.build_audio_in_filter({}), RNNoiseFilter)
+        info.assert_called_once()
+        self.assertIn("Noise filter on", info.call_args.args[0])
 
     def test_noise_filter_missing_pyrnnoise_warns_and_returns_none(self):
         with mock.patch.dict(sys.modules, {"pyrnnoise": None}), mock.patch.object(call_bot.logger, "warning") as warn:

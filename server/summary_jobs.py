@@ -126,6 +126,13 @@ async def _run(job: Job, factory: Callable[[], Awaitable[dict]]) -> None:
         job.status = FAILED
 
 
+def forget_done(stem: str) -> None:
+    """끝났다고 등록됐지만 요약 파일이 없는 작업(저장 실패)을 잊는다. 사용자가 다시 정리하기를 누르면 새 작업이 걸리게 한다."""
+    job = _JOBS.get(stem)
+    if job is not None and job.status == DONE:
+        del _JOBS[stem]
+
+
 def _prune() -> None:
     finished = [stem for stem, job in _JOBS.items() if job.status != RUNNING]
     for stem in finished[: max(0, len(finished) - KEEP_FINISHED)]:

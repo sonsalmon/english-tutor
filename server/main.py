@@ -299,8 +299,8 @@ async def _summary_job(path: Path, spec: summary_jobs.JobSpec) -> dict:
 def _on_call_saved(saved: Path, config: call_bot.CallConfig) -> None:
     """통화 전문이 저장되면 서버가 스스로 정리를 건다. 화면이 닫혀 있어도 이어서 돈다."""
     path = Path(saved)
-    spec = summary_jobs.JobSpec(mode=config.mode, lesson_date=config.lesson_date, practice_words=config.practice_words)
-    summary_jobs.write_spec(path.stem, spec)
+    spec = call_bot.job_spec_for(config)
+    summary_jobs.write_spec(path.stem, spec)  # finish_call이 전문 저장 전에 이미 남겼지만, 훅을 직접 부르는 경로를 위해 한 번 더(같은 내용)
     summary_jobs.start(path.stem, lambda: _summary_job(path, spec))
 
 
@@ -464,6 +464,8 @@ async def call_summary_endpoint(stem: str):
     if await asyncio.to_thread(has_summary, stem):
         return {"summary": "done"}
     spec = await asyncio.to_thread(_spec_for, stem, None)
+    # 작업은 끝났는데 요약 파일이 없으면(저장 실패) 끝난 작업을 재사용하지 말고 새로 건다.
+    summary_jobs.forget_done(stem)
     summary_jobs.start(stem, lambda: _summary_job(path, spec))
     return {"summary": summary_jobs.unfinished_status(stem)}
 

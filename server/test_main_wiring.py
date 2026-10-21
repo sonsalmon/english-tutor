@@ -20,7 +20,7 @@ def isolate_review_state(test):
     tmp = tempfile.TemporaryDirectory()
     test.addCleanup(tmp.cleanup)
     patcher = mock.patch.dict(
-        os.environ, {"TUTORING_DIR": tmp.name, "KNOWN_EXPRESSIONS_PATH": str(Path(tmp.name) / "known.json")}
+        os.environ, {"TUTORING_DIR": tmp.name, "TEACHBACK_DIR": str(Path(tmp.name) / "teachback"), "KNOWN_EXPRESSIONS_PATH": str(Path(tmp.name) / "known.json")}
     )
     patcher.start()
     test.addCleanup(patcher.stop)

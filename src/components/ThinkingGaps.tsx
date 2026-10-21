@@ -39,9 +39,7 @@ function Row({ gap, review, cards }: { gap: ThinkingGap; review: Review; cards: 
             <ArrowRight size={16} className="shrink-0 self-center text-ink-soft" aria-hidden />
             <span className="sr-only">영어로</span>
             <span lang="en" className="min-w-0 text-lg font-semibold break-words">
-              <span className="mark">
-                <WordText text={gap.english} />
-              </span>
+              <span className="mark">{gap.english}</span>
             </span>
           </span>
           {state && (
