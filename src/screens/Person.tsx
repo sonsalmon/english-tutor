@@ -2,6 +2,7 @@ import { Briefcase, ChevronLeft, ChevronRight, GraduationCap, MessageCircle, Mes
 import { useEffect, useRef, useState } from 'react';
 import { Avatar } from '../components/Avatar';
 import { FriendMemory, type MemoryState } from '../components/FriendMemory';
+import { SummaryBadge } from '../components/SummaryState';
 import { PeopleList, TwoPane } from '../components/PeopleList';
 import { CallButton, List, QuietButton, RowLink, Screen, useWide } from '../components/ui';
 import { WordText } from '../components/WordText';
@@ -11,6 +12,7 @@ import { formatShortDuration, formatWhen } from '../lib/callFormat';
 import { PARK_ID, isPark, partnerMeta, type Partner } from '../lib/partners';
 import { pronSummaryOf, type PronWeak } from '../lib/pron';
 import { go } from '../lib/router';
+import { useSummaryPolling } from '../lib/useSummaryPolling';
 import { useSwipe } from '../lib/swipe';
 import { visiblePartners } from '../lib/visibility';
 
@@ -150,6 +152,15 @@ function CallHistoryList({ partnerId }: { partnerId: string }) {
     return () => controller.abort();
   }, [partnerId]);
 
+  const running = calls?.some((c) => c.summary === 'running') ?? false;
+  useSummaryPolling(
+    running,
+    async (signal) => {
+      setCalls(await getPersonCalls(partnerId, 50, signal));
+    },
+    partnerId,
+  );
+
   const park = partnerId === PARK_ID;
   return (
     <section className="mt-8">
@@ -169,7 +180,7 @@ function CallHistoryList({ partnerId }: { partnerId: string }) {
               key={call.stem}
               title={`${formatWhen(call.started_at)} · ${formatShortDuration(call.duration_sec)}`}
               desc={park ? call.mission : undefined}
-              trailing={call.has_tutoring ? <span className="shrink-0 rounded-full bg-paper px-2.5 py-1 text-xs font-semibold">요약 있음</span> : undefined}
+              trailing={call.has_tutoring ? <span className="shrink-0 rounded-full bg-paper px-2.5 py-1 text-xs font-semibold">요약 있음</span> : <SummaryBadge status={call.summary} />}
               onClick={() => go('log', false, call.stem)}
             />
           ))}

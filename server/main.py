@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import json
 import os
 import re
 import logging
@@ -32,7 +33,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCRequestHandler,
 )
 
-from server import chat, clipdb, culture_filter, culturedb, feed, native_expr, people, phrase_gloss, pron, review, tts, wordbook, youtube
+from server import call_bot, chat, clipdb, culture_filter, culturedb, feed, native_expr, people, phrase_gloss, pron, review, summary_jobs, tts, wordbook, youtube
 from server.call_bot import parse_call_config, run_bot, time_limit_for_mode
 from server import partner_memory
 from server.history import list_calls, live_cost_of, load_call, totals as call_totals
@@ -48,7 +49,7 @@ from server.readgloss import (
     stored_phrase_keys,
     words_used,
 )
-from server.transcript_store import get_tutoring_dir
+from server.transcript_store import get_teachback_dir, get_transcript_dir, get_tutoring_dir
 from server.lesson import (
     LessonError,
     get_lesson,
@@ -211,11 +212,6 @@ def _wait_and_resolve_transcript(filename=None, started_at=None):
         time.sleep(0.5)
 
 
-# 같은 파일명(방금 통화)에 대한 중복 요청을 10초 안에 다시 받으면 저장된 결과를
-# 그대로 돌려줘 Vertex 재호출을 막는다.
-_TUTOR_CACHE: Dict[str, "tuple[float, dict]"] = {}
-_TUTOR_CACHE_TTL_SEC = 10.0
-
 # 이미 학습자 카드 갱신을 걸어 둔 통화 전문 파일명.
 _PROFILE_UPDATED: "set[str]" = set()
 
@@ -230,6 +226,85 @@ def _card_update_once(stem: str, tutoring: dict) -> None:
 
 
 review.configure(_card_update_once)
+
+
+def _spec_for(stem: str, body: Optional[dict]) -> summary_jobs.JobSpec:
+    """통화 정리의 입력. 통화 때 서버가 남겨 둔 것이 먼저고, 없으면 화면이 보낸 본문으로 만든다(만들면 남겨 둔다)."""
+    stored = summary_jobs.read_spec(stem)
+    if stored is not None or body is None:
+        return stored or summary_jobs.JobSpec()
+    raw_practice = body.get("practice_words")
+    lesson_date = body.get("lesson_date")
+    spec = summary_jobs.JobSpec(
+        mode="teachback" if body.get("mode") == "teachback" else "mission",
+        lesson_date=lesson_date if isinstance(lesson_date, str) else None,
+        practice_words=tuple(
+            w for w in (raw_practice[:10] if isinstance(raw_practice, list) else []) if isinstance(w, str) and LEMMA_RE.fullmatch(w)
+        ),
+    )
+    summary_jobs.write_spec(stem, spec)
+    return spec
+
+
+async def _complete_response(path: Path, spec: summary_jobs.JobSpec, data: dict, saved: bool) -> None:
+    """분석 결과(또는 저장된 결과)에 화면 응답용 필드를 채운다."""
+    data["saved"] = saved
+    data["stem"] = path.stem
+    if spec.mode != "teachback":
+        data["practice_used"] = (
+            words_used(path.read_text(encoding="utf-8"), list(spec.practice_words), _verbatim_text(path)) if spec.practice_words else []
+        )
+    # readgloss 단어장에는 자동으로 넣지 않는다. 사용자가 항목의 저장·별 버튼을 눌러야 들어간다(필드는 옛 클라이언트 호환으로 유지).
+    data["readgloss"] = None
+    data["cost"] = combine_cost(await asyncio.to_thread(live_cost_of, path), data.get("cost_usd"))
+
+
+async def _stored_summary(path: Path, spec: summary_jobs.JobSpec) -> Optional[dict]:
+    """이미 저장된 요약(서버가 재시작된 뒤 화면이 다시 부른 경우)을 응답 모양으로 돌려준다. 없으면 None. 모델은 부르지 않는다."""
+    for directory in (get_teachback_dir(), get_tutoring_dir()):
+        try:
+            data = json.loads((directory / f"{path.stem}.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and data:
+            kind = "teachback" if directory == get_teachback_dir() else spec.mode
+            await _complete_response(path, summary_jobs.JobSpec(kind, spec.lesson_date, spec.practice_words), data, True)
+            return data
+    return None
+
+
+async def _summary_job(path: Path, spec: summary_jobs.JobSpec) -> dict:
+    """통화 한 건의 정리를 만든다. 통화 끝에 서버가 걸거나 /api/tutor가 부르며, 둘 다 summary_jobs가 통화당 하나만 돌린다."""
+    stored = await _stored_summary(path, spec)
+    if stored is not None:
+        return stored
+    if spec.mode == "teachback":
+        # 숨은 노트(그날 수업 자료)를 불러와 teach-back 분석에 넘긴다.
+        lesson = await asyncio.to_thread(get_lesson, spec.lesson_date)
+        note_text = lesson_text(lesson)
+        data, saved = await asyncio.to_thread(run_teachback, path, note_text, lesson.get("date"))
+        await _complete_response(path, spec, data, saved)
+        # 카드는 영어 교정만 반영한다. unanswered는 보안 지식 공백이라 제외. 갱신은 요약 검토가 끝난 뒤(review.finish) 또는 15분 뒤에 건다.
+        skipped = ("saved", "stem", "lesson_date", "unanswered", "readgloss", "cost", "cost_usd")
+    else:
+        data, saved = await asyncio.to_thread(run_tutoring, path)
+        await _complete_response(path, spec, data, saved)
+        # 같은 통화를 다시 분석해도 카드는 한 번만 갱신한다(misses·count 중복 방지).
+        skipped = ("saved", "stem", "practice_used", "readgloss", "cost", "cost_usd")
+    if path.name not in _PROFILE_UPDATED:
+        review.defer_card_update(path.stem, {k: v for k, v in data.items() if k not in skipped})
+    return data
+
+
+def _on_call_saved(saved: Path, config: call_bot.CallConfig) -> None:
+    """통화 전문이 저장되면 서버가 스스로 정리를 건다. 화면이 닫혀 있어도 이어서 돈다."""
+    path = Path(saved)
+    spec = summary_jobs.JobSpec(mode=config.mode, lesson_date=config.lesson_date, practice_words=config.practice_words)
+    summary_jobs.write_spec(path.stem, spec)
+    summary_jobs.start(path.stem, lambda: _summary_job(path, spec))
+
+
+call_bot.configure_call_saved(_on_call_saved)
 
 
 def _verbatim_text(path: Path) -> str:
@@ -283,13 +358,6 @@ async def tutor_endpoint(request: Request):
         body = {}
     filename = body.get("filename")
     started_at = body.get("started_at")
-    mode = body.get("mode")
-    lesson_date = body.get("lesson_date")
-    raw_practice = body.get("practice_words")
-    practice = [
-        w for w in (raw_practice[:10] if isinstance(raw_practice, list) else []) if isinstance(w, str) and LEMMA_RE.fullmatch(w)
-    ]
-
     path = None
 
     def fail(status: int, detail: str):
@@ -303,52 +371,9 @@ async def tutor_endpoint(request: Request):
         # 전문 경로(stem)가 정해지면 분석 결과와 상관없이 응답 속도를 먼저 저장한다(분석 중 화면을 떠나도 남는다).
         await _save_request_latency(path.stem, body.get("latency"))
 
-        if mode == "teachback":
-            # 숨은 노트(그날 수업 자료)를 불러와 teach-back 분석에 넘긴다.
-            lesson = await asyncio.to_thread(get_lesson, lesson_date)
-            note_text = lesson_text(lesson)
-            resolved_date = lesson.get("date")
-            cache_key = f"teachback:{path.name}:{resolved_date}"
-            cached = _TUTOR_CACHE.get(cache_key)
-            if cached and time.time() - cached[0] < _TUTOR_CACHE_TTL_SEC:
-                return JSONResponse({**cached[1], "stem": path.stem})
-
-            data, saved = await asyncio.to_thread(
-                run_teachback, path, note_text, resolved_date
-            )
-            data["saved"] = saved
-            data["stem"] = path.stem
-            data["readgloss"] = None
-            data["cost"] = combine_cost(await asyncio.to_thread(live_cost_of, path), data.get("cost_usd"))
-            _TUTOR_CACHE[cache_key] = (time.time(), data)
-            # 카드는 영어 교정만 반영한다. unanswered는 보안 지식 공백이라 제외. 갱신은 요약 검토가 끝난 뒤(review.finish) 또는 15분 뒤에 건다.
-            if path.name not in _PROFILE_UPDATED:
-                review.defer_card_update(
-                    path.stem,
-                    {k: v for k, v in data.items() if k not in ("saved", "stem", "lesson_date", "unanswered", "readgloss", "cost", "cost_usd")},
-                )
-            return JSONResponse(data)
-
-        cached = _TUTOR_CACHE.get(path.name)
-        if cached and time.time() - cached[0] < _TUTOR_CACHE_TTL_SEC:
-            return JSONResponse({**cached[1], "stem": path.stem})
-
-        data, saved = await asyncio.to_thread(run_tutoring, path)
-        data["saved"] = saved
-        data["stem"] = path.stem
-        data["practice_used"] = (
-            words_used(path.read_text(encoding="utf-8"), practice, _verbatim_text(path)) if practice else []
-        )
-        # readgloss 단어장에는 자동으로 넣지 않는다. 사용자가 항목의 저장·별 버튼을 눌러야 들어간다(필드는 옛 클라이언트 호환으로 유지).
-        data["readgloss"] = None
-        data["cost"] = combine_cost(await asyncio.to_thread(live_cost_of, path), data.get("cost_usd"))
-        _TUTOR_CACHE[path.name] = (time.time(), data)
-        # 같은 통화를 다시 분석해도 카드는 한 번만 갱신한다(misses·count 중복 방지). 갱신은 요약 검토가 끝난 뒤(review.finish) 또는 15분 뒤에 건다.
-        if path.name not in _PROFILE_UPDATED:
-            review.defer_card_update(
-                path.stem,
-                {k: v for k, v in data.items() if k not in ("saved", "stem", "practice_used", "readgloss", "cost", "cost_usd")},
-            )
+        spec = await asyncio.to_thread(_spec_for, path.stem, body)
+        # 통화 끝에 서버가 건 작업이 있으면 거기에 합류하고, 없으면 지금 건다(통화당 하나, 모델을 두 번 부르지 않는다).
+        data = await summary_jobs.wait(path.stem, lambda: _summary_job(path, spec))
     except LessonError as e:
         logger.error(f"Lesson fetch failed: {e}")
         return fail(e.status_code, str(e))
@@ -424,6 +449,23 @@ async def call_detail_endpoint(stem: str):
         raise HTTPException(status_code=400, detail=str(e))
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/api/calls/{stem}/summary")
+async def call_summary_endpoint(stem: str):
+    """요약이 없거나 실패한 통화의 정리를 (다시) 시작한다. 이미 돌고 있거나 끝났으면 새로 걸지 않고 상태만 알려 준다."""
+    from server.history import STEM_RE, has_summary
+
+    if not STEM_RE.fullmatch(stem):
+        raise HTTPException(status_code=400, detail="허용되지 않은 통화 번호입니다")
+    path = get_transcript_dir() / f"{stem}.md"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="해당 통화 기록이 없습니다")
+    if await asyncio.to_thread(has_summary, stem):
+        return {"summary": "done"}
+    spec = await asyncio.to_thread(_spec_for, stem, None)
+    summary_jobs.start(stem, lambda: _summary_job(path, spec))
+    return {"summary": summary_jobs.unfinished_status(stem)}
 
 
 @app.post("/api/calls/{stem}/latency")

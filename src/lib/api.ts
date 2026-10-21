@@ -1,6 +1,7 @@
 import type { LessonSection, PracticeWord, Retry } from './instructions';
 import type { CallLatency, LatencyResult } from './latency';
 import { toThinkingGaps } from './thinkingGaps';
+import { parseSummaryStatus, type SummaryStatus } from './summaryStatus';
 
 export type WeakPoint = { pattern: string; example: string };
 // 내 단어장에서 친구 통화·채팅에 보여 주는 단어와 저장한 문장. 서버가 아직 안 주는 동안은 없다.
@@ -75,6 +76,8 @@ export type Tutoring = {
 
 export type CallSummary = {
   stem: string;
+  // 통화 정리(요약) 상태. 서버가 통화가 끝나면 스스로 정리를 건다.
+  summary: SummaryStatus;
   started_at: string;
   mission: string;
   duration_sec: number;
@@ -88,6 +91,10 @@ export type CallSummary = {
 };
 export type CallTotals = { calls: number; minutes: number; days: number; week: number };
 export type Turn = { speaker: 'me' | 'partner'; text: string };
+export function withSummary(call: CallSummary): CallSummary {
+  return { ...call, summary: parseSummaryStatus(call.summary, call.has_tutoring) };
+}
+
 export type CallDetail = { call: CallSummary; tutoring: Tutoring | null; transcript: Turn[]; verbatim: string | null };
 
 export type Clip = {
@@ -417,8 +424,16 @@ export async function getCalls(limit = 50, signal?: AbortSignal): Promise<{ tota
       days: Number(data?.totals?.days) || 0,
       week: Number(data?.totals?.week) || 0,
     },
-    calls: Array.isArray(data?.calls) ? data.calls : [],
+    calls: Array.isArray(data?.calls) ? data.calls.map(withSummary) : [],
   };
+}
+
+// 요약이 없거나 실패한 통화의 정리를 서버에서 (다시) 시작한다. 이미 돌고 있으면 새로 걸지 않는다.
+export async function startSummary(stem: string): Promise<SummaryStatus> {
+  const res = await fetch(`/api/calls/${encodeURIComponent(stem)}/summary`, { method: 'POST' });
+  if (!res.ok) throw new Error(await errorMessage(res, '정리를 시작하지 못했어요.'));
+  const data = await res.json();
+  return parseSummaryStatus(data?.summary);
 }
 
 export async function getCall(stem: string, signal?: AbortSignal): Promise<CallDetail> {
@@ -426,7 +441,7 @@ export async function getCall(stem: string, signal?: AbortSignal): Promise<CallD
   if (!res.ok) throw new Error(await errorMessage(res, '통화 기록을 불러오지 못했어요.'));
   const data = await res.json();
   return {
-    call: data.call,
+    call: withSummary(data.call),
     tutoring: data.tutoring ? toTutoring(data.tutoring) : null,
     transcript: Array.isArray(data.transcript) ? data.transcript : [],
     verbatim: typeof data.verbatim === 'string' && data.verbatim.trim() ? data.verbatim : null,

@@ -221,6 +221,10 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, wordbo
         callMode(setup),
         partner.voice,
         wantsMemory ? partnerId : undefined,
+        {
+          ...(setup.kind === 'teachback' ? { lesson_date: setup.lessonDate } : {}),
+          practice_words: practiceWordsFor(setup, practiceWords, wordbook).map((w) => w.lemma),
+        },
       );
     } finally {
       dialing.current = false;
