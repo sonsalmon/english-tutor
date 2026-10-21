@@ -98,7 +98,7 @@ function Study({ target }: { target: ClipTarget }) {
   const data = loaded.status === 'ok' ? loaded.data : null;
   const withLines = data !== null;
   const shifted = useMemo(() => (data ? { ...data, lines: shiftLines(data.lines, syncMs), atId: currentId.current ?? data.atId } : null), [data, syncMs]);
-  const { mountRef, status, slow, state, rates, act } = usePlayer({
+  const { mountRef, status, slow, state, rates, act, needsTap } = usePlayer({
     videoId,
     title: data?.title ?? '',
     startTime: t,
@@ -110,6 +110,7 @@ function Study({ target }: { target: ClipTarget }) {
   });
   const ready = status === 'ready';
   const blocked = status === 'blocked';
+  const tapFirst = withLines && needsTap;
   const line = withLines && state.index >= 0 ? state.lines[state.index] : null;
   const visible = visibleRates(rates);
   const lastIndex = state.lines.length - 1;
@@ -216,9 +217,7 @@ function Study({ target }: { target: ClipTarget }) {
   const statusText = state.gapUntil !== null ? '잠깐 쉬었다가 다시 들려줘요.' : state.held ? '줄 끝에서 멈췄어요. 재생을 누르면 이어져요.' : '';
 
   return (
-    <div
-      className={`study relative flex h-dvh flex-col overflow-hidden bg-ink text-surface max-lg:[@media(max-height:700px)]:h-auto max-lg:[@media(max-height:700px)]:min-h-dvh max-lg:[@media(max-height:700px)]:overflow-visible`}
-    >
+    <div className="study relative flex min-h-dvh flex-col bg-ink pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-surface lg:h-dvh lg:overflow-hidden">
       <header className="flex h-16 shrink-0 items-center gap-2 px-2 lg:px-6">
         <button
           type="button"
@@ -281,7 +280,7 @@ function Study({ target }: { target: ClipTarget }) {
         </section>
       )}
 
-      <div className={`flex min-h-0 flex-1 flex-col lg:grid lg:grid-cols-[minmax(0,1fr)_25rem] lg:gap-6 lg:px-6 lg:pb-6 max-lg:[@media(max-height:700px)]:flex-none`}>
+      <div className="flex flex-col lg:grid lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_25rem] lg:gap-6 lg:px-6 lg:pb-6">
         <section className="shrink-0 px-3 lg:max-w-[50rem] lg:overflow-y-auto lg:px-0">
           {blocked ? (
             <div role="alert" className="flex aspect-video w-full flex-col items-center justify-center gap-3 rounded-lg border border-surface/30 p-4 text-center">
@@ -298,14 +297,19 @@ function Study({ target }: { target: ClipTarget }) {
             </div>
           ) : (
             <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-black">
-              <div ref={mountRef} className={`absolute inset-0 [&_iframe]:size-full [&_iframe]:border-0 ${withLines ? '[&_iframe]:pointer-events-none' : ''}`} />
+              <div ref={mountRef} className={`absolute inset-0 [&_iframe]:size-full [&_iframe]:border-0 ${withLines && !tapFirst ? '[&_iframe]:pointer-events-none' : ''}`} />
               {!ready && (
                 <div role="status" aria-label="영상을 불러오는 중" className="absolute inset-0 flex items-center justify-center bg-black">
                   <img src={`https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/hqdefault.jpg`} alt="" className="absolute inset-0 size-full object-cover opacity-50" />
                   <span className="relative size-8 animate-spin rounded-full border-2 border-surface/40 border-t-surface" />
                 </div>
               )}
-              {withLines && ready && (
+              {tapFirst && (
+                <p role="status" className="pointer-events-none absolute inset-x-0 bottom-0 bg-ink/85 px-3 py-2 text-center text-sm font-semibold text-surface">
+                  영상을 한 번 눌러 시작하세요.
+                </p>
+              )}
+              {withLines && ready && !tapFirst && (
                 <>
                   <button type="button" onClick={act.toggle} aria-label={state.playing ? '일시정지' : '재생'} className="absolute inset-0 cursor-pointer" />
                   {!state.playing && (
@@ -468,7 +472,7 @@ function Study({ target }: { target: ClipTarget }) {
         {withLines && !blocked && (
           <section
             aria-label="줄 목록"
-            className={`mt-3 flex min-h-24 flex-1 flex-col overflow-hidden border-t border-surface/20 lg:mt-0 lg:rounded-2xl lg:border lg:border-surface/20 max-lg:[@media(max-height:700px)]:h-80 max-lg:[@media(max-height:700px)]:flex-none`}
+            className="mt-3 flex h-80 flex-none flex-col overflow-hidden border-t border-surface/20 lg:mt-0 lg:h-auto lg:min-h-24 lg:flex-1 lg:rounded-2xl lg:border lg:border-surface/20"
           >
             <div
               ref={listRef}

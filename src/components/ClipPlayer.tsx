@@ -3,7 +3,10 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { getClipSegments, type Clip, type ClipSegments } from '../lib/api';
 import { openClip } from '../lib/clipRoute';
 import { lineSource } from '../lib/clipLines';
+import { loadPrefs } from '../lib/playerPrefs';
+import { DEFAULT_SETTINGS } from '../lib/playerMachine';
 import { usePlayer } from '../lib/usePlayer';
+import { SpeedChip } from './SpeedChip';
 import { WordText } from './WordText';
 
 export function mmss(sec: number): string {
@@ -81,7 +84,8 @@ export function ClipPlayer({
 }) {
   const lines = useClipLines(clip);
   const withLines = lines.status === 'ok';
-  const { mountRef, status, slow, state, act } = usePlayer({
+  const [settings] = useState(() => ({ ...DEFAULT_SETTINGS, rate: loadPrefs().rate }));
+  const { mountRef, status, slow, state, rates, act, needsTap } = usePlayer({
     videoId: clip.id,
     title: clip.title,
     startTime: startTime(clip),
@@ -89,7 +93,9 @@ export function ClipPlayer({
     nativeControls: !withLines,
     enabled: lines.status !== 'loading',
     onBlocked,
+    settings,
   });
+  const tapFirst = withLines && needsTap;
   const line = withLines && state.index >= 0 ? state.lines[state.index] : null;
   const ready = status === 'ready';
   const blocked = status === 'blocked';
@@ -121,14 +127,19 @@ export function ClipPlayer({
         </div>
       ) : (
         <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-ink">
-          <div ref={mountRef} className={`absolute inset-0 [&_iframe]:size-full [&_iframe]:border-0 ${withLines ? '[&_iframe]:pointer-events-none' : ''}`} />
+          <div ref={mountRef} className={`absolute inset-0 [&_iframe]:size-full [&_iframe]:border-0 ${withLines && !tapFirst ? '[&_iframe]:pointer-events-none' : ''}`} />
           {!ready && (
             <div role="status" aria-label="영상을 불러오는 중" className="absolute inset-0 flex items-center justify-center bg-ink">
               <img src={clip.thumbnail} alt="" className="absolute inset-0 size-full object-cover opacity-60" />
               <span className="relative size-8 animate-spin rounded-full border-2 border-surface/40 border-t-surface" />
             </div>
           )}
-          {withLines && ready && (
+          {tapFirst && (
+            <p role="status" className="pointer-events-none absolute inset-x-0 bottom-0 bg-ink/85 px-3 py-2 text-center text-sm font-semibold text-surface">
+              영상을 한 번 눌러 시작하세요.
+            </p>
+          )}
+          {withLines && ready && !tapFirst && (
             <>
               <button
                 type="button"
@@ -162,7 +173,7 @@ export function ClipPlayer({
             </p>
             <p className="mt-1 text-sm text-ink-soft">{mmss(line.start)}부터</p>
           </div>
-          <div role="group" aria-label="줄 이동" className="mt-2 grid grid-cols-[1fr_1fr_3.5rem_1fr] gap-2">
+          <div role="group" aria-label="줄 이동" className="mt-2 grid grid-cols-[1fr_1fr_3rem_1fr_3.25rem] gap-2">
             <ControlButton onClick={act.prev} disabled={!ready || state.index <= 0}>
               <ChevronLeft size={18} aria-hidden />
               이전 줄
@@ -178,6 +189,7 @@ export function ClipPlayer({
               다음 줄
               <ChevronRight size={18} aria-hidden />
             </ControlButton>
+            <SpeedChip rate={state.rate} rates={rates} disabled={!ready} onChange={act.setRate} className={`${BUTTON} ${BUTTON_PLAIN} px-0`} />
           </div>
         </>
       )}

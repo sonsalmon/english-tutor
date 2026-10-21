@@ -1,7 +1,10 @@
 import { ExternalLink, Pause, Play, RotateCcw, Volume2 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { FeedClip } from '../lib/apiFeed';
+import { DEFAULT_SETTINGS } from '../lib/playerMachine';
+import { loadPrefs } from '../lib/playerPrefs';
 import { usePlayer } from '../lib/usePlayer';
+import { SpeedChip } from './SpeedChip';
 
 const BUTTON =
   'flex min-h-11 items-center gap-1.5 rounded-full px-4 text-sm font-semibold whitespace-nowrap focus-visible:outline-white disabled:opacity-40';
@@ -31,9 +34,10 @@ function Thumbnail({ clip }: { clip: FeedClip }) {
 }
 
 // 플레이어가 켜진 동안만 마운트한다. 카드가 비활성이 되면 통째로 사라져 영상 플레이어도 정리된다.
-function Live({ clip, muted, onBlocked }: { clip: FeedClip; muted: boolean; onBlocked: () => void }) {
+function Live({ clip, muted, hold, onBlocked }: { clip: FeedClip; muted: boolean; hold: boolean; onBlocked: () => void }) {
   const [soundOn, setSoundOn] = useState(!muted);
-  const { mountRef, status, state, act } = usePlayer({
+  const [settings] = useState(() => ({ ...DEFAULT_SETTINGS, rate: loadPrefs().rate }));
+  const { mountRef, status, state, rates, act } = usePlayer({
     videoId: clip.video_id,
     title: clip.title,
     startTime: clip.start,
@@ -43,8 +47,10 @@ function Live({ clip, muted, onBlocked }: { clip: FeedClip; muted: boolean; onBl
     nativeControls: false,
     enabled: true,
     onBlocked,
+    settings,
   });
   const ready = status === 'ready';
+  useEffect(() => act.hold(hold), [act, hold]);
 
   if (status === 'failed') {
     return (
@@ -94,6 +100,7 @@ function Live({ clip, muted, onBlocked }: { clip: FeedClip; muted: boolean; onBl
           {state.playing ? <Pause size={18} fill="currentColor" aria-hidden /> : <Play size={18} fill="currentColor" aria-hidden />}
           {state.playing ? '멈춤' : '재생'}
         </button>
+        <SpeedChip rate={state.rate} rates={rates} disabled={!ready} onChange={act.setRate} className={`${BUTTON} justify-center bg-white/15 px-3 text-white`} />
         {!soundOn && (
           <button
             type="button"
@@ -114,7 +121,7 @@ function Live({ clip, muted, onBlocked }: { clip: FeedClip; muted: boolean; onBl
 
 // 피드 카드의 영상. 켜진 카드만 재생하고, 움직임 줄이기를 켠 사람에게는 누를 때까지 재생하지 않는다.
 // 자동 재생은 음소거로 시작하고, 사람이 눌러서 시작하면 소리와 함께 시작한다.
-export function FeedPlayer({ clip, active, autoplay, onBlocked }: { clip: FeedClip; active: boolean; autoplay: boolean; onBlocked: () => void }) {
+export function FeedPlayer({ clip, active, autoplay, hold, onBlocked }: { clip: FeedClip; active: boolean; autoplay: boolean; hold: boolean; onBlocked: () => void }) {
   const [started, setStarted] = useState(false);
   const [prevActive, setPrevActive] = useState(active);
   const [blocked, setBlocked] = useState(false);
@@ -142,6 +149,7 @@ export function FeedPlayer({ clip, active, autoplay, onBlocked }: { clip: FeedCl
       <Live
         clip={clip}
         muted={!started}
+        hold={hold}
         onBlocked={() => {
           setBlocked(true);
           onBlocked();

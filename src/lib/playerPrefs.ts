@@ -60,6 +60,12 @@ export function visibleRates(available: readonly number[]): number[] {
   return both.length ? both : [...RATES];
 }
 
+// 요약·피드의 속도 칩용: 보이는 속도를 느린 쪽에서 빠른 쪽으로 돌고, 끝에서 처음으로 돌아간다.
+export function cycleRate(rates: readonly number[], rate: number): number {
+  const up = stepRate(rates, rate, 1);
+  return up > rate ? up : rates[0];
+}
+
 // 보이는 속도 목록에서 한 칸 느리게(-1) 또는 빠르게(+1). 끝에서는 멈춘다. 목록에 없는 속도면 가장 가까운 칸에서 시작한다.
 export function stepRate(rates: readonly number[], rate: number, direction: -1 | 1): number {
   let nearest = 0;

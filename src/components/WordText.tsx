@@ -61,6 +61,7 @@ export function WordText({
   const [sel, setSel] = useState<Range | null>(null);
   const [savedKeys, setSavedKeys] = useState<ReadonlySet<string>>(new Set());
   const lastAnchor = useRef<HTMLElement | null>(null);
+  const pickToggle = useRef<HTMLButtonElement>(null);
   const fromPick = useRef(false);
   const open = active !== null || phrase !== null || pick;
   const notify = useRef(onOpenChange);
@@ -153,8 +154,13 @@ export function WordText({
   }
   if (cursor < text.length) nodes.push(text.slice(cursor));
 
+  // 닫힌 시트의 포커스가 돌아갈 고시. 묶은 구를 저장하던 시트는 '이 구 저장' 버튼이 곳 사라지므로 '구로 묶기' 버튼으로 되돌린다.
+  function focusTarget(): HTMLElement | null {
+    return fromPick.current ? pickToggle.current : lastAnchor.current;
+  }
+
   function restoreFocus() {
-    const anchor = lastAnchor.current;
+    const anchor = focusTarget();
     if (anchor?.isConnected && document.activeElement?.closest('[data-word-popover]')) anchor.focus({ preventScroll: true });
   }
 
@@ -194,6 +200,7 @@ export function WordText({
       {learn && (
         <span lang="ko" className="mt-3 flex flex-wrap items-center gap-2 text-sm font-semibold">
           <button
+            ref={pickToggle}
             type="button"
             aria-pressed={pick}
             onClick={() => {
@@ -253,9 +260,10 @@ export function WordText({
         <YouGlishSheet
           phrase={phrase}
           onClose={() => {
+            const anchor = focusTarget();
             setPhrase(null);
             endPick();
-            if (lastAnchor.current?.isConnected) lastAnchor.current.focus({ preventScroll: true });
+            if (anchor?.isConnected) anchor.focus({ preventScroll: true });
           }}
         />
       )}

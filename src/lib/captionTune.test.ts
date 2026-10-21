@@ -116,6 +116,7 @@ describe('줄 시각 밀기', () => {
     const run = (offsetMs: number, time: number): PlayerState => {
       let state = initialState(10, null, { rate: 1, repeat: 'off', autoPause: true });
       state = step(state, { type: 'lines', lines: shiftLines(lines, offsetMs), atId: 1 }).state;
+      state = step(state, { type: 'status', playing: true }).state;
       return step(state, { type: 'tick', time, now: 10_000 }).state;
     };
     const justBeforeEnd = 13 - END_LEAD_S + 0.01;

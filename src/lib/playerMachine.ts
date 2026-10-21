@@ -34,6 +34,10 @@ export type PlayerState = PlayerSettings & {
   ended: boolean;
   /** 플레이어가 마지막으로 알린 재생 여부. */
   playing: boolean;
+  /** 플레이어가 한 번이라도 재생 상태를 알렸는지. 한 번도 없으면 자동 재생이 막힌 것일 수 있다(iOS). */
+  started: boolean;
+  /** 플레이어가 버퍼링 중이라고 알리는 동안 true. 이동한 위치를 아직 읽지 못해 시각이 낡았을 수 있어 tick을 무시한다. */
+  buffering: boolean;
   /** 시트를 열면서 멈췄다면 닫을 때 다시 재생한다. */
   resumeAfterHold: boolean;
   /** 이 시계(ms) 전까지는 tick을 무시한다. */
@@ -50,7 +54,7 @@ export type PlayerEvent =
   | { type: 'ready'; now: number }
   | { type: 'lines'; lines: readonly ClipLine[]; atId: number | null }
   | { type: 'tick'; time: number; now: number }
-  | { type: 'status'; playing: boolean }
+  | { type: 'status'; playing: boolean; buffering?: boolean }
   | { type: 'prev' | 'next' | 'replay'; now: number }
   | { type: 'jump'; index: number; now: number }
   | { type: 'toggle'; now?: number }
@@ -73,6 +77,8 @@ export function initialState(startTime: number, endTime: number | null = null, s
     endTime,
     ended: false,
     playing: false,
+    started: false,
+    buffering: false,
     resumeAfterHold: false,
     guardUntil: 0,
     pass: 1,
@@ -101,7 +107,7 @@ function moveTo(state: PlayerState, index: number, time: number, now: number, pa
 function finishLine(state: PlayerState, now: number): Step {
   const again = state.repeat === 'inf' || (state.repeat === 'x3' && state.pass < REPEAT_TIMES);
   if (again) return { state: { ...state, pass: state.pass + 1, gapUntil: now + REPEAT_GAP_MS, guardUntil: 0 }, actions: [{ type: 'pause' }] };
-  return { state: { ...state, held: true }, actions: [{ type: 'pause' }] };
+  return { state: { ...state, held: true, resumeAfterHold: false }, actions: [{ type: 'pause' }] };
 }
 
 // 멈춰 있는 줄(쉬는 중이거나 줄 끝 멈춤)에서 재생을 누르면: 쉬는 중이면 지금 다시, 줄 끝 멈춤이면 다음 줄(마지막이면 그 줄을 다시).
@@ -121,7 +127,8 @@ export function step(state: PlayerState, event: PlayerEvent): Step {
         state: { ...state, guardUntil: event.now + SEEK_GUARD_MS },
         actions: [
           ...(state.rate !== 1 ? [{ type: 'setRate', rate: state.rate } as const] : []),
-          { type: 'seek', time: leadTime(state.startTime) },
+          // 줄이 먼저 와서 현재 줄이 정해졌으면 그 줄의 시작에서, 아니면 처음 연 시각에서 튼다.
+          { type: 'seek', time: leadTime(lines.length && index >= 0 ? lines[index].start : state.startTime) },
           { type: 'play' },
         ],
       };
@@ -134,21 +141,28 @@ export function step(state: PlayerState, event: PlayerEvent): Step {
       if (state.gapUntil !== null && lines.length && index >= 0) {
         return event.now >= state.gapUntil ? moveTo(state, index, lines[index].start, event.now, state.pass) : same;
       }
-      if (event.now < state.guardUntil || state.held) return same;
+      if (event.now < state.guardUntil || state.held || state.buffering) return same;
       // 장면 끝(피드 카드)과 줄 끝은 같은 멈춤이다: 먼저 닿는 쪽에서 한 번만 멈춘다.
       if (state.endTime !== null && !state.ended && event.time >= state.endTime - END_LEAD_S) {
         return { state: { ...state, ended: true, resumeAfterHold: false, gapUntil: null }, actions: [{ type: 'pause' }] };
       }
       if (!lines.length || index < 0) return same;
       if (state.autoPause || state.repeat !== 'off') {
+        // 멈춰 있거나(사람이 멈춤, 아직 재생 전) 시트가 열려 멈춘 동안에는 줄 끝을 판정하지 않는다: 반복 쉬기나 줄 끝 멈춤이 겹쳐 시트가 열린 채 재생되는 것을 막는다.
+        if (!state.playing || state.resumeAfterHold) return same;
         // 줄을 연습하는 중에는 시각이 아니라 지금 줄을 기준으로 끝을 본다.
         return event.time >= lineEnd(lines[index]) - END_LEAD_S ? finishLine(state, event.now) : same;
       }
       const at = Math.max(0, lineIndexAt(lines, event.time + START_LEAD_S));
       return at === index ? same : { state: { ...state, index: at }, actions: [] };
     }
-    case 'status':
-      return event.playing === state.playing ? same : { state: { ...state, playing: event.playing }, actions: [] };
+    case 'status': {
+      // 버퍼링은 재생 여부를 바꾸지 않는다(이동 중 잠깐 끊기는 것). 대신 tick을 무시하게 표시한다.
+      const buffering = event.buffering === true;
+      const playing = buffering ? state.playing : event.playing;
+      const started = state.started || (!buffering && event.playing);
+      return playing === state.playing && started === state.started && buffering === state.buffering ? same : { state: { ...state, playing, started, buffering }, actions: [] };
+    }
     case 'prev':
     case 'next': {
       if (!lines.length) return same;
@@ -163,6 +177,8 @@ export function step(state: PlayerState, event: PlayerEvent): Step {
       if (lines.length && index >= 0 && (state.held || state.gapUntil !== null)) return resume(state, event.now ?? 0);
       return { state, actions: [{ type: state.playing ? 'pause' : 'play' }] };
     case 'hold':
+      // 이미 줄 끝에서 멈춰 있으면 시트를 닫을 때 되돌릴 재생이 없다.
+      if (state.held) return same;
       if (state.gapUntil !== null) return { state: { ...state, gapUntil: Number.POSITIVE_INFINITY }, actions: [] };
       return state.playing ? { state: { ...state, resumeAfterHold: true }, actions: [{ type: 'pause' }] } : same;
     case 'release':

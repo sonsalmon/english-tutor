@@ -50,6 +50,8 @@ const API_TIMEOUT_MS = 10000;
 const SLOW_MS = 8000;
 const YT_PLAYING = 1;
 const YT_BUFFERING = 3;
+/** 준비된 뒤 이만큼(ms) 지나도 재생 상태가 한 번도 오지 않으면 자동 재생이 막히 것으로 본다. */
+const AUTOPLAY_WAIT_MS = 2000;
 
 let apiPromise: Promise<YTApi> | null = null;
 
@@ -119,6 +121,7 @@ export function usePlayer({
   const [status, setStatus] = useState<PlayerStatus>('loading');
   const [slow, setSlow] = useState(false);
   const [rates, setRates] = useState<number[]>([]);
+  const [waited, setWaited] = useState(false);
   const [state, setState] = useState<PlayerState>(() => initialState(startTime, endTime, settings));
   const stateRef = useRef(state);
   const playerRef = useRef<YTPlayer | null>(null);
@@ -138,6 +141,14 @@ export function usePlayer({
     const player = playerRef.current;
     if (player) for (const action of result.actions) run(player, action);
   }, []);
+
+  // 준비된 뒤 AUTOPLAY_WAIT_MS 안에 재생이 시작되지 않으면 사람이 영상을 직접 눌러야 한다(iOS는 제스처 밖 소리 재생을 막는다).
+  const ready = status === 'ready';
+  useEffect(() => {
+    if (!ready || state.started) return;
+    const timer = window.setTimeout(() => setWaited(true), AUTOPLAY_WAIT_MS);
+    return () => window.clearTimeout(timer);
+  }, [ready, state.started]);
 
   useEffect(() => {
     const host = mountRef.current;
@@ -185,7 +196,7 @@ export function usePlayer({
               }, POLL_MS);
             },
             onStateChange: (e) => {
-              if (e.data !== YT_BUFFERING) dispatch({ type: 'status', playing: e.data === YT_PLAYING });
+              dispatch({ type: 'status', playing: e.data === YT_PLAYING, buffering: e.data === YT_BUFFERING });
             },
             onError: () => {
               if (cancelled) return;
@@ -247,5 +258,8 @@ export function usePlayer({
     [dispatch],
   );
 
-  return { mountRef, status, slow, state, rates, act };
+  /** 자동 재생이 막혔다: 영상을 직접 한 번 눌러야 시작된다. */
+  const needsTap = ready && !state.started && waited;
+
+  return { mountRef, status, slow, state, rates, act, needsTap };
 }

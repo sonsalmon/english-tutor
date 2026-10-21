@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { loadPrefs, nextEngMode, nextRepeat, nextTextSize, parsePrefs, PREFS_KEY, RATES, savePrefs, STUDY_DEFAULTS, stepRate, visibleRates } from './playerPrefs';
+import { cycleRate, loadPrefs, nextEngMode, nextRepeat, nextTextSize, parsePrefs, PREFS_KEY, RATES, savePrefs, STUDY_DEFAULTS, stepRate, visibleRates } from './playerPrefs';
 
 function memory(initial: string | null = null) {
   const store = new Map<string, string>();
@@ -63,5 +63,13 @@ describe('순환과 속도 칸', () => {
     expect(stepRate(RATES, 1.5, 1)).toBe(1.5);
     expect(stepRate([0.5, 1], 0.75, 1)).toBe(1);
     expect(stepRate([0.5, 1], 1.5, 1)).toBe(1);
+  });
+
+  test('cycleRate: 빠른 쪽으로 돌고 끝에서 첫 속도로 돌아가며, 영상이 받는 속도만 돈다', () => {
+    expect(cycleRate(RATES, 1)).toBe(1.25);
+    expect(cycleRate(RATES, 1.5)).toBe(0.5);
+    expect(cycleRate([0.5, 1], 0.5)).toBe(1);
+    expect(cycleRate([0.5, 1], 1)).toBe(0.5);
+    expect(cycleRate(visibleRates([0.25, 0.5, 1, 2]), 1)).toBe(0.5);
   });
 });

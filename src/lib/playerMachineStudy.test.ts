@@ -93,7 +93,7 @@ describe('줄마다 멈춤', () => {
     const blip: ClipLine = { id: 5, start: 5, end: 5, text: 'x' };
     expect(lineEnd(blip)).toBe(5 + MIN_LINE_S);
     expect(lineEnd(lines[0])).toBe(3);
-    const s = run(initialState(5, null, { ...DEFAULT_SETTINGS, autoPause: true }), { type: 'lines', lines: [blip], atId: 5 });
+    const s = run(initialState(5, null, { ...DEFAULT_SETTINGS, autoPause: true }), { type: 'lines', lines: [blip], atId: 5 }, { type: 'status', playing: true });
     expect(step(s, { type: 'tick', time: 5.2, now: 0 }).actions).toEqual([]);
     expect(step(s, { type: 'tick', time: 5 + MIN_LINE_S - END_LEAD_S, now: 0 }).actions).toEqual([{ type: 'pause' }]);
   });
@@ -248,5 +248,100 @@ describe('설정 이벤트', () => {
       { type: 'release' },
     ];
     for (const e of events) expect(() => step(s, e)).not.toThrow();
+  });
+});
+
+describe('시트·일시정지와 줄 끝이 겹칠 때(검증 지적 F2)', () => {
+  test('반복 켬: 시트를 열어 멈춰 있는 동안 줄 끝 시각이어도 쉬는 시간을 걸지 않고, 닫으면 재생만 한다', () => {
+    const open = step(playing(0, { repeat: 'x3', autoPause: true }), { type: 'hold' }).state;
+    const paused = run(open, { type: 'status', playing: false });
+    const atEnd = step(paused, { type: 'tick', time: END_OF_FIRST, now: 0 });
+    expect(atEnd.state).toBe(paused);
+    expect(atEnd.actions).toEqual([]);
+    expect(atEnd.state.gapUntil).toBeNull();
+    expect(step(paused, { type: 'release' }).actions).toEqual([{ type: 'play' }]);
+  });
+
+  test('시트가 열린 뒤 상태 알림이 오기 전의 tick도 줄 끝으로 세지 않는다', () => {
+    const open = step(playing(0, { repeat: 'x3', autoPause: true }), { type: 'hold' }).state;
+    expect(open.playing).toBe(true);
+    expect(step(open, { type: 'tick', time: END_OF_FIRST, now: 0 }).actions).toEqual([]);
+  });
+
+  test('줄 끝에서 이미 멈춘 뒤 시트를 열고 닫아도 held가 풀리지 않은 채 고착되지 않는다', () => {
+    const held = step(playing(0, { autoPause: true }), { type: 'tick', time: END_OF_FIRST, now: 0 }).state;
+    const open = step(held, { type: 'hold' });
+    expect(open.state.resumeAfterHold).toBe(false);
+    expect(open.actions).toEqual([]);
+    expect(step(open.state, { type: 'release' }).actions).toEqual([]);
+    const next = step(open.state, { type: 'toggle', now: 10 });
+    expect(next.state.held).toBe(false);
+    expect(next.actions).toEqual([{ type: 'seek', time: 4 - START_LEAD_S }, { type: 'play' }]);
+  });
+
+  test('줄 끝 판정이 resumeAfterHold를 남기지 않는다', () => {
+    const s = { ...playing(0, { autoPause: true }), resumeAfterHold: false };
+    expect(step(s, { type: 'tick', time: END_OF_FIRST, now: 0 }).state.resumeAfterHold).toBe(false);
+  });
+
+  test('사람이 줄 끝 근처에서 직접 멈추면 반복 쉬는 시간도 줄 끝 멈춤도 걸리지 않는다', () => {
+    const paused = { ...playing(0, { repeat: 'x3', autoPause: true }), playing: false };
+    const r = step(paused, { type: 'tick', time: END_OF_FIRST, now: 0 });
+    expect(r.state).toBe(paused);
+    expect(r.actions).toEqual([]);
+  });
+});
+
+describe('이동 직후 버퍼링(검증 지적 F3)', () => {
+  test('뒤로 이동해 버퍼링 중에는 낡은 시각이 이동한 줄의 끝을 넘어도 멈추지 않는다', () => {
+    const moved = step(playing(2, { autoPause: true }), { type: 'prev', now: 1000 }).state;
+    expect(moved.index).toBe(1);
+    const buffering = run(moved, { type: 'status', playing: true, buffering: true });
+    expect(buffering.buffering).toBe(true);
+    const stale = step(buffering, { type: 'tick', time: 8, now: 1000 + SEEK_GUARD_MS * 10 });
+    expect(stale.state).toBe(buffering);
+    expect(stale.actions).toEqual([]);
+  });
+
+  test('재생이 시작되면(버퍼링이 풀리면) 새 위치의 시각을 따른다', () => {
+    const moved = step(playing(2, { autoPause: true }), { type: 'prev', now: 1000 }).state;
+    const playingAgain = run(moved, { type: 'status', playing: true, buffering: true }, { type: 'status', playing: true });
+    expect(playingAgain.buffering).toBe(false);
+    const now = 1000 + SEEK_GUARD_MS * 10;
+    expect(step(playingAgain, { type: 'tick', time: 4.5, now }).actions).toEqual([]);
+    expect(step(playingAgain, { type: 'tick', time: 6 - END_LEAD_S, now }).actions).toEqual([{ type: 'pause' }]);
+  });
+
+  test('버퍼링은 재생 여부를 바꾸지 않는다', () => {
+    const s = playing(0);
+    expect(run(s, { type: 'status', playing: false, buffering: true }).playing).toBe(true);
+    const paused = { ...s, playing: false };
+    expect(run(paused, { type: 'status', playing: true, buffering: true }).playing).toBe(false);
+  });
+});
+
+describe('자동 재생이 막혔는지(검증 지적 F4)', () => {
+  test('재생 상태가 한 번도 오지 않으면 started는 false, 버퍼링만 와도 false', () => {
+    const s = initialState(4);
+    expect(s.started).toBe(false);
+    expect(run(s, { type: 'status', playing: false }).started).toBe(false);
+    expect(run(s, { type: 'status', playing: false, buffering: true }).started).toBe(false);
+  });
+
+  test('재생 상태가 한 번 오면 true가 되고, 이후 멈춰도 true로 남는다', () => {
+    const started = run(initialState(4), { type: 'status', playing: true });
+    expect(started.started).toBe(true);
+    expect(run(started, { type: 'status', playing: false }).started).toBe(true);
+  });
+});
+
+describe('준비 직후 이동(검증 지적 F6)', () => {
+  test('줄이 먼저 와서 현재 줄이 정해졌으면 처음 연 시각이 아니라 그 줄의 시작에서 튼다', () => {
+    const s = run(initialState(4.9), { type: 'lines', lines, atId: 4000 });
+    expect(step(s, { type: 'ready', now: 0 }).actions).toEqual([{ type: 'seek', time: 4 - START_LEAD_S }, { type: 'play' }]);
+  });
+
+  test('줄 정보가 아직 없으면 처음 연 시각에서 튼다', () => {
+    expect(step(initialState(4.9), { type: 'ready', now: 0 }).actions[0]).toEqual({ type: 'seek', time: 4.9 - START_LEAD_S });
   });
 });
