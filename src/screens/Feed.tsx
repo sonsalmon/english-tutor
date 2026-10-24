@@ -303,15 +303,15 @@ export function Feed() {
             : null;
 
   return (
-    <main className="study relative mx-auto h-[calc(100dvh-4rem-env(safe-area-inset-bottom))] w-full max-w-[480px] overflow-hidden bg-ink lg:h-dvh lg:max-w-[calc(100dvh*9/16)]">
+    <main className="study relative mx-auto h-[calc(100dvh-4rem-env(safe-area-inset-bottom))] w-full pt-[env(safe-area-inset-top)] max-w-[480px] overflow-hidden bg-ink lg:h-dvh lg:max-w-[calc(100dvh*9/16)]">
       <h1 className="sr-only">클립</h1>
-      <div role="tablist" aria-label="클립 종류" className="absolute top-3 left-5 z-10 flex gap-2">
+      <div role="tablist" aria-label="클립 종류" className="absolute top-[calc(0.75rem+env(safe-area-inset-top))] left-5 z-10 flex gap-2">
         {chip('mine', '내 표현')}
         {chip('browse', '둘러보기')}
         {chip('native', '원어민 표현')}
       </div>
       {filter === 'mine' && load.status === 'ready' && terms === 0 && (
-        <p className="absolute top-[3.75rem] right-5 left-5 z-10 text-xs text-white/70">저장한 표현이 아직 없어서 둘러보기 장면으로 채웠어요.</p>
+        <p className="absolute top-[calc(3.75rem+env(safe-area-inset-top))] right-5 left-5 z-10 text-xs text-white/70">저장한 표현이 아직 없어서 둘러보기 장면으로 채웠어요.</p>
       )}
 
       {message ? (
