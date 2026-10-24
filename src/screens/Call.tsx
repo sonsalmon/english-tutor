@@ -272,7 +272,9 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, wordbo
           ? '연결하는 중이에요'
           : call.status === 'error'
             ? call.error || '연결하지 못했어요'
-            : call.paused
+            : call.reconnecting
+              ? '연결이 끊겨 다시 연결하는 중…'
+              : call.paused
               ? '일시정지 중이에요. 다시 시작을 누르면 이어서 해요.'
               : !call.micOn
                 ? '마이크가 꺼져 있어요'

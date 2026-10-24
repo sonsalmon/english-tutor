@@ -272,6 +272,27 @@ def time_limit_for_mode(mode: Optional[str], env=None) -> Optional[int]:
 GAVE_UP_MARK = "Max consecutive failures"
 
 
+TELEMETRY_NUM_KEYS = ("t", "rtt", "out_pk", "out_kb", "in_pk", "in_lost", "in_jit", "in_kb", "jbuf", "rin_lost", "rin_jit", "paused", "rd")
+TELEMETRY_STR_KEYS = ("vis", "ice", "conn", "dc", "pair", "net", "mic", "dead")
+TELEMETRY_STR_RE = re.compile(r"[A-Za-z0-9_/.\-]{1,24}")
+
+
+def format_telemetry(data: Any) -> Optional[str]:
+    """브라우저가 5초마다 보내는 연결 품질 묶음을 로그 한 줄로 만든다. 알려진 항목만, 숫자와 짧은 영문 낱말만 싣는다."""
+    if not isinstance(data, dict):
+        return None
+    parts = []
+    for key in TELEMETRY_STR_KEYS:
+        value = data.get(key)
+        if isinstance(value, str) and TELEMETRY_STR_RE.fullmatch(value):
+            parts.append(f"{key}={value}")
+    for key in TELEMETRY_NUM_KEYS:
+        value = data.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and abs(value) < 1e12:
+            parts.append(f"{key}={int(value) if float(value).is_integer() else round(value, 1)}")
+    return " ".join(parts) or None
+
+
 def llm_gave_up(error_text: Any) -> bool:
     """Gemini 연결을 되살리지 못해 이 통화는 더 이어 갈 수 없는 오류인지."""
     return GAVE_UP_MARK in str(error_text or "")
@@ -964,6 +985,10 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
             task = asyncio.create_task(handle_share(rtvi, message.data if isinstance(message.data, dict) else {}))
             share_tasks.add(task)
             task.add_done_callback(share_tasks.discard)
+        elif message.type == "telemetry":
+            line = format_telemetry(message.data)
+            if line:
+                logger.info("Telemetry [%s %s] %s", config.partner or "park", config.mode, line)
         elif message.type == "pause":
             if clock.pause():
                 clock_changed.set()
