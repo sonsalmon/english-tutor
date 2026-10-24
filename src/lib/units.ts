@@ -1,6 +1,6 @@
 // 두 낱말 이상으로 이루어진 표현(구동사, 숙어)을 문장 안에서 찾고, 낱말 단위 팝오버를 구 단위로 넓히는 규칙.
 
-export type Unit = { text: string; gloss?: string };
+export type Unit = { text: string; gloss?: string; mark?: boolean };
 export type UnitMatch = { index: number; length: number; unit: Unit };
 export type Range = { start: number; end: number };
 
@@ -14,9 +14,9 @@ export function wordCount(text: string): number {
 }
 
 // 대소문자는 무시하고, 공백은 몇 칸이든 하나로 본다. 낱말 일부(shifts 안의 shift)에는 맞지 않는다.
-function patternOf(text: string): RegExp | null {
+function patternOf(text: string, single = false): RegExp | null {
   const words = text.match(WORD_TOKEN);
-  if (!words || words.length < 2) return null;
+  if (!words || words.length < (single ? 1 : 2)) return null;
   const body = words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/[’']/g, "['’]")).join('\\s+');
   return new RegExp(body, 'gi');
 }
@@ -25,7 +25,7 @@ export function findUnits(text: string, units: Unit[] | undefined): UnitMatch[] 
   if (!units?.length) return [];
   const found: UnitMatch[] = [];
   for (const unit of units) {
-    const pattern = patternOf(unit.text);
+    const pattern = patternOf(unit.text, unit.mark);
     if (!pattern) continue;
     for (const m of text.matchAll(pattern)) {
       const before = text[m.index - 1];

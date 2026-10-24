@@ -4,7 +4,8 @@ import { FeedPlayer } from '../components/FeedPlayer';
 import { StarButton } from '../components/StarButton';
 import { WordText } from '../components/WordText';
 import { openClip } from '../lib/clipRoute';
-import { getFeed, loadSeen, rememberSeen, reportBlockedVideo, saveSeen, type FeedClip, type FeedFilter, type NativeInfo } from '../lib/apiFeed';
+import { getFeed, loadSeen, rememberSeen, reportBlockedVideo, saveSeen, sayLine, type FeedClip, type FeedFilter, type NativeInfo } from '../lib/apiFeed';
+import { glossPhrase } from '../lib/phrases';
 
 type Load = { status: 'loading' | 'ready' | 'off' | 'error'; message?: string };
 
@@ -14,28 +15,53 @@ const KIND_LABEL: Record<string, string> = { idiom: '관용구', phrasal_verb: '
 const REGISTER_LABEL: Record<string, string> = { casual: '편한 말', neutral: '보통', work: '일하는 자리' };
 const SOURCE_LABEL: Record<FeedClip['source'], string> = { mine: '내 표현', browse: '둘러보기', native: '원어민 표현' };
 
-function NativePanel({ info }: { info: NativeInfo }) {
+type SayState = 'idle' | 'loading' | 'done';
+
+// 카드가 가르치는 표현: “이렇게 말하고 싶을 때” 한국어 한 줄 → 영어 표현. 자세히를 누르면 뜻·어려운 이유·예문·빈도.
+function SayPanel({ expression, info, line, state }: { expression: string; info: NativeInfo | null; line: string; state: SayState }) {
   const [open, setOpen] = useState(false);
   return (
-    <section aria-label="원어민 표현 설명" className="rounded-xl bg-white/10 px-4 py-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <h2 lang="en" className="text-xl leading-tight font-bold break-words">
-          {info.expression}
+    <section aria-label="말하는 법" className={`rounded-2xl bg-white/10 px-4 pt-3 ${info ? 'pb-1' : 'pb-3'}`}>
+      <p className="text-[13px] font-semibold text-white/70">이렇게 말하고 싶을 때</p>
+      {line ? (
+        <p lang="ko" className="mt-1 text-[22px] leading-snug font-bold break-keep">
+          “{line}”
+        </p>
+      ) : (
+        state === 'loading' && (
+          <p role="status" className="mt-1 animate-pulse text-base text-white/70">
+            뜻을 찾는 중이에요.
+          </p>
+        )
+      )}
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <h2 lang="en" className="text-xl leading-tight font-extrabold break-words text-marker">
+          {expression}
         </h2>
-        {KIND_LABEL[info.kind] && <span className="rounded-full bg-white/15 px-2.5 py-0.5 text-xs font-semibold">{KIND_LABEL[info.kind]}</span>}
+        {info && KIND_LABEL[info.kind] && <span className="rounded-full bg-white/15 px-2.5 py-0.5 text-xs font-semibold">{KIND_LABEL[info.kind]}</span>}
       </div>
-      <p className="mt-1 text-base font-semibold">{info.meaning_ko}</p>
-      {info.why_hard && <p className="mt-1 text-sm leading-snug text-white/80">{info.why_hard}</p>}
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-        className="mt-1 flex min-h-11 min-w-11 items-center gap-1 text-sm font-semibold underline underline-offset-2"
-      >
-        {open ? '접기' : '자세히'}
-      </button>
-      {open && (
-        <dl className="mt-1 grid gap-1 text-sm text-white/80">
+      {info && (
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+          className="flex min-h-11 min-w-11 items-center text-sm font-semibold underline underline-offset-2"
+        >
+          {open ? '접기' : '자세히'}
+        </button>
+      )}
+      {info && open && (
+        <dl className="grid gap-2 pt-1 pb-3 text-sm text-white/80">
+          <div>
+            <dt className="font-semibold text-white">뜻</dt>
+            <dd>{info.meaning_ko}</dd>
+          </div>
+          {info.why_hard && (
+            <div>
+              <dt className="font-semibold text-white">왜 어려울까요</dt>
+              <dd className="leading-snug">{info.why_hard}</dd>
+            </div>
+          )}
           {info.example && (
             <div>
               <dt className="font-semibold text-white">예문</dt>
@@ -59,8 +85,25 @@ function NativePanel({ info }: { info: NativeInfo }) {
 }
 
 function Card({ clip, index, count, active, last, loadingMore, onNext, onBlocked }: { clip: FeedClip; index: number; count: number; active: boolean; last: boolean; loadingMore: boolean; onNext: () => void; onBlocked: () => void }) {
-  const units = clip.term && clip.term.trim().split(/\s+/).length >= 2 ? [{ text: clip.term }] : undefined;
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [gloss, setGloss] = useState('');
+  const [glossState, setGlossState] = useState<SayState>('idle');
+  const term = clip.native?.expression ?? clip.term;
+  const needGloss = active && !clip.native && !!clip.term;
+  useEffect(() => {
+    if (!needGloss || !clip.term) return;
+    const ctl = new AbortController();
+    setGlossState('loading');
+    void glossPhrase(clip.term, ctl.signal).then((g) => {
+      if (ctl.signal.aborted) return;
+      setGloss(g);
+      setGlossState('done');
+    });
+    return () => ctl.abort();
+  }, [needGloss, clip.term]);
+  const line = sayLine(clip.native, gloss);
+  const mark = clip.match ?? term;
+  const units = mark ? [{ text: mark, gloss: clip.native?.meaning_ko || gloss || undefined, mark: true }] : undefined;
   const source = { video_id: clip.video_id, t: Math.max(0, Math.floor(clip.start)), title: clip.title };
   return (
     <article
@@ -77,7 +120,7 @@ function Card({ clip, index, count, active, last, loadingMore, onNext, onBlocked
           {clip.title}
         </p>
       </div>
-      {clip.native && <NativePanel info={clip.native} />}
+      {term && <SayPanel expression={term} info={clip.native} line={line} state={glossState} />}
       <p lang="en" className="py-4 text-[22px] leading-snug font-semibold break-words lg:text-2xl">
         <WordText text={clip.text} units={units} source={source} onOpenChange={setSheetOpen} />
       </p>
@@ -93,7 +136,7 @@ function Card({ clip, index, count, active, last, loadingMore, onNext, onBlocked
           공부하기
         </button>
         <span className="rounded-full bg-white">
-          <StarButton kind="phrase" text={clip.term ?? clip.text} gloss={clip.native?.meaning_ko ?? ''} sentence={clip.text} source={source} />
+          <StarButton kind="phrase" text={clip.term ?? clip.text} gloss={clip.native?.meaning_ko ?? gloss} sentence={clip.text} source={source} />
         </span>
         <button
           type="button"

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { parseNative, rememberSeen, reportBlockedVideo } from './apiFeed';
+import { parseNative, rememberSeen, reportBlockedVideo, sayLine } from './apiFeed';
 import { filterWordbook } from './apiWords';
 
 describe('seen clip memory', () => {
@@ -23,6 +23,21 @@ describe('native expression payload', () => {
     const info = parseNative({ expression: 'end up', kind: 'phrasal_verb', meaning_ko: '결국 ~하게 되다', why_hard: 'x', register: 'casual', example: 'We ended up home.', per_million: '121.3' });
     expect(info?.expression).toBe('end up');
     expect(info?.per_million).toBeCloseTo(121.3);
+  });
+
+  test('say_ko is trimmed, capped at 40 characters and optional', () => {
+    const base = { expression: 'end up', kind: 'phrasal_verb', meaning_ko: '결국 ~하게 되다' };
+    expect(parseNative({ ...base, say_ko: '  결국 집에 갔어  ' })?.say_ko).toBe('결국 집에 갔어');
+    expect(parseNative({ ...base, say_ko: '가'.repeat(60) })?.say_ko.length).toBe(40);
+    expect(parseNative(base)?.say_ko).toBe('');
+  });
+
+  test('the Korean line falls back from say_ko to the first meaning to the dictionary gloss', () => {
+    const info = parseNative({ expression: 'come up with', kind: 'phrasal_verb', meaning_ko: '떠올리다, 생각해 내다', say_ko: '좋은 생각이 났어' });
+    expect(sayLine(info)).toBe('좋은 생각이 났어');
+    expect(sayLine(info && { ...info, say_ko: '' })).toBe('떠올리다');
+    expect(sayLine(null, ' 아이디어를 내다 ')).toBe('아이디어를 내다');
+    expect(sayLine(null)).toBe('');
   });
 
   test('missing expression or meaning is rejected', () => {
