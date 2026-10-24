@@ -62,6 +62,11 @@ DEFAULT_VAD_PREFIX_MS = 500
 NOISE_FILTER_ENV = "NOISE_FILTER"
 # 상대가 말하는 동안 학습자가 맞장구가 아닌 낱말을 이만큼 말해야 상대 말을 끊는다(2026-10-24).
 # Gemini는 말 시작만 듣고 끊어서 "uh-huh"·길거리 목소리에도 멈췄다. 0이면 옛 방식(Gemini가 끊음).
+# 대답 없음 진단 로그: 상대가 말을 끝낸 뒤 8초가 지나도 다음 대답이 없으면 5초마다 마이크 크기를 남긴다(최대 2분).
+WAIT_LOG_START_SEC = 8
+WAIT_LOG_EVERY_SEC = 5
+WAIT_LOG_MAX_SEC = 120
+WAIT_LOUD_PEAK = 600  # 약 -35 dBFS: 이보다 크면 말소리나 또럷한 잡음
 BARGE_IN_WORDS_ENV = "LIVE_BARGE_IN_WORDS"
 DEFAULT_BARGE_IN_WORDS = 3
 BARGE_IN_WORD_RE = re.compile(r"[^\W\d_]+(?:['’-][^\W\d_]+)*")
@@ -639,8 +644,11 @@ def live_input_languages(env=None) -> List[str]:
 
 @functools.lru_cache(maxsize=1)
 def live_service_class():
+    import math
+
+    import numpy as np
     from google.genai.types import ActivityHandling, RealtimeInputConfig
-    from pipecat.frames.frames import BotStartedSpeakingFrame, BotStoppedSpeakingFrame
+    from pipecat.frames.frames import BotStartedSpeakingFrame, BotStoppedSpeakingFrame, InputAudioRawFrame
     from pipecat.services.google.gemini_live.vertex.llm import GeminiLiveVertexLLMService
 
     class TranscriptHintedLiveService(GeminiLiveVertexLLMService):
@@ -656,6 +664,31 @@ def live_service_class():
             self._partner_speaking = False
             self._heard_words = 0
             self._drop_rest_of_turn = False
+            self._waiting_since: Optional[float] = None
+            self._wait_logged_at = 0.0
+            self._wait_peak = 0
+            self._wait_frames = 0
+            self._wait_loud = 0
+
+        def _note_waiting_audio(self, frame) -> None:
+            """상대가 말을 끝낸 뒤 다음 대답이 늦으면 마이크 크기를 주기적으로 남긴다(대답 없음 진단, 2026-10-24).
+            마이크가 크면 학습자 말·잡음이 차례를 안 끝낸 것이고, 조용한데도 대답이 없으면 Gemini 쪽 지연이다."""
+            if self._waiting_since is None:
+                return
+            samples = np.frombuffer(frame.audio, dtype=np.int16)
+            if samples.size:
+                peak = int(np.abs(samples.astype(np.int32)).max())
+                self._wait_peak = max(self._wait_peak, peak)
+                self._wait_frames += 1
+                self._wait_loud += peak > WAIT_LOUD_PEAK
+            now = time.monotonic()
+            waited = now - self._waiting_since
+            if waited >= WAIT_LOG_START_SEC and now - self._wait_logged_at >= WAIT_LOG_EVERY_SEC and waited <= WAIT_LOG_MAX_SEC:
+                db = 20 * math.log10(max(self._wait_peak, 1) / 32768)
+                loud = 100 * self._wait_loud // max(self._wait_frames, 1)
+                logger.info("Waiting for partner reply: %ds since partner stopped; mic peak %.0f dBFS, loud frames %d%%",
+                            int(waited), db, loud)
+                self._wait_logged_at, self._wait_peak, self._wait_frames, self._wait_loud = now, 0, 0, 0
 
         async def _connection_task_handler(self, config):
             languages = live_input_languages()
@@ -673,11 +706,16 @@ def live_service_class():
             await super()._connection_task_handler(config)
 
         async def process_frame(self, frame, direction):
-            if isinstance(frame, BotStartedSpeakingFrame):
+            if isinstance(frame, InputAudioRawFrame):
+                self._note_waiting_audio(frame)
+            elif isinstance(frame, BotStartedSpeakingFrame):
                 self._partner_speaking = True
                 self._heard_words = 0
+                self._waiting_since = None
             elif isinstance(frame, BotStoppedSpeakingFrame):
                 self._partner_speaking = False
+                self._waiting_since = time.monotonic()
+                self._wait_logged_at, self._wait_peak, self._wait_frames, self._wait_loud = self._waiting_since, 0, 0, 0
             await super().process_frame(frame, direction)
 
         async def _handle_msg_input_transcription(self, message):
