@@ -19,6 +19,20 @@ html,
 body {
   background: var(--color-paper);
   color: var(--color-ink);
+  /* 홈 화면 앱: 고무줄 바운스로 화면 전체가 끌려 내려가지 않게 한다. */
+  overscroll-behavior-y: none;
+}
+
+/* 홈 화면 앱이 앱처럼 동작하게: 두 번 탭 확대와 탭 순간의 회색 상자를 끈다(글자 선택은 그대로 둔다). */
+html {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 아바타·링크를 길게 눌러도 iOS 미리보기·저장 메뉴가 뜨지 않게 한다. */
+img,
+a {
+  -webkit-touch-callout: none;
 }
 
 body {
