@@ -1,7 +1,9 @@
-import { Captions, CaptionsOff, Mic, MicOff, MoonStar, Pause, Phone, PhoneOff, Play, Volume2, X } from 'lucide-react';
+import { Captions, CaptionsOff, Link2, Mic, MicOff, MoonStar, Pause, Phone, PhoneOff, Play, Volume2, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { BlackScreen } from '../components/BlackScreen';
 import type { MemoryState } from '../components/FriendMemory';
+import { ShareRow } from '../components/ShareRow';
+import { SharedClipCard } from '../components/SharedClipCard';
 import { TalkingPortrait } from '../components/TalkingPortrait';
 import { TopicChips, type TopicChip } from '../components/TopicChips';
 import { QuietButton, useWide } from '../components/ui';
@@ -11,6 +13,7 @@ import { elapsedNoticeText, elapsedSeconds, nextElapsedNotice, NOTICE_SHOW_MS, s
 import { go } from '../lib/router';
 import { cleanInterests, sanitizeTopic, type PracticeWord } from '../lib/instructions';
 import { isPark, partnerById, PARK_ID } from '../lib/partners';
+import { clipKey, linkLabel, withoutUrl } from '../lib/share';
 import { BLACK_DELAY_MS, loadScreenMode, useScreenLock } from '../lib/screenLock';
 import { buildInstruction, callMode, callTitle, practiceWordsFor, type CallSetup, type FinishedCall } from '../lib/setup';
 import { useCall } from '../lib/useCall';
@@ -103,6 +106,7 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, wordbo
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [wantSummary, setWantSummary] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [laterKey, setLaterKey] = useState<string | null>(null);
   const noticeCount = useRef(0);
   const [now, setNow] = useState(() => Date.now());
   const captionsEnd = useRef<HTMLDivElement | null>(null);
@@ -179,6 +183,7 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, wordbo
         result: call.result,
         endReason: call.endReason,
         practiceWords: practiceWordsFor(setup, practiceWords, wordbook).map((w) => w.lemma),
+        sharedClips: call.sharedClips,
       };
       if (pushedRef.current) {
         // 끊기 버튼·미션 완료 등으로 끝난 경우: 쌓아 둔 항목을 먼저 걷어 낸 뒤 요약으로 이동한다.
@@ -199,7 +204,7 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, wordbo
         onFinished(finished);
       }
     }
-  }, [call.status, call.result, call.endReason, onFinished, setup, startedAt, practiceWords, wordbook, offerRedial, wantSummary]);
+  }, [call.status, call.result, call.endReason, call.sharedClips, onFinished, setup, startedAt, practiceWords, wordbook, offerRedial, wantSummary]);
 
   useEffect(() => {
     captionsEnd.current?.scrollIntoView({ block: 'end' });
@@ -214,6 +219,7 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, wordbo
       setStartedAt(serverNow());
       setNow(Date.now());
       setWantSummary(false);
+      setLaterKey(null);
       setNotice(null);
       noticeCount.current = 0;
       await call.start(
@@ -249,6 +255,9 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, wordbo
     const timer = window.setTimeout(() => setNotice(null), NOTICE_SHOW_MS);
     return () => window.clearTimeout(timer);
   }, [notice]);
+  const latestClip = call.sharedClips[call.sharedClips.length - 1];
+  const clipCard = live && latestClip && clipKey(latestClip) !== laterKey ? latestClip : null;
+  const canShare = live && setup.kind !== 'teachback';
   const resumeCall = () => {
     call.resume();
     setNow(Date.now());
@@ -286,7 +295,7 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, wordbo
 
       <section className="flex flex-col items-center pt-6 text-center lg:col-start-1 lg:row-start-2 lg:self-center lg:pt-0">
         <TalkingPortrait
-          size={live ? 168 : showChips && !wide ? 140 : 200}
+          size={live ? (clipCard && !wide ? 120 : 168) : showChips && !wide ? 140 : 200}
           level={call.botLevel}
           active={call.botSpeaking}
           src={partner.portrait}
@@ -340,12 +349,26 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, wordbo
         )}
         {captions && call.lines.length > 0 && (
           <div className="space-y-3 rounded-2xl bg-surface p-4 lg:space-y-4 lg:rounded-none lg:bg-transparent lg:p-0 lg:text-lg lg:leading-relaxed">
-            {call.lines.map((line) => (
-              <p key={line.id} className={line.who === 'me' ? 'text-right text-ink' : 'text-ink'}>
-                <span className="mr-1.5 text-xs font-semibold text-ink-soft">{line.who === 'me' ? '나' : partner.name}</span>
-                <WordText text={line.text} />
-              </p>
-            ))}
+            {call.lines.map((line) => {
+              const body = line.share ? withoutUrl(line.text) : line.text;
+              return (
+                <p key={line.id} className={line.who === 'me' ? 'text-right text-ink' : 'text-ink'}>
+                  <span className="mr-1.5 text-xs font-semibold text-ink-soft">{line.who === 'me' ? '나' : partner.name}</span>
+                  {body && <WordText text={body} />}
+                  {line.share && (
+                    <a
+                      href={line.share.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className={`mt-1 ml-auto flex w-fit max-w-full items-center gap-1.5 rounded-full border border-line bg-paper px-3 py-1.5 text-sm ${line.share.failed ? 'text-end-press' : 'text-ink-soft'}`}
+                    >
+                      <Link2 size={14} aria-hidden className="shrink-0" />
+                      <span className="truncate">{linkLabel(line.share.url, line.share.title)}</span>
+                    </a>
+                  )}
+                </p>
+              );
+            })}
             <div ref={captionsEnd} />
           </div>
         )}
@@ -371,6 +394,19 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, wordbo
             <QuietButton onClick={() => go('home')}>홈으로</QuietButton>
           </div>
         ) : (
+          <div className="space-y-3">
+            {clipCard && (
+              <SharedClipCard
+                key={clipKey(clipCard)}
+                clip={clipCard}
+                from={partner.name}
+                onLater={() => {
+                  setLaterKey(clipKey(clipCard));
+                  setNotice('요약 화면에 담아 뒀어요');
+                }}
+              />
+            )}
+            {canShare && <ShareRow onSend={call.share} disabled={call.paused} />}
           <div className="flex items-end justify-center gap-3">
             <RoundButton label={captions ? '자막 끄기' : '자막 켜기'} tone={captions ? 'on' : 'plain'} onClick={() => setCaptions((v) => !v)}>
               {captions ? <Captions size={24} aria-hidden /> : <CaptionsOff size={24} aria-hidden />}
@@ -391,6 +427,7 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, wordbo
             <RoundButton label={call.micOn ? '음소거' : '음소거 해제'} tone={call.micOn ? 'plain' : 'on'} onClick={call.paused ? () => undefined : call.toggleMic}>
               {call.micOn ? <Mic size={24} aria-hidden /> : <MicOff size={24} aria-hidden />}
             </RoundButton>
+          </div>
           </div>
         )}
       </footer>

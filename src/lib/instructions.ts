@@ -120,10 +120,17 @@ function friendWordsBlock(words: PracticeWord[], book: Wordbook | null | undefin
   return (wordbookBlock(book) || practiceBlock(words)) + nativeBlock(book?.native);
 }
 
+export const CALL_TOOLS = `
+
+TOOLS: during this call you have three abilities, like a friend with a phone.
+1. recall_past_conversations: look up what the learner said in earlier calls and chats. Use it when they mention an earlier talk ("do you remember...", "I told you about...") or when you want to bring up something from before. Then say it naturally, as if you simply remembered it.
+2. Messages and links: the learner can type a message or paste a link while you talk. It reaches you as text in square brackets, for example "[The learner just sent you a link: ...]". React like a friend who just opened it, and talk about it.
+3. share_clip: send the learner a real video clip of a native speaker scene. Use it only when a real scene would help (an expression you are discussing, or a topic), at most about once every few minutes. Never invent links, titles or quotes.`;
+
 export function personaPrefix(brief: string, words: PracticeWord[] = [], withTool = true): string {
   return `${PERSONA}
 
-${memoryBlock(brief, withTool)}${practiceBlock(words)}`;
+${memoryBlock(brief, withTool)}${practiceBlock(words)}${CALL_TOOLS}`;
 }
 
 function openingStep(hasMemory: boolean, goalText: string, chip = ''): string {
@@ -289,7 +296,7 @@ Today you are not a coach. You are a friendly colleague chatting over coffee dur
 CALL FLOW (follow this order):
 1. OPENING. You speak first, in 1-2 short sentences: ${parkSmallTalkOpening(chip)} Do not mention goals, weak points, or practice.
 2. CHAT. Pick casual everyday topics: the weekend, food, the weather, a small news item, hobbies, plans for tonight. Keep each turn to 1-2 short sentences and ask one simple follow-up question at a time. Let the learner do most of the talking. Share a tiny bit about yourself now and then, like a real colleague. Do not give a lesson, do not lecture, and do not quiz the learner. Never give a score. Do not bring up the learner's weak points from your notes; just enjoy the chat. If the learner asks for a word or an explanation, answer in one easy sentence and go back to chatting.
-3. GOODBYE. When the learner wants to stop, or the time is almost up, say a warm, short goodbye (one or two sentences, for example "Nice chatting with you! Enjoy the rest of your day."). Do not give feedback and do not call any tool.${NATURAL_RECAST}${EXPRESSION_HELP}`;
+3. GOODBYE. When the learner wants to stop, or the time is almost up, say a warm, short goodbye (one or two sentences, for example "Nice chatting with you! Enjoy the rest of your day."). Do not give feedback and do not call the scoring tool.${NATURAL_RECAST}${EXPRESSION_HELP}`;
 }
 
 // ---- 대화 상대(Ms. Park 이외) 지시문. 상대는 코치가 아니라 대화 친구다. 피드백·요약·기억은 Ms. Park의 몫이다. ----
@@ -582,7 +589,9 @@ const CHAT_STYLE = `
 
 CHAT STYLE: talk like a friend having a relaxed chat. Share your own opinions and small stories from your life (consistent with who you are and with your STORY BANK), and react with feeling ("No way!", "That's so cool"). Keep each turn short (1-3 sentences) so the learner talks more.`;
 
-export const PARTNER_PROMPT_LIMIT = 22000;
+// 2026-10-24: 22000 -> 26000. 통화 도구(TOOLS) 문단과 기억 v2 블록이 더해져 Brian은 보통 기억만으로도 이야기 목록·단어장이 잘렸다.
+// 서버 상한(call_bot.MAX_INSTRUCTION_CHARS 30000)에는 끊긴 통화 이어 하기 블록을 붙일 여유를 남긴다.
+export const PARTNER_PROMPT_LIMIT = 26000;
 
 // STORY BANK에서 이야기 몇 개만 남긴다. 이미 이야기한 것(self_story)과 겹치는 것을 먼저 고른다.
 export function trimStoryBank(bank: string, memory: PartnerMemory | null | undefined, keep = 4): string {
@@ -668,7 +677,7 @@ function partnerSmallTalkInstruction(partner: Partner, brief: string, words: Pra
     ? `${greet}, share one small thing from your own day, and ask what they have been into lately.`
     : `${greet}, share one small thing from your own day, and ask how they are.`;
   const openingText = friendOpening(memory, chip, false, greet, fresh, openingStory(partner.storyBank, memory));
-  return fitPrompt(partner, memory, wordbook, (bank, book, mem) => `${partnerPrefix(partner, brief, words, false, interests, book)}${friendMemoryBlock(mem)}${CHAT_STYLE}
+  return fitPrompt(partner, memory, wordbook, (bank, book, mem) => `${partnerPrefix(partner, brief, words, false, interests, book)}${CALL_TOOLS}${friendMemoryBlock(mem)}${CHAT_STYLE}
 
 ${CONVERSATION_DYNAMICS}
 
@@ -683,7 +692,7 @@ You are not a coach today. You are a friendly person chatting with the learner.$
 CALL FLOW (follow this order):
 1. OPENING. You speak first, as ${partner.name}, in 1-2 short sentences: ${openingText} Do not mention goals, weak points, or practice.
 2. CHAT. Talk about casual things you both might enjoy, starting from your favorite topics. Keep each turn short and follow the CONVERSATION DYNAMICS above. Share about yourself much more than you ask, using your STORY BANK, like a real friend. Do not give a lesson, do not quiz the learner, and never give a score. If the learner asks for a word or an explanation, answer in one easy sentence and go back to chatting.
-3. GOODBYE. When the learner wants to stop, or the time is almost up, say a warm, short goodbye in your own style. Do not give feedback and do not call any tool.`);
+3. GOODBYE. When the learner wants to stop, or the time is almost up, say a warm, short goodbye in your own style. Do not give feedback and do not call the scoring tool.`);
 }
 
 function partnerFreeTalkInstruction(partner: Partner, topic: string, brief: string, retry: Retry | null | undefined, words: PracticeWord[], interests: string[], memory: PartnerMemory | null, chip: string, wordbook: Wordbook | null | undefined): string {
@@ -706,7 +715,7 @@ ${clean}
       ? `${greet}, share one small thing from your own day, and ask what they love or what they would like to talk about.`
       : `${greet}, share one small thing from your own day, and ask what they would like to talk about (or start one of your favorite topics).`;
   const openingText = friendOpening(memory, cleanChip, !!clean, greet, fresh, openingStory(partner.storyBank, memory));
-  return fitPrompt(partner, memory, wordbook, (bank, book, mem) => `${partnerPrefix(partner, brief, words, true, interests, book)}${friendMemoryBlock(mem)}${CHAT_STYLE}
+  return fitPrompt(partner, memory, wordbook, (bank, book, mem) => `${partnerPrefix(partner, brief, words, true, interests, book)}${CALL_TOOLS}${friendMemoryBlock(mem)}${CHAT_STYLE}
 
 ${CONVERSATION_DYNAMICS}
 

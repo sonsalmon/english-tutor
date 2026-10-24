@@ -57,7 +57,9 @@ describe('Brian', () => {
     // CALL FLOW의 '1. OPENING' 줄에도 첫 화제 이야기(Beat 1 포함)가 들어가므로 STORY BANK 줄만 센다.
     const storyCount = (text: string) => text.split('\n').filter((l) => /^\d+\.\s/.test(l) && l.includes('Beat 1') && !l.includes('OPENING')).length;
     const light = smallTalkInstruction('', [], brian, [], null, '');
-    const full = freeTalkInstruction('', '', null, [], brian, [], FULL_MEMORY);
+    // 기억 v2는 사실 상한이 없다: 중요한 사실이 많이 쌓이면 한도(26000자)를 넘어 이야기 목록이 줄어든다.
+    const keyFacts = Array.from({ length: 60 }, (_, i) => ({ text: `Key fact ${i} `.padEnd(120, 'k'), last_seen: '2026-10-20', importance: 5 }));
+    const full = freeTalkInstruction('', '', null, [], brian, [], { ...FULL_MEMORY, facts: [...FULL_MEMORY.facts, ...keyFacts] });
     expect(light).toContain('STORY BANK (Brian)');
     expect(storyCount(light)).toBe(9);
     expect(full).toContain('STORY BANK (Brian)');

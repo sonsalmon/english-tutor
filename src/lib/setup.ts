@@ -14,6 +14,7 @@ import {
   type SeniorMode,
 } from './instructions';
 import type { LatencyResult } from './latency';
+import type { SharedClip } from './share';
 import { isPark, partnerById } from './partners';
 
 // partner는 대화 상대 id다. 없으면 Ms. Park. Teach-back은 언제나 Ms. Park이다.
@@ -32,6 +33,8 @@ export type FinishedCall = {
   result: MissionResult | null;
   endReason: EndReason | null;
   practiceWords: string[];
+  /** 통화 중 파트너가 보낸 영상 장면. 요약 화면에 목록으로 보인다. */
+  sharedClips?: SharedClip[];
   /** 이 통화의 응답 속도 측정값. Summary가 튜터링 요청에 실어 서버로 보낸다. */
   latency?: LatencyResult | null;
 };

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { PartnerMemory, Wordbook } from './api';
-import { buildChatInstruction, FACT_BUDGET, FACT_CORE_CEILING, freeTalkInstruction, friendMemoryBlock, missionInstruction, selectFacts, nativeBlock, openingStory, PARTNER_PROMPT_LIMIT, smallTalkInstruction, teachbackInstruction, trimMemory, trimStoryBank, wordbookBlock } from './instructions';
+import { buildChatInstruction, CALL_TOOLS, FACT_BUDGET, FACT_CORE_CEILING, freeTalkInstruction, friendMemoryBlock, missionInstruction, selectFacts, nativeBlock, openingStory, PARTNER_PROMPT_LIMIT, smallTalkInstruction, teachbackInstruction, trimMemory, trimStoryBank, wordbookBlock } from './instructions';
 import { PARTNERS, partnerById } from './partners';
 
 const FRIENDS = PARTNERS.filter((p) => p.id !== 'park');
@@ -81,13 +81,27 @@ describe('partner smalltalk and freetalk prompts', () => {
   });
 });
 
-describe('Ms. Park and Teach-back are unchanged', () => {
+describe('Ms. Park and Teach-back keep their prompts apart from the call tools paragraph', () => {
   const park = partnerById('park');
-  test('output lengths match the main branch', () => {
-    expect(smallTalkInstruction('brief', [], park).length).toBe(3533);
-    expect(freeTalkInstruction('my weekend', 'brief', null, [], park).length).toBe(4001);
-    expect(missionInstruction(MISSION, 'brief', null, [], park).length).toBe(7351);
+  test('output lengths match the main branch plus the TOOLS paragraph', () => {
+    const tools = CALL_TOOLS.length;
+    const scoringToolWording = 'the scoring'.length - 'any'.length;
+    expect(smallTalkInstruction('brief', [], park).length).toBe(3533 + tools + scoringToolWording);
+    expect(freeTalkInstruction('my weekend', 'brief', null, [], park).length).toBe(4001 + tools);
+    expect(missionInstruction(MISSION, 'brief', null, [], park).length).toBe(7351 + tools);
     expect(teachbackInstruction([{ heading: 'A', body: 'b' }], 'during', null, 'brief').length).toBe(2409);
+  });
+  test('calls carry the three abilities, Teach-back and text chat do not', () => {
+    for (const text of [smallTalkInstruction('', [], park), freeTalkInstruction('', '', null, [], park), missionInstruction(MISSION, '', null, [], park)]) {
+      expect(text).toContain('recall_past_conversations');
+      expect(text).toContain('share_clip');
+    }
+    for (const p of FRIENDS) {
+      expect(smallTalkInstruction('', [], p)).toContain('TOOLS:');
+      expect(freeTalkInstruction('', '', null, [], p)).toContain('TOOLS:');
+      if (p.chatPersona) expect(buildChatInstruction(p, '', null)).not.toContain('recall_past_conversations');
+    }
+    expect(teachbackInstruction([{ heading: 'A', body: 'b' }], 'during', null, '')).not.toContain('recall_past_conversations');
   });
   test('no friend blocks leak in', () => {
     expect(smallTalkInstruction('brief', [], park)).not.toContain('CONVERSATION DYNAMICS');
@@ -166,6 +180,9 @@ const FULL_MEMORY: PartnerMemory = {
   jokes: Array.from({ length: 5 }, (_, i) => ({ text: `joke ${i} `.padEnd(100, 'j'), last_seen: day(i) })),
   episodes: Array.from({ length: 12 }, (_, i) => ({ date: day(30 - i), mode: i % 2 ? 'chat' : 'call', summary: `episode ${i} `.padEnd(200, 'e') })),
 };
+
+// 기억 v2는 사실 개수 상한이 없다. 중요도 5 사실은 예산 밖에서도 먼저 들어가므로, 지시문 한도를 넘기는 시험은 이것을 더한다.
+const keyFacts = (n: number) => Array.from({ length: n }, (_, i) => ({ text: `key fact ${i} `.padEnd(120, 'k'), last_seen: day(i), importance: 5 }));
 
 // 단어 8개(원형 64자, 뜻 40자)와 문장 5개(90자)까지 가득 찬 단어장.
 const FULL_WORDBOOK: Wordbook = {
@@ -257,7 +274,7 @@ describe('prompt length limit holds with full memory and a full wordbook', () =>
     const bank = p.storyBank!;
     const total = storyCount(bank, bank);
     const fullBlock = wordbookBlock(FULL_WORDBOOK);
-    const lightMemory: PartnerMemory = { ...FULL_MEMORY, self_story: [], episodes: [], jokes: [] };
+    const lightMemory: PartnerMemory = { ...FULL_MEMORY, facts: [...FULL_MEMORY.facts, ...keyFacts(10)], self_story: [], episodes: [], jokes: [] };
     let wordbookOnly = false;
     for (let len = 0; len <= 2000 && !wordbookOnly; len += 25) {
       const brief = 'x'.repeat(len);
@@ -271,7 +288,7 @@ describe('prompt length limit holds with full memory and a full wordbook', () =>
     }
     expect(wordbookOnly).toBe(true);
 
-    const squeezed = smallTalkInstruction('x'.repeat(2000), [], p, [], FULL_MEMORY, '', FULL_WORDBOOK);
+    const squeezed = smallTalkInstruction('x'.repeat(2000), [], p, [], { ...FULL_MEMORY, facts: [...FULL_MEMORY.facts, ...keyFacts(60)] }, '', FULL_WORDBOOK);
     expect(storyCount(squeezed, bank)).toBe(4);
     expect(squeezed).not.toContain("THE LEARNER'S OWN WORDBOOK");
   });

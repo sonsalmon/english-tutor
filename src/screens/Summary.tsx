@@ -4,6 +4,7 @@ import { ClipList } from '../components/ClipList';
 import { CostLine, TutoringBlocks } from '../components/TutoringBlocks';
 import { CultureNotes } from '../components/CultureNotes';
 import { FriendMessage } from '../components/FriendMessage';
+import { SharedClipList } from '../components/SharedClipList';
 import { ThinkingGaps } from '../components/ThinkingGaps';
 import { ReplayButton, TranscriptView } from '../components/TranscriptView';
 import { WordText } from '../components/WordText';
@@ -186,6 +187,8 @@ export function Summary({ call, onRetry, onHome }: { call: FinishedCall; onRetry
           </div>
         </div>
       )}
+
+      <SharedClipList clips={call.sharedClips ?? []} from={setupPartner(call.setup).name} />
 
       {tutoring && <FriendMessage message={tutoring.friend_message} partnerId={setupPartner(call.setup).id} />}
       {tutoring && (

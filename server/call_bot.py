@@ -21,7 +21,7 @@ from google.genai.types import AudioTranscriptionConfig, EndSensitivity, StartSe
 
 from server.config_utils import get_project_id
 from server.lesson import session_time_limit_from_env
-from server import partner_memory
+from server import call_tools, partner_memory
 from server.partner_memory import PARTNER_IDS, PARTNER_NAMES
 from server.pricing import UsageTotals, estimate_cost
 from server.readgloss import LEMMA_RE
@@ -89,6 +89,7 @@ NOISE_MARK_RE = re.compile(r"\{\s*\}")
 # 입력 전사 언어 힌트(쉼표 구분 BCP-47). 빈 문자열이면 힌트를 넣지 않는다(Vertex가 거부할 때 끄는 스위치).
 LIVE_INPUT_LANGUAGES_ENV = "LIVE_INPUT_LANGUAGES"
 DEFAULT_LIVE_INPUT_LANGUAGES = "en-US,ko-KR"
+SHARE_FETCH_TIMEOUT_SEC = 25
 NOT_YET_RESULT = {
     "status": "ignored",
     "reason": "The learner has not practiced yet in this call. Do not end the mission. Keep the conversation going.",
@@ -391,7 +392,7 @@ def schedule_partner_memory_update(saved: Any, config: "CallConfig", record: "Ca
     """저장된 통화가 친구 통화이고 학습자 발화가 있으면 이 통화의 턴만으로 기억 갱신을 뒤에서 돌린다. 걸지 않으면 None."""
     if not config.partner or saved is None:
         return None
-    turns = list(record.chunks)
+    turns = [(speaker, text) for speaker, text in record.chunks if speaker in ("Me", "Partner")]
     if not any(speaker == "Me" and text.strip() for speaker, text in turns):
         return None
     key = getattr(saved, "name", str(saved))
@@ -478,6 +479,11 @@ class CallRecord:
     def add_partner(self, text: str) -> None:
         if text and text.strip():
             self.chunks.append(("Partner", text.strip()))
+
+    def add_note(self, speaker: str, text: str) -> None:
+        """공유한 링크·장면처럼 말이 아닌 기록. 전문에 `**<speaker>:** ...`로 남는다."""
+        if text and text.strip():
+            self.chunks.append((speaker, " ".join(text.split())))
 
     def learner_has_spoken(self) -> bool:
         # 학습자가 실제로 말하기 전에 모델이 미션을 끝내면 학습자 카드 예문을 이번 발화처럼 인용한 적이 있다(2026-10-20 브라우저 시험).
@@ -600,6 +606,16 @@ def mission_tools(config: CallConfig):
     ])
 
 
+def live_tools(config: CallConfig):
+    """Teach-back을 뺀 모든 통화에 지난 통화 찾기·장면 보내기 도구를 주고, 미션·자유 대화에는 complete_mission도 더한다."""
+    if config.mode == "teachback":
+        return None
+    from pipecat.adapters.schemas.tools_schema import ToolsSchema
+
+    mission = mission_tools(config)
+    return ToolsSchema(standard_tools=[*(mission.standard_tools if mission else []), *call_tools.tool_schemas()])
+
+
 def live_config_for(mode: str, env=None):
     """run_bot이 쓰는 (Live 모델, Gemini VAD 설정, 로컬 사용자 설정, 전문 `- vad:` 요약)을 한 번에 돌려준다."""
     vad, user_params = turn_settings(mode, env)
@@ -689,6 +705,11 @@ def live_service_class():
                 logger.info("Waiting for partner reply: %ds since partner stopped; mic peak %.0f dBFS, loud frames %d%%",
                             int(waited), db, loud)
                 self._wait_logged_at, self._wait_peak, self._wait_frames, self._wait_loud = now, 0, 0, 0
+
+        async def send_learner_text(self, text: str) -> None:
+            """학습자가 보낸 글을 Gemini 세션에 바로 넣는다. InputTextRawFrame으로 넣으면 그 프레임이 파이프라인 뒤로 흘러
+            자막(bot-output)과 전문에 파트너 발화로 섞이므로 프레임을 거치지 않는다."""
+            await self._send_user_text(text)
 
         async def _connection_task_handler(self, config):
             languages = live_input_languages()
@@ -790,7 +811,7 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
         ),
     )
 
-    tools = mission_tools(config)
+    tools = live_tools(config)
 
     live_service = live_service_class()
     llm = live_service(
@@ -840,8 +861,36 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
         await worker.queue_frames([RTVIServerMessageFrame(data={"type": "mission_complete", "args": params.arguments})])
         await params.result_callback({"status": "recorded"})
 
+    async def recall_past_conversations(params: FunctionCallParams):
+        query = str((params.arguments or {}).get("query") or "")
+        result = await asyncio.to_thread(call_tools.recall, query, config.partner)
+        logger.info("recall_past_conversations(%r): %s, %d snippet(s)", query, result["status"], len(result.get("snippets", [])))
+        await params.result_callback(result)
+
+    shared_videos: "set[str]" = set()
+    last_clip_at: List[float] = []
+
+    async def share_clip(params: FunctionCallParams):
+        query = str((params.arguments or {}).get("phrase_or_topic") or "")
+        hold = call_tools.share_clip_hold(record.chunks, last_clip_at[-1] if last_clip_at else None, time.monotonic())
+        if hold:
+            logger.info("share_clip(%r): held", query)
+            await params.result_callback(hold)
+            return
+        clip = await asyncio.to_thread(call_tools.find_clip, query, shared_videos)
+        logger.info("share_clip(%r): %s", query, clip and clip["video_id"])
+        if clip:
+            shared_videos.add(clip["video_id"])
+            last_clip_at.append(time.monotonic())
+            record.add_note("Partner (shared clip)", call_tools.clip_record_text(clip))
+            await worker.queue_frames([RTVIServerMessageFrame(data={"type": "shared_clip", "clip": clip})])
+        await params.result_callback(call_tools.share_clip_result(clip))
+
     if tools is not None:
-        llm.register_function("complete_mission", complete_mission)
+        llm.register_function(call_tools.RECALL_TOOL, recall_past_conversations)
+        llm.register_function(call_tools.SHARE_CLIP_TOOL, share_clip)
+        if mission_tools(config) is not None:
+            llm.register_function("complete_mission", complete_mission)
 
     @user_aggregator.event_handler("on_user_turn_message_added")
     async def on_user_message(aggregator, message):
@@ -888,10 +937,34 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
         logger.warning("Gemini connection lost for good; ending the call")
         await worker.queue_frames([EndFrame()])
 
-    # 클라이언트가 sendClientMessage("pause"|"resume")을 보내면 RTVIProcessor가 on_client_message를 부른다.
+    async def handle_share(rtvi, data: dict) -> None:
+        """학습자가 통화 중 보낸 글·링크를 읽어 파트너에게 학습자 글로 넣고, 전문에 남기고, 화면에 결과를 알린다."""
+        text = call_tools.clean_share_text(data.get("text"))
+        ack = {"type": "share_ack", "id": data.get("id"), "ok": bool(text)}
+        if text:
+            urls = call_tools.extract_urls(text)
+            ctx = None
+            if urls:
+                try:
+                    ctx = await asyncio.wait_for(asyncio.to_thread(call_tools.link_context, urls[0]), timeout=SHARE_FETCH_TIMEOUT_SEC)
+                except asyncio.TimeoutError:
+                    ctx = call_tools.LinkContext(urls[0], error="timeout")
+                ack.update(url=ctx.url, title=ctx.title, opened=ctx.ok)
+            logger.info("Share from learner: %s", ctx and (ctx.url, ctx.kind, ctx.title, ctx.error) or "text")
+            record.add_note("Me (shared)", call_tools.share_record_text(text, ctx))
+            await llm.send_learner_text(call_tools.share_prompt(text, ctx))
+        await rtvi.send_server_message(ack)
+
+    share_tasks: "set[asyncio.Task]" = set()
+
+    # 클라이언트가 sendClientMessage("pause"|"resume"|"share")을 보내면 RTVIProcessor가 on_client_message를 부른다.
     @worker.rtvi.event_handler("on_client_message")
     async def on_client_message(rtvi, message):
-        if message.type == "pause":
+        if message.type == "share" and config.mode != "teachback":
+            task = asyncio.create_task(handle_share(rtvi, message.data if isinstance(message.data, dict) else {}))
+            share_tasks.add(task)
+            task.add_done_callback(share_tasks.discard)
+        elif message.type == "pause":
             if clock.pause():
                 clock_changed.set()
                 await rtvi.interrupt_bot()  # 말하던 튜터를 멈춘다
@@ -932,6 +1005,8 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
     finally:
         if limiter:
             limiter.cancel()
+        for task in share_tasks:
+            task.cancel()
         await stop_recording()
         record.paused_sec = clock.paused_total()
         saved = await asyncio.to_thread(finish_call, record, config, model, None, vad_meta)
