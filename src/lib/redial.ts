@@ -10,6 +10,17 @@ export const TELEMETRY_EVERY_MS = 5000;
 
 export type DeadReason = 'failed' | 'disconnected' | 'silence';
 
+export const RESUME_TURNS = 12;
+export type ResumeTurn = { who: 'me' | 'partner'; text: string };
+
+// 다시 걸 때 서버에 넘길 직전 대화(자막 기준). 자동 다시 걸기는 끊긴 뒤 1초 만에 나가서 서버가 직전 전문을 아직 저장하지 못했을 수 있다.
+export function resumeTurns(lines: { who: 'me' | 'park'; text: string; share?: unknown }[], count = RESUME_TURNS): ResumeTurn[] {
+  return lines
+    .filter((line) => !line.share && line.text.trim())
+    .slice(-count)
+    .map((line) => ({ who: line.who === 'me' ? 'me' : 'partner', text: line.text.trim() }));
+}
+
 export type Health = {
   lastActiveAt: number;
   lastIn: number | null;

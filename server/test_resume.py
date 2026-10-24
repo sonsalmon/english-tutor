@@ -62,6 +62,37 @@ class ResumeTest(unittest.TestCase):
         self.assertTrue(block.startswith("Priya: line 8"))
         self.assertTrue(block.endswith("Learner: line 19"))
 
+    def test_auto_redial_uses_the_turns_the_screen_sent_even_before_the_transcript_exists(self):
+        sent = [{"who": "partner", "text": "So how was work?"}, {"who": "me", "text": "I  started a new\njob as a server."}]
+        config = parse_call_config({"system_instruction": INSTRUCTION, "mode": "smalltalk", "partner": "priya", "resume_turns": sent})
+
+        out = self.run_resume(config)
+
+        block = out.system_instruction.split("<<<\n")[1].split("\n>>>")[0]
+        self.assertEqual(block, "Priya: So how was work?\nLearner: I started a new job as a server.")
+        self.assertIn("about 1 minute(s) ago", out.system_instruction)
+
+    def test_screen_turns_without_learner_speech_or_with_bad_shapes_fall_back_to_the_transcript(self):
+        self.save("2026-10-24-215011", "priya", ended_ago=90)
+        sent = [{"who": "partner", "text": "Hey!"}, "junk", {"who": "me", "text": 5}, {"who": "me", "text": "   "}]
+        config = parse_call_config({"system_instruction": INSTRUCTION, "mode": "smalltalk", "partner": "priya", "resume_turns": sent})
+
+        self.assertEqual(config.resume_turns, (("Partner", "Hey!"),))
+        self.assertIn("Learner: line 19", self.run_resume(config).system_instruction)
+
+    def test_screen_turns_keep_only_the_last_twelve(self):
+        sent = [{"who": "me" if i % 2 else "partner", "text": f"t{i}"} for i in range(30)]
+        config = parse_call_config({"system_instruction": INSTRUCTION, "mode": "smalltalk", "partner": "priya", "resume_turns": sent})
+
+        self.assertEqual(len(config.resume_turns), 12)
+        self.assertEqual(config.resume_turns[-1], ("Me", "t29"))
+
+    def test_friend_mission_ignores_screen_turns(self):
+        sent = [{"who": "me", "text": "hi"}]
+        config = parse_call_config({"system_instruction": INSTRUCTION, "mode": "mission", "partner": "priya", "resume_turns": sent})
+
+        self.assertEqual(self.run_resume(config), config)
+
     def test_nothing_is_added_after_ten_minutes_or_without_a_previous_call(self):
         self.assertEqual(self.run_resume(self.config()), self.config())
         self.save("2026-10-24-215011", "priya", ended_ago=resume.RESUME_WINDOW_SEC + 1)

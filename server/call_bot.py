@@ -374,6 +374,8 @@ class CallConfig:
     # 통화가 끝난 뒤 서버가 스스로 정리를 걸 때 쓰는 입력(예전에는 화면이 /api/tutor 본문으로 보냈다).
     lesson_date: Optional[str] = None
     practice_words: Tuple[str, ...] = ()
+    # 자동으로 다시 건 통화면 화면이 들고 있던 직전 대화(화자 "Me"/"Partner", 글). 직전 전문이 아직 저장되지 않았어도 이어 갈 수 있게 한다.
+    resume_turns: Tuple[Tuple[str, str], ...] = ()
 
     @property
     def mission(self) -> Optional[str]:
@@ -390,6 +392,8 @@ class CallConfig:
 
 
 PARTNER_MEMORY_MODES = ("smalltalk", "freetalk")
+MAX_RESUME_TURNS = 12
+MAX_RESUME_TURN_CHARS = 1000
 
 
 def opener_text(partner: Optional[str]) -> str:
@@ -473,6 +477,12 @@ def parse_call_config(data: Any) -> CallConfig:
     practice_words = tuple(
         w for w in (raw_words[:MAX_PRACTICE_WORDS] if isinstance(raw_words, list) else []) if isinstance(w, str) and LEMMA_RE.fullmatch(w)
     )
+    raw_turns = data.get("resume_turns")
+    resume_turns = tuple(
+        ("Me" if t.get("who") == "me" else "Partner", " ".join(t["text"].split())[:MAX_RESUME_TURN_CHARS])
+        for t in (raw_turns[-MAX_RESUME_TURNS:] if isinstance(raw_turns, list) else [])
+        if isinstance(t, dict) and isinstance(t.get("text"), str) and t["text"].strip()
+    )
     return CallConfig(
         system_instruction=instruction,
         mode=mode,
@@ -480,6 +490,7 @@ def parse_call_config(data: Any) -> CallConfig:
         partner=partner,
         lesson_date=lesson_date,
         practice_words=practice_words,
+        resume_turns=resume_turns,
     )
 
 
