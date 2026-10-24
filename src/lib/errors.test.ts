@@ -8,6 +8,10 @@ describe('friendlyError', () => {
     expect(msg).toContain('Tailscale');
   });
 
+  test('네트워크와 상관없는 TypeError(코드 오류)는 Tailscale 안내가 되지 않는다', () => {
+    expect(friendlyError(new TypeError("Cannot read properties of undefined (reading 'x')"))).not.toBe(NETWORK_MESSAGE);
+  });
+
   test('Error("Load failed")도 서버 연결 안내가 된다', () => {
     expect(friendlyError(new Error('Load failed'))).toBe(NETWORK_MESSAGE);
   });

@@ -20,7 +20,7 @@ export function friendlyError(e: unknown, fallback: string = FALLBACK_MESSAGE): 
   const name = nameOf(e);
   const message = messageOf(e);
   if (name === 'NotAllowedError' || name === 'PermissionDeniedError') return MIC_MESSAGE;
-  if (name === 'TypeError' || name === 'NetworkError' || NETWORK_TEXT.test(message)) return NETWORK_MESSAGE;
+  if (name === 'NetworkError' || NETWORK_TEXT.test(message)) return NETWORK_MESSAGE;
   if (HANGUL.test(message)) return message;
   return fallback;
 }
