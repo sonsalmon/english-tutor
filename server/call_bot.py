@@ -521,20 +521,6 @@ def make_usage_collector(usage: UsageTotals):
     return UsageCollector()
 
 
-def make_input_text_filter():
-    """LLM 뒤에 둔다. 학습자 글(InputTextRawFrame)은 LLM이 받으면 끝이다. 더 흐르면 어시스턴트 집계기가 파트너 발화로 모아 전문·기억에 섞이므로 여기서 마스크한다."""
-    from pipecat.frames.frames import Frame, InputTextRawFrame
-    from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-
-    class InputTextFilter(FrameProcessor):
-        async def process_frame(self, frame: Frame, direction: FrameDirection):
-            await super().process_frame(frame, direction)
-            if not isinstance(frame, InputTextRawFrame):
-                await self.push_frame(frame, direction)
-
-    return InputTextFilter()
-
-
 def job_spec_for(config: "CallConfig"):
     """통화 정리 작업의 입력(mode·수업 날짜·연습 단어)."""
     from server.summary_jobs import JobSpec
@@ -687,6 +673,11 @@ def live_service_class():
             self._heard_words = 0
             self._drop_rest_of_turn = False
 
+        async def send_learner_text(self, text: str) -> None:
+            """학습자가 보낸 글을 Gemini 세션에 바로 넣는다. InputTextRawFrame으로 넣으면 그 프레임이 파이프라인 뒤로 흘러
+            자막(bot-output)과 전문에 파트너 발화로 섞이므로 프레임을 거치지 않는다."""
+            await self._send_user_text(text)
+
         async def _connection_task_handler(self, config):
             languages = live_input_languages()
             if languages:
@@ -743,7 +734,7 @@ def live_service_class():
 
 
 async def run_bot(webrtc_connection, config: CallConfig) -> None:
-    from pipecat.frames.frames import EndFrame, InputTextRawFrame, LLMRunFrame
+    from pipecat.frames.frames import EndFrame, LLMRunFrame
     from pipecat.pipeline.pipeline import Pipeline
     from pipecat.pipeline.worker import PipelineParams, PipelineWorker
     from pipecat.processors.aggregators.llm_context import LLMContext
@@ -814,7 +805,6 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
         transport.input(),
         user_aggregator,
         llm,
-        make_input_text_filter(),
         make_usage_collector(record.usage),
         transport.output(),
         audiobuffer,
@@ -924,7 +914,7 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
                 ack.update(url=ctx.url, title=ctx.title, opened=ctx.ok)
             logger.info("Share from learner: %s", ctx and (ctx.url, ctx.kind, ctx.title, ctx.error) or "text")
             record.add_note("Me (shared)", call_tools.share_record_text(text, ctx))
-            await worker.queue_frames([InputTextRawFrame(text=call_tools.share_prompt(text, ctx))])
+            await llm.send_learner_text(call_tools.share_prompt(text, ctx))
         await rtvi.send_server_message(ack)
 
     share_tasks: "set[asyncio.Task]" = set()

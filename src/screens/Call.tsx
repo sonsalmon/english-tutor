@@ -402,7 +402,7 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, wordbo
                 from={partner.name}
                 onLater={() => {
                   setLaterKey(clipKey(clipCard));
-                  setNotice('요약 화면에 담아 뒤어요');
+                  setNotice('요약 화면에 담아 뒀어요');
                 }}
               />
             )}
