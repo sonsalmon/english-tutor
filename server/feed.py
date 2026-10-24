@@ -32,7 +32,8 @@ PER_TERM = 3
 TUTORING_FILES = 8
 FILTERS = ("mine", "browse", "native")
 OVERFETCH = 3
-TAG_OVERFETCH = 24
+# 둘러보기는 원어민 표현이 붙은 장면(무작위 장면의 약 12%)을 먼저 내려고 더 뽑는다. 24배(144개)는 e2-micro 디스크에서 3초가 걸려 10배로 줄임(2026-10-25 측정, 한 쪽에 표현 장면 약 7개).
+TAG_OVERFETCH = 10
 
 Playable = Callable[[Iterable[str]], Set[str]]
 
