@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { PartnerMemory, Wordbook } from './api';
-import { buildChatInstruction, freeTalkInstruction, friendMemoryBlock, missionInstruction, nativeBlock, PARTNER_PROMPT_LIMIT, smallTalkInstruction, teachbackInstruction, trimMemory, trimStoryBank, wordbookBlock } from './instructions';
+import { buildChatInstruction, freeTalkInstruction, friendMemoryBlock, missionInstruction, nativeBlock, openingStory, PARTNER_PROMPT_LIMIT, smallTalkInstruction, teachbackInstruction, trimMemory, trimStoryBank, wordbookBlock } from './instructions';
 import { PARTNERS, partnerById } from './partners';
 
 const FRIENDS = PARTNERS.filter((p) => p.id !== 'park');
@@ -59,6 +59,18 @@ describe('partner smalltalk and freetalk prompts', () => {
     const block = friendMemoryBlock(v1);
     expect(block).toContain('Learner plays the saxophone');
     expect(block).not.toContain('already told the learner');
+  });
+
+  test('the opening story varies by call and skips the story told most recently', () => {
+    const bank = partnerById('priya').storyBank!;
+    const picks = new Set([0, 0.2, 0.4, 0.6, 0.8, 0.99].map((r) => openingStory(bank, MEMORY, () => r).split('. ')[0]));
+    expect(picks.size).toBeGreaterThan(4);
+    expect([...picks]).not.toContain('The 5:30 tally');
+    expect(openingStory(bank, null, () => 0)).toStartWith('The 5:30 tally');
+    const text = smallTalkInstruction('', [], partnerById('priya'), [], MEMORY, '');
+    expect(text).not.toContain('Today, open with this story');  // 이어 갈 일(threads)이 있으면 그걸로 연다
+    const noThreads = smallTalkInstruction('', [], partnerById('priya'), [], { ...MEMORY, threads: [] }, '');
+    expect(noThreads).toContain('Today, open with this story of yours');
   });
 
   test('trimming keeps only 4 stories and prefers ones already told', () => {
