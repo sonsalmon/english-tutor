@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { PartnerMemory, Wordbook } from './api';
-import { buildChatInstruction, freeTalkInstruction, friendMemoryBlock, missionInstruction, nativeBlock, openingStory, PARTNER_PROMPT_LIMIT, smallTalkInstruction, teachbackInstruction, trimMemory, trimStoryBank, wordbookBlock } from './instructions';
+import { buildChatInstruction, CALL_TOOLS, freeTalkInstruction, friendMemoryBlock, missionInstruction, nativeBlock, openingStory, PARTNER_PROMPT_LIMIT, smallTalkInstruction, teachbackInstruction, trimMemory, trimStoryBank, wordbookBlock } from './instructions';
 import { PARTNERS, partnerById } from './partners';
 
 const FRIENDS = PARTNERS.filter((p) => p.id !== 'park');
@@ -81,13 +81,27 @@ describe('partner smalltalk and freetalk prompts', () => {
   });
 });
 
-describe('Ms. Park and Teach-back are unchanged', () => {
+describe('Ms. Park and Teach-back keep their prompts apart from the call tools paragraph', () => {
   const park = partnerById('park');
-  test('output lengths match the main branch', () => {
-    expect(smallTalkInstruction('brief', [], park).length).toBe(3533);
-    expect(freeTalkInstruction('my weekend', 'brief', null, [], park).length).toBe(4001);
-    expect(missionInstruction(MISSION, 'brief', null, [], park).length).toBe(7351);
+  test('output lengths match the main branch plus the TOOLS paragraph', () => {
+    const tools = CALL_TOOLS.length;
+    const scoringToolWording = 'the scoring'.length - 'any'.length;
+    expect(smallTalkInstruction('brief', [], park).length).toBe(3533 + tools + scoringToolWording);
+    expect(freeTalkInstruction('my weekend', 'brief', null, [], park).length).toBe(4001 + tools);
+    expect(missionInstruction(MISSION, 'brief', null, [], park).length).toBe(7351 + tools);
     expect(teachbackInstruction([{ heading: 'A', body: 'b' }], 'during', null, 'brief').length).toBe(2409);
+  });
+  test('calls carry the three abilities, Teach-back and text chat do not', () => {
+    for (const text of [smallTalkInstruction('', [], park), freeTalkInstruction('', '', null, [], park), missionInstruction(MISSION, '', null, [], park)]) {
+      expect(text).toContain('recall_past_conversations');
+      expect(text).toContain('share_clip');
+    }
+    for (const p of FRIENDS) {
+      expect(smallTalkInstruction('', [], p)).toContain('TOOLS:');
+      expect(freeTalkInstruction('', '', null, [], p)).toContain('TOOLS:');
+      if (p.chatPersona) expect(buildChatInstruction(p, '', null)).not.toContain('recall_past_conversations');
+    }
+    expect(teachbackInstruction([{ heading: 'A', body: 'b' }], 'during', null, '')).not.toContain('recall_past_conversations');
   });
   test('no friend blocks leak in', () => {
     expect(smallTalkInstruction('brief', [], park)).not.toContain('CONVERSATION DYNAMICS');

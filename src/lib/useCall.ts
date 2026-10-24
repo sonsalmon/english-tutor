@@ -2,6 +2,7 @@ import { PipecatClient } from '@pipecat-ai/client-js';
 import { SmallWebRTCTransport } from '@pipecat-ai/small-webrtc-transport';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { LatencyMeter, clearPendingLatency, stashLatency } from './latency';
+import { clipKey, firstUrl, parseSharedClip, parseShareAck, SHARE_MAX, type SharedClip } from './share';
 import { cleanLearnerText } from './transcript';
 
 // 통화가 끝난 뒤 서버가 스스로 정리를 걸 때 쓰는 입력. 통화를 걸 때 서버에 미리 알려 둔다.
@@ -9,7 +10,8 @@ export type SummaryInput = { lesson_date?: string; practice_words?: string[] };
 export type CallMode = 'mission' | 'freetalk' | 'teachback' | 'smalltalk';
 export type CallStatus = 'ready' | 'connecting' | 'live' | 'ended' | 'error';
 export type Speaker = 'me' | 'park';
-export type CaptionLine = { id: number; who: Speaker; text: string };
+export type SharedLink = { url: string; title?: string; failed?: boolean };
+export type CaptionLine = { id: number; who: Speaker; text: string; share?: SharedLink; shareId?: string };
 export type MissionResult = { score: number; feedback_pointers: string[] };
 export type EndReason = 'hangup' | 'mission_complete' | 'time_limit' | 'pause_limit' | 'dropped';
 
@@ -33,6 +35,8 @@ export function useCall() {
   const [result, setResult] = useState<MissionResult | null>(null);
   const [endReason, setEndReason] = useState<EndReason | null>(null);
   const [audioBlocked, setAudioBlocked] = useState(false);
+  const [sharedClips, setSharedClips] = useState<SharedClip[]>([]);
+  const shareCount = useRef(0);
   // 일시정지: 멈춘 시각(null이면 진행 중)과 지금까지 멈춰 있던 시간 합계(ms). 남은 시간 계산에 쓴다.
   const [pausedAt, setPausedAt] = useState<number | null>(null);
   const [pausedTotal, setPausedTotal] = useState(0);
@@ -52,7 +56,7 @@ export function useCall() {
     const text = who === 'me' ? cleanLearnerText(chunk) : chunk;
     setLines((prev) => {
       const last = prev[prev.length - 1];
-      if (last && last.who === who) {
+      if (last && last.who === who && !last.shareId) {
         return [...prev.slice(0, -1), { ...last, text: joinChunk(last.text, text) }];
       }
       lineId.current += 1;
@@ -110,6 +114,7 @@ export function useCall() {
       setPausedTotal(0);
       pausedAtRef.current = null;
       setAudioBlocked(false);
+      setSharedClips([]);
       reasonRef.current = null;
       liveRef.current = false;
       clearPendingLatency();
@@ -172,6 +177,20 @@ export function useCall() {
               window.setTimeout(() => finish('mission_complete'), MISSION_END_DELAY_MS);
             } else if (data?.type === 'time_limit') {
               reasonRef.current = data.reason === 'pause_limit' ? 'pause_limit' : 'time_limit';
+            } else if (data?.type === 'shared_clip') {
+              const clip = parseSharedClip(data);
+              if (clip) setSharedClips((prev) => (prev.some((c) => clipKey(c) === clipKey(clip)) ? prev : [...prev, clip]));
+            } else if (data?.type === 'share_ack') {
+              const ack = parseShareAck(data);
+              if (ack) {
+                setLines((prev) =>
+                  prev.map((line) =>
+                    line.shareId === ack.id && line.share
+                      ? { ...line, share: { url: ack.url ?? line.share.url, title: ack.title || line.share.title, failed: ack.opened === false } }
+                      : line,
+                  ),
+                );
+              }
             }
           },
           onDisconnected: () => finish('dropped'),
@@ -274,6 +293,21 @@ export function useCall() {
     recoverMic();
   }, [recoverMic]);
 
+  // 통화 중 글·링크 보내기. 보냈으면 true. 자막에는 바로 "나" 말풍선으로 넣고, 서버가 읽은 결과(share_ack)가 오면 칩 제목을 고친다.
+  const share = useCallback((raw: string): boolean => {
+    const client = clientRef.current;
+    const text = raw.trim().slice(0, SHARE_MAX);
+    if (!client || !liveRef.current || !text) return false;
+    shareCount.current += 1;
+    const id = String(shareCount.current);
+    const url = firstUrl(text);
+    lineId.current += 1;
+    const line: CaptionLine = { id: lineId.current, who: 'me', text, shareId: id, ...(url ? { share: { url } } : {}) };
+    setLines((prev) => [...prev, line].slice(-40));
+    client.sendClientMessage('share', { text, id });
+    return true;
+  }, []);
+
   const toggleMic = useCallback(() => {
     const client = clientRef.current;
     if (!client || pausedAtRef.current !== null) return;
@@ -293,5 +327,5 @@ export function useCall() {
     [],
   );
 
-  return { status, lines, botSpeaking, botLevel, userLevel, micOn, error, result, endReason, liveAt, audioBlocked, paused: pausedAt !== null, pausedAt, pausedTotal, start, hangUp, pause, resume, toggleMic, resumeAudio };
+  return { status, lines, botSpeaking, botLevel, userLevel, micOn, error, result, endReason, liveAt, audioBlocked, paused: pausedAt !== null, pausedAt, pausedTotal, sharedClips, start, hangUp, pause, resume, toggleMic, resumeAudio, share };
 }
