@@ -13,9 +13,15 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Friends" />
     <title>English Friends</title>
+    <style>
+      /* 앱 JS가 내려오기 전(처음 열 때 2~3초) 빈 화면 대신 보이는 자리표시. React가 #root를 그리면 사라진다. */
+      .boot { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; background: #f5f7fa; color: #5b6577; font: 15px -apple-system, BlinkMacSystemFont, system-ui, sans-serif; }
+      .boot-dot { width: 28px; height: 28px; border-radius: 50%; border: 3px solid #e2e6ec; border-top-color: #14213d; animation: boot-spin 0.9s linear infinite; }
+      @keyframes boot-spin { to { transform: rotate(360deg); } }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><div class="boot" role="status"><div class="boot-dot"></div>불러오는 중이에요</div></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
