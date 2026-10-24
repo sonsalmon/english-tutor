@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { PartnerMemory } from './api';
-import { buildChatInstruction, freeTalkInstruction, PARTNER_PROMPT_LIMIT, smallTalkInstruction } from './instructions';
+import { buildChatInstruction, freeTalkInstruction, missionInstruction, PARTNER_PROMPT_LIMIT, smallTalkInstruction, SPEECH_STYLE } from './instructions';
 import { PARTNERS, partnerById } from './partners';
 
 const brian = partnerById('brian');
@@ -64,5 +64,56 @@ describe('Brian', () => {
     expect(storyCount(light)).toBe(9);
     expect(full).toContain('STORY BANK (Brian)');
     expect(storyCount(full)).toBe(4);
+  });
+});
+
+const FRIENDS = PARTNERS.filter((p) => p.id !== 'park');
+const REMOVED_VARIETY = /(?<![\w])(Indian English|Kenyan English|Jordanian English|Canadian English|German-accented|Spanish-accented|Midwestern American English|ENGLISH VARIETY|na\?|yaar|arre|sasa|poa|pole pole|sawa|aki|yani|inshallah|wallah|vale|venga|claro|washroom|toque)(?![\w])/i;
+
+describe('American friends', () => {
+  test('every friend prompt (call, chat, persona fields) is free of the removed variety words', () => {
+    for (const p of FRIENDS) {
+      const texts = [
+        p.persona, p.chatPersona, p.storyBank, p.intro, p.from,
+        smallTalkInstruction('', [], p, [], null, ''),
+        freeTalkInstruction('', '', null, [], p, [], null),
+        buildChatInstruction(p, '', null),
+      ];
+      for (const text of texts) expect(REMOVED_VARIETY.test(text ?? '')).toBe(false);
+    }
+  });
+
+  test('every friend is US-born with General American speech and a US city', () => {
+    for (const p of FRIENDS) {
+      expect(p.from).toMatch(/USA$/);
+      expect(p.persona).toContain('General American English');
+      expect(p.persona).toContain('HOW YOU SOUND');
+      expect(p.chatPersona).toContain('HOW YOU SOUND');
+    }
+  });
+
+  test('the shared SPEECH STYLE block is in each friend call prompt exactly once and never in the personas or chat', () => {
+    for (const p of FRIENDS) {
+      expect(p.persona).not.toContain('SPEECH STYLE');
+      expect(p.chatPersona).not.toContain('SPEECH STYLE');
+      const calls = [
+        smallTalkInstruction('', [], p, [], null, ''),
+        freeTalkInstruction('', '', null, [], p, [], null),
+        missionInstruction({ id: 1, title: 'Order coffee', difficulty: 'easy', desc: 'order', target_role: 'a barista' }, '', null, [], p),
+      ];
+      for (const text of calls) expect(text.split(SPEECH_STYLE).length - 1).toBe(1);
+      expect(buildChatInstruction(p, '', null)).not.toContain(SPEECH_STYLE);
+    }
+  });
+
+  test('Ms. Park does not get the friend SPEECH STYLE block', () => {
+    expect(smallTalkInstruction('', [], partnerById('park'), [], null, '')).not.toContain(SPEECH_STYLE);
+  });
+
+  test('Priya and Brian keep the facts the learner already heard in earlier calls', () => {
+    const priya = partnerById('priya').persona ?? '';
+    for (const word of ['Austin', 'Bengaluru', 'New Jersey', 'Kudremukh', 'cricket']) expect(priya + (partnerById('priya').storyBank ?? '')).toContain(word);
+    const brian = (partnerById('brian').persona ?? '') + (partnerById('brian').storyBank ?? '');
+    for (const word of ['Houston', 'Nairobi', 'Minneapolis', 'matatu', 'FAITH LIFE']) expect(brian).toContain(word);
   });
 });
