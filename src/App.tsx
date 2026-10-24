@@ -1,5 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { AppShell } from './components/AppShell';
+import { UpdateBanner } from './components/UpdateBanner';
 import { DEFAULT_TIME_LIMITS, getLearnerProfile, getTimeLimits, type LearnerProfile, type TimeLimits } from './lib/api';
 import { timeLimitFor } from './lib/callTime';
 import type { Retry } from './lib/instructions';
@@ -148,5 +149,10 @@ export function App() {
     }
   };
 
-  return <AppShell route={route}>{renderScreen()}</AppShell>;
+  return (
+    <>
+      <AppShell route={route}>{renderScreen()}</AppShell>
+      <UpdateBanner />
+    </>
+  );
 }
