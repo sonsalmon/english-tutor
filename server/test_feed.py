@@ -248,6 +248,55 @@ class FeedGenreAndEmbedTest(unittest.TestCase):
 
         self.assertEqual([c["video_id"] for c in page["clips"]], ["show-001-v"])
 
+    def plain(self, count):
+        for i in range(count):
+            self.add(f"show-{i:03d}-p", "@show", f"this is an ordinary sentence number {i} on tv")
+
+    def test_browse_puts_scenes_with_a_native_expression_first_and_tags_them(self):
+        self.plain(6)
+        for i in range(2):
+            self.add(f"show-{i:03d}-t", "@show", f"so we need to figured out the plan number {i}")
+        entries = [native_entry("figure out", ("x",), say_ko="이거 어떻게 풀지 알아낼게")]
+
+        cards = feed.build_page([], "browse", 4, set(), db_path=self.db, rng=random.Random(1), entries=entries)
+
+        self.assertEqual(len(cards), 4)
+        for card in cards[:2]:
+            self.assertTrue(card["video_id"].endswith("-t"))
+            self.assertEqual(card["term"], "figure out")
+            self.assertEqual(card["native"]["expression"], "figure out")
+            self.assertEqual(card["native"]["say_ko"], "이거 어떻게 풀지 알아낼게")
+            self.assertEqual(card["match"], "figured out")
+        for card in cards[2:]:
+            self.assertTrue(card["video_id"].endswith("-p"))
+            self.assertIsNone(card["term"])
+            self.assertNotIn("native", card)
+
+    def test_browse_never_tags_with_a_tier_two_expression(self):
+        for i in range(5):
+            self.add(f"show-{i:03d}-k", "@show", f"you know what I mean about number {i} here")
+        entries = [native_entry("you know", ("x",), kind="discourse_marker", per_million=3900)]
+
+        cards = feed.build_page([], "browse", 3, set(), db_path=self.db, rng=random.Random(2), entries=entries)
+
+        self.assertEqual(len(cards), 3)
+        self.assertTrue(all(c["term"] is None and "native" not in c for c in cards))
+
+    def test_mine_card_gets_the_native_explanation_only_when_the_term_is_a_native_expression(self):
+        self.fill(tv=4, lec=0)
+        for i in range(2):
+            self.add(f"show-{i:03d}-q", "@show", f"we should call it a day number {i} okay")
+        entries = [native_entry("figure out", ("x",), say_ko="알아낼게")]
+
+        cards = feed.build_page(["figure out", "call it a day"], "mine", 4, set(), db_path=self.db, rng=random.Random(3), entries=entries)
+
+        mine = {c["term"]: c for c in cards if c["source"] == "mine"}
+        self.assertEqual(set(mine), {"figure out", "call it a day"})
+        self.assertEqual(mine["figure out"]["native"]["say_ko"], "알아낼게")
+        self.assertEqual(mine["figure out"]["match"], "figure out")
+        self.assertNotIn("native", mine["call it a day"])
+        self.assertEqual(mine["call it a day"]["match"], "call it a day")
+
 
 
 class NativeLectureSceneTest(unittest.TestCase):
@@ -295,7 +344,7 @@ class NativeLectureSceneTest(unittest.TestCase):
         self.assertEqual([c["video_id"] for c in cards], ["lect-000-v"])
 
 
-def native_entry(expression, video_ids):
+def native_entry(expression, video_ids, **extra):
     from server import native_expr
 
     return native_expr.clean_entry(
@@ -308,6 +357,7 @@ def native_entry(expression, video_ids):
             "example": "e",
             "per_million": 20,
             "count": 5,
+            **extra,
             "clips": [{"video_id": v, "start": 1.0, "end": 4.0, "text": f"so {expression} now", "title": v, "channel": "c"} for v in video_ids],
         }
     )

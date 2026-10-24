@@ -26,6 +26,7 @@ DEFAULT_PATH = Path.home() / "dev" / "learning" / "english" / "clipdb" / "native
 KINDS = ("idiom", "phrasal_verb", "chunk", "discourse_marker")
 REGISTERS = ("casual", "neutral", "work")
 FRIEND_COUNT = 2
+SAY_MAX_CHARS = 40
 FRIEND_POOL = 150
 LEARNER_LABEL = "**Me:**"
 TRANSCRIPT_FILES = 12
@@ -157,6 +158,7 @@ def clean_entry(raw: Any) -> Optional[Dict[str, Any]]:
         "example": " ".join(str(raw.get("example") or "").split()),
         "per_million": per_million,
         "count": int(raw.get("count") or 0),
+        "say_ko": " ".join(str(raw.get("say_ko") or "").split())[:SAY_MAX_CHARS].strip(),
         "clips": clips[:3],
     }
 
@@ -281,6 +283,37 @@ def _contains_key(haystack_tokens: Sequence[str], key: str) -> bool:
     needle = key.split()
     n = len(needle)
     return n > 0 and any(list(haystack_tokens[i : i + n]) == needle for i in range(len(haystack_tokens) - n + 1))
+
+
+def surface_match(text: str, key: str) -> Optional[str]:
+    """문장 text에서 원형 key(lemma_key)에 해당하는 낱말 묶음의 원문 조각(ended up 등). 없으면 None."""
+    needle = key.split()
+    if not needle:
+        return None
+    flat = str(text or "").replace("\u2019", "'")
+    lowered = flat.lower()
+    if len(lowered) != len(flat):
+        return None
+    spans = [(m.start(), m.end(), lemma_token(m.group())) for m in _TOKEN_RE.finditer(lowered)]
+    n = len(needle)
+    for i in range(len(spans) - n + 1):
+        if [s[2] for s in spans[i : i + n]] == needle:
+            return str(text)[spans[i][0] : spans[i + n - 1][1]]
+    return None
+
+
+def tag_expression(text: str, entries: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """문장에 들어 있는 표현 하나. 중간 빈도(tier 0)를 먼저, 그다음 tier 1, 같은 tier에서는 낱말이 많은 표현 먼저. tier 2(너무 흔한 표현)는 고르지 않는다."""
+    spoken = lemma_tokens(text)
+    best: Optional[Tuple[Tuple[int, int], Dict[str, Any]]] = None
+    for entry in entries:
+        tier = native_tier(entry)
+        if tier >= 2 or not _contains_key(spoken, entry["key"]):
+            continue
+        rank = (tier, -len(entry["key"].split()))
+        if best is None or rank < best[0]:
+            best = (rank, entry)
+    return best[1] if best else None
 
 
 def pick_for_friend(
