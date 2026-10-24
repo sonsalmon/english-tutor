@@ -32,6 +32,7 @@ PER_TERM = 3
 TUTORING_FILES = 8
 FILTERS = ("mine", "browse", "native")
 OVERFETCH = 3
+TAG_OVERFETCH = 24
 
 Playable = Callable[[Iterable[str]], Set[str]]
 
@@ -96,6 +97,20 @@ def _card(hit: Dict[str, Any], source: str, term: Optional[str] = None) -> Dict[
         "channel": hit.get("channel") or "",
         "source": source,
         "term": term,
+        "match": native_expr.surface_match(hit["text"], native_expr.lemma_key(term)) if term else None,
+    }
+
+
+def native_payload(entry: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "expression": entry["expression"],
+        "kind": entry["kind"],
+        "meaning_ko": entry["meaning_ko"],
+        "say_ko": entry.get("say_ko") or "",
+        "why_hard": entry["why_hard"],
+        "register": entry["register"],
+        "example": entry["example"],
+        "per_million": entry["per_million"],
     }
 
 
@@ -144,15 +159,7 @@ def build_native_page(
                 continue
             used.add(clip["video_id"])
             card = _card(clip, "native", entry["expression"])
-            card["native"] = {
-                "expression": entry["expression"],
-                "kind": entry["kind"],
-                "meaning_ko": entry["meaning_ko"],
-                "why_hard": entry["why_hard"],
-                "register": entry["register"],
-                "example": entry["example"],
-                "per_million": entry["per_million"],
-            }
+            card["native"] = native_payload(entry)
             cards.append(card)
             if len(cards) >= limit:
                 return cards
@@ -167,15 +174,19 @@ def build_page(
     db_path: Optional[Path] = None,
     rng: Optional[random.Random] = None,
     playable: Optional[Playable] = None,
+    entries: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """카드 최대 limit장. 본 장면(seen)과 같은 영상은 다시 내지 않는다.
 
     드라마·팟캐스트·직장 채널 장면을 먼저(내 표현 → 무작위), 영어 강의 채널(daily) 장면은 그래도 모자랄 때만(내 표현 → 무작위)
     채운다. playable이 있으면 앱 안에서 틀 수 없는 영상은 내지 않는다(단계마다 한 번에 묶어 확인).
+    entries(원어민 표현 목록)가 있으면 무작위 장면에 그 장면이 담은 표현(tier 0 → 1, tier 2는 안 고른다)을 붙이고 표현이 붙은 장면을
+    먼저 낸다(표현이 없는 장면은 붙은 장면이 모자랄 때만). 내 표현 카드는 표현이 목록과 같으면 같은 설명을 붙인다.
     """
     rng = rng or random.Random()
     cards: List[Dict[str, Any]] = []
     used = {s.split(":")[0] for s in seen}
+    by_key = {e["key"]: e for e in entries or []}
     picked = rng.sample(terms, min(len(terms), TERMS_PER_PAGE)) if mode == "mine" and terms else []
 
     def mine(tier: str) -> None:
@@ -195,7 +206,11 @@ def build_page(
                     if clip_id(hit) in seen or hit["video_id"] in used or hit["video_id"] not in ok:
                         continue
                     used.add(hit["video_id"])
-                    cards.append(_card(hit, "mine", term))
+                    card = _card(hit, "mine", term)
+                    entry = by_key.get(native_expr.lemma_key(term))
+                    if entry:
+                        card["native"] = native_payload(entry)
+                    cards.append(card)
                     progressed = True
                     break
                 if len(cards) >= limit:
@@ -203,13 +218,24 @@ def build_page(
 
     def browse(tier: str) -> None:
         need = limit - len(cards)
-        want = need * OVERFETCH if playable else need
+        want = need * TAG_OVERFETCH if entries else need * OVERFETCH if playable else need
+        tagged: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
+        plain: List[Tuple[Dict[str, Any], Optional[Dict[str, Any]]]] = []
         for hit in _keep(clipdb.random_segments(want, exclude_videos=used, path=db_path, rng=rng, tier=tier), playable):
+            entry = native_expr.tag_expression(hit["text"], entries) if entries else None
+            (tagged if entry else plain).append((hit, entry))
+        for hit, entry in [*tagged, *plain]:
             if len(cards) >= limit:
                 return
-            if clip_id(hit) not in seen and hit["video_id"] not in used:
-                used.add(hit["video_id"])
-                cards.append(_card(hit, "browse"))
+            if clip_id(hit) in seen or hit["video_id"] in used:
+                continue
+            used.add(hit["video_id"])
+            if entry:
+                card = _card(hit, "browse", entry["expression"])
+                card["native"] = native_payload(entry)
+            else:
+                card = _card(hit, "browse")
+            cards.append(card)
 
     for tier in (clipdb.TIER_PREFERRED, clipdb.TIER_LECTURE):
         if picked and len(cards) < limit:
@@ -236,7 +262,9 @@ def _page(mode: str, limit: int, seen: set) -> Dict[str, Any]:
     if not clipdb.available():
         return {"available": False, "clips": [], "terms": 0}
     terms = collect_terms(_saved_phrases()) if mode == "mine" else []
-    return {"available": True, "clips": build_page(terms, mode, limit, seen, playable=embeds.playable), "terms": len(terms)}
+    entries = native_expr.eligible(native_expr.load())
+    clips = build_page(terms, mode, limit, seen, playable=embeds.playable, entries=entries)
+    return {"available": True, "clips": clips, "terms": len(terms)}
 
 
 @router.get("/api/feed")

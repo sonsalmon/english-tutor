@@ -3,6 +3,7 @@ export type NativeInfo = {
   expression: string;
   kind: string;
   meaning_ko: string;
+  say_ko: string;
   why_hard: string;
   register: string;
   example: string;
@@ -18,9 +19,19 @@ export type FeedClip = {
   channel: string;
   source: 'mine' | 'browse' | 'native';
   term: string | null;
+  match: string | null;
   native: NativeInfo | null;
 };
 export type FeedPage = { available: boolean; clips: FeedClip[]; terms: number; native: number };
+
+const SAY_MAX_CHARS = 40;
+
+// 카드 위에 크게 보여 줄 “말하고 싶은 한국어 한 줄”. say_ko, 없으면 meaning_ko의 첫 항목, 그마저 없으면 사전 뜻(gloss).
+export function sayLine(native: NativeInfo | null, gloss = ''): string {
+  if (native?.say_ko) return native.say_ko;
+  const first = native?.meaning_ko.split(/[;,，、/]/)[0]?.trim();
+  return first || gloss.trim();
+}
 
 // 서버가 준 native 덩어리를 검증한다. 표현과 뜻이 없으면 일반 클립처럼 다룬다.
 export function parseNative(raw: any): NativeInfo | null {
@@ -31,6 +42,7 @@ export function parseNative(raw: any): NativeInfo | null {
     expression,
     kind: String(raw?.kind ?? ''),
     meaning_ko: meaning,
+    say_ko: String(raw?.say_ko ?? '').trim().slice(0, SAY_MAX_CHARS),
     why_hard: String(raw?.why_hard ?? ''),
     register: String(raw?.register ?? ''),
     example: String(raw?.example ?? ''),
@@ -101,7 +113,8 @@ export async function getFeed(filter: FeedFilter, seen: string[], signal?: Abort
     channel: String(c?.channel ?? ''),
     source: c?.source === 'mine' ? 'mine' : c?.source === 'native' && parseNative(c?.native) ? 'native' : 'browse',
     term: typeof c?.term === 'string' && c.term ? c.term : null,
-    native: c?.source === 'native' ? parseNative(c?.native) : null,
+    match: typeof c?.match === 'string' && c.match ? c.match : null,
+    native: parseNative(c?.native),
   }));
   return {
     available: data?.available !== false,

@@ -171,7 +171,7 @@ class FeedSourceTest(unittest.TestCase):
         self.assertEqual({c["term"] for c in cards}, {"figure out", "end up", "touch base"})
         card = cards[0]
         self.assertEqual(card["source"], "native")
-        self.assertEqual(set(card["native"]), {"expression", "kind", "meaning_ko", "why_hard", "register", "example", "per_million"})
+        self.assertEqual(set(card["native"]), {"expression", "kind", "meaning_ko", "say_ko", "why_hard", "register", "example", "per_million"})
         self.assertEqual(len({c["video_id"] for c in cards}), 3)
 
     def test_seen_clips_are_not_repeated(self):
@@ -297,6 +297,40 @@ class LearnerNgramsTest(unittest.TestCase):
         entries = entries_of(raw("end up"), raw("touch base"))
         used = native_expr.ngrams(native_expr.lemma_tokens("We ended up late"))
         self.assertEqual([e["expression"] for e in native_expr.unused_by_learner(entries, used)], ["touch base"])
+
+
+class SayKoTest(unittest.TestCase):
+    def test_say_ko_is_trimmed_and_optional(self):
+        self.assertEqual(native_expr.clean_entry({**raw("end up"), "say_ko": "  나  완전   망했어! "})["say_ko"], "나 완전 망했어!")
+        self.assertEqual(native_expr.clean_entry(raw("end up"))["say_ko"], "")
+        self.assertEqual(native_expr.clean_entry({**raw("end up"), "say_ko": None})["say_ko"], "")
+
+    def test_say_ko_is_capped_at_forty_characters(self):
+        entry = native_expr.clean_entry({**raw("end up"), "say_ko": "가" * 60})
+        self.assertEqual(len(entry["say_ko"]), native_expr.SAY_MAX_CHARS)
+
+    def test_native_card_sends_say_ko(self):
+        entries = entries_of({**raw("figure out"), "say_ko": "이거 어떻게 풀지 알아낼게"})
+        card = feed.build_native_page(entries, 3, set(), rng=random.Random(1))[0]
+        self.assertEqual(card["native"]["say_ko"], "이거 어떻게 풀지 알아낼게")
+        self.assertEqual(card["match"], "figure out")
+
+
+class TagExpressionTest(unittest.TestCase):
+    def test_surface_match_returns_the_inflected_words_of_the_sentence(self):
+        self.assertEqual(native_expr.surface_match("We ended up home late.", "end up"), "ended up")
+        self.assertEqual(native_expr.surface_match("It\u2019s FINE, really", native_expr.lemma_key("it's fine")), "It\u2019s FINE")
+        self.assertIsNone(native_expr.surface_match("We ended late.", "end up"))
+
+    def test_tier_zero_beats_tier_one_and_tier_two_is_never_chosen(self):
+        entries = entries_of(
+            raw("figure out", 20.0),
+            raw("the plan", 5.0, kind="chunk"),
+            raw("you know", 3900.0, kind="discourse_marker"),
+        )
+        self.assertEqual(native_expr.tag_expression("you know we figure out the plan", entries)["expression"], "figure out")
+        self.assertEqual(native_expr.tag_expression("you know the plan", entries)["expression"], "the plan")
+        self.assertIsNone(native_expr.tag_expression("you know what I mean here", entries))
 
 
 if __name__ == "__main__":

@@ -139,7 +139,9 @@ export function WordText({
         className={`pointer-events-auto inline cursor-pointer rounded-sm text-left underline-offset-4 ${
           p.selected
             ? 'bg-marker text-ink'
-            : p.saved
+            : p.unit?.mark
+              ? 'bg-marker/20 font-bold text-marker underline decoration-marker/70 decoration-solid decoration-2'
+              : p.saved
               ? 'underline decoration-solid decoration-[3px]'
               : p.unit
                 ? 'underline decoration-dotted decoration-2'
