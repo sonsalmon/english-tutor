@@ -202,7 +202,7 @@ class CloseTest(ChatTestCase):
             calls.append(prompt)
             return json.dumps(
                 {
-                    "facts": [{"text": "The learner likes tea.", "last_seen": "2026-10-20"}],
+                    "fact_ops": [{"op": "ADD", "text": "The learner likes tea.", "importance": 3}],
                     "threads": [],
                     "self_story": [],
                     "jokes": [],

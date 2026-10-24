@@ -123,6 +123,18 @@ export function FriendMemory({ partnerId, name, state, onChange }: {
         {confirming && <p className="sr-only">{confirmLabel} 한 번 더 누르면 지워져요.</p>}
       </div>
 
+      {memory?.reflection?.text && (
+        <div className="mt-3 rounded-xl bg-paper p-3">
+          <h3 className="text-sm font-semibold text-ink-soft">
+            {name}
+            {subject(partnerId)} 나에 대해 아는 것 · {memory.reflection.date}
+          </h3>
+          <p lang="en" className="mt-1 text-[15px]">
+            {memory.reflection.text}
+          </p>
+        </div>
+      )}
+
       {memory && memory.threads.length > 0 && (
         <div className="mt-3">
           <h3 className="text-sm font-semibold text-ink-soft">다음에 이어 갈 이야기</h3>
@@ -146,14 +158,22 @@ export function FriendMemory({ partnerId, name, state, onChange }: {
         <div className="mt-3">
           <h3 className="text-sm font-semibold text-ink-soft">알게 된 것</h3>
           <ul className="divide-y divide-line">
-            {memory.facts.map((f, i) => (
-              <li key={`${f.text}-${i}`} className="flex items-center gap-2 py-2">
-                <span lang="en" className="min-w-0 flex-1 text-[15px]">
-                  {f.text}
-                </span>
-                <ForgetButton label={f.text} focusKey={`facts-${i}`} disabled={busy} onClick={() => void forget('facts', i, f.text)} />
-              </li>
-            ))}
+            {memory.facts.map((f, i) => {
+              const past = f.status === 'past';
+              return (
+                <li key={`${f.id ?? f.text}-${i}`} data-past={past ? 'true' : undefined} className={`flex items-center gap-2 py-2 ${past ? 'opacity-60' : ''}`}>
+                  <span className="min-w-0 flex-1">
+                    <span lang="en" className={`block text-[15px] ${past ? 'text-ink-soft' : ''}`}>
+                      {f.text}
+                    </span>
+                    <span className="block text-xs text-ink-soft">
+                      {past ? `지난 일${f.until ? ` · ${f.until}까지` : ''}` : `중요도 ${f.importance ?? 3}/5`} · {f.last_seen}
+                    </span>
+                  </span>
+                  <ForgetButton label={f.text} focusKey={`facts-${i}`} disabled={busy} onClick={() => void forget('facts', i, f.text)} />
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}
