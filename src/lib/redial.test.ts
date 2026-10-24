@@ -7,10 +7,25 @@ import {
   judgeHealth,
   newHealth,
   redialDelayMs,
+  resumeTurns,
   shouldRedial,
   type Health,
   type HealthInput,
 } from './redial';
+
+describe('resumeTurns', () => {
+  test('maps captions to me/partner, drops shares and empty lines, keeps the last twelve', () => {
+    const lines = [
+      ...Array.from({ length: 14 }, (_, i) => ({ who: (i % 2 ? 'me' : 'park') as 'me' | 'park', text: ` t${i} ` })),
+      { who: 'me' as const, text: 'https://youtu.be/x', share: { url: 'https://youtu.be/x' } },
+      { who: 'park' as const, text: '   ' },
+    ];
+    const out = resumeTurns(lines);
+    expect(out).toHaveLength(12);
+    expect(out[0]).toEqual({ who: 'partner', text: 't2' });
+    expect(out[11]).toEqual({ who: 'me', text: 't13' });
+  });
+});
 
 const alive = { paused: false, visible: true };
 const flat: HealthInput = { inPk: 100, outPk: 100, conn: 'connected', ice: 'connected' };

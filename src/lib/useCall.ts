@@ -9,6 +9,7 @@ import {
   judgeHealth,
   newHealth,
   redialDelayMs,
+  resumeTurns,
   shouldRedial,
   type DeadReason,
   type Health,
@@ -51,6 +52,8 @@ function micState(track: MediaStreamTrack | undefined): string {
 export function useCall() {
   const [status, setStatus] = useState<CallStatus>('ready');
   const [lines, setLines] = useState<CaptionLine[]>([]);
+  const linesRef = useRef<CaptionLine[]>([]);
+  linesRef.current = lines;
   const [botSpeaking, setBotSpeaking] = useState(false);
   const [botLevel, setBotLevel] = useState(0);
   const [userLevel, setUserLevel] = useState(0);
@@ -357,6 +360,7 @@ export function useCall() {
               ...(params.partner ? { partner: params.partner } : {}),
               ...(params.summaryInput?.lesson_date ? { lesson_date: params.summaryInput.lesson_date } : {}),
               ...(params.summaryInput?.practice_words?.length ? { practice_words: params.summaryInput.practice_words } : {}),
+              ...(redial ? { resume_turns: resumeTurns(linesRef.current) } : {}),
             },
           },
         });

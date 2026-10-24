@@ -112,6 +112,11 @@ def with_resume(config: CallConfig, now: Optional[float] = None, directory: Opti
         partner, name = None, "Ms. Park"
     else:
         return config
+    # 자동 다시 걸기는 끊긴 뒤 1초 만에 오므로 직전 전문이 아직 디스크에 없을 수 있다. 화면이 보낸 직전 대화를 먼저 쓴다.
+    client_turns = [(who, _cut_words(body, TURN_MAX)) for who, body in config.resume_turns]
+    if any(who == "Me" for who, _ in client_turns):
+        logger.info("Resume block added for %s: client redial, %d turns", partner or "park", len(client_turns))
+        return replace(config, system_instruction=config.system_instruction + resume_block(name, client_turns, 1))
     found = find_previous_call(partner, now, directory)
     if not found:
         return config
