@@ -137,14 +137,26 @@ export function formatUsdShort(n: number): string {
   return `$${n.toFixed(n >= 0.01 ? 2 : 3)}`;
 }
 
-export type PartnerMemoryFact = { text: string; last_seen: string };
+// v2 사실: 서버가 id·중요도(1~5)·처음/마지막 본 날·상태(valid/past)·끝난 날을 준다. 옛 서버 응답은 text와 last_seen만 있다.
+export type PartnerMemoryFact = {
+  text: string;
+  last_seen: string;
+  id?: string;
+  importance?: number;
+  first_seen?: string;
+  status?: 'valid' | 'past';
+  until?: string | null;
+  source?: string | null;
+};
 export type PartnerMemoryThread = { text: string; ko: string; last_seen: string };
 export type PartnerMemorySelfStory = { story: string; progress: string; last_seen: string };
 export type PartnerMemoryJoke = { text: string; last_seen: string };
 export type PartnerMemoryEpisode = { date: string; mode: 'call' | 'chat'; summary: string };
+export type PartnerMemoryReflection = { text: string; date: string };
 export type PartnerMemory = {
   partner: string;
   updated: string;
+  reflection?: PartnerMemoryReflection | null;
   facts: PartnerMemoryFact[];
   threads: PartnerMemoryThread[];
   self_story: PartnerMemorySelfStory[];
@@ -159,6 +171,7 @@ function toPartnerMemory(raw: any, id: string): PartnerMemory {
   return {
     partner: String(raw?.partner ?? id),
     updated: String(raw?.updated ?? ''),
+    reflection: raw?.reflection && typeof raw.reflection.text === 'string' ? { text: raw.reflection.text, date: String(raw.reflection.date ?? '') } : null,
     facts: list(raw?.facts),
     threads: list(raw?.threads),
     self_story: list(raw?.self_story),

@@ -390,13 +390,95 @@ type RawItem = { text?: unknown; last_seen?: unknown } | null | undefined;
 type StoryItem = { story: string; progress: string };
 type EpisodeItem = { label: string; mode: string; summary: string };
 
-function memoryItems(memory: PartnerMemory | null | undefined): { facts: MemoryItem[]; threads: MemoryItem[] } {
-  const pick = (list: unknown, max: number, limit: number): MemoryItem[] =>
-    (Array.isArray(list) ? (list as RawItem[]) : [])
-      .map((x) => ({ text: oneLine(x?.text, max), seen: seenLabel(x?.last_seen) }))
-      .filter((x) => x.text)
-      .slice(0, limit);
-  return { facts: pick(memory?.facts, 120, 12), threads: pick(memory?.threads, 80, 5) };
+// 기억 v2: 사실(facts)은 개수 상한이 없는 저장소다. 프롬프트에는 글자 예산 안에서 고른 것만 넣는다(docs/memory-v2.md).
+export const FACT_BUDGET = 3600; // 일반 사실에 쓰는 글자 수
+export const FACT_CORE_CEILING = 7000; // 중요도 4 이상 사실은 예산과 상관없이 먼저 넣되 이 한도까지만
+const FACT_OVERHEAD = 48; // 한 줄의 "- " 와 "(learner said this on ...)" 몫
+const PAST_FACTS_MAX = 3;
+const CONTEXT_EPISODES = 3;
+const REFLECTION_CHARS = 600;
+
+type FactLine = { text: string; seen: string; last: string; importance: number; past: boolean; until: string };
+
+const STOP_WORDS = new Set(['that', 'this', 'with', 'from', 'have', 'been', 'were', 'they', 'their', 'them', 'what', 'when', 'where', 'which', 'about', 'learner', 'also', 'into', 'your', 'some', 'more', 'than', 'then', 'just', 'like', 'likes', 'does', 'will', 'would', 'could', 'being', 'each', 'very', 'much', 'many', 'today', 'talked', 'shared']);
+
+function importanceOf(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.min(5, Math.max(1, Math.round(n))) : 3;
+}
+
+// 영어 낱말 몇 개를 비교용으로 줄인다(4글자 이상, 불용어 제외, 끝의 s 하나 제거).
+function keywords(text: string): Set<string> {
+  const words = text
+    .toLowerCase()
+    .split(/[^a-z0-9']+/)
+    .filter((w) => w.length >= 4 && !STOP_WORDS.has(w))
+    .map((w) => (w.length > 4 ? w.replace(/s$/, '') : w));
+  return new Set(words);
+}
+
+// 지금 이야기와 이어지는 낱말: 최근 대화 요약 몇 개와 이어 갈 이야기.
+function contextWords(memory: PartnerMemory | null | undefined): Set<string> {
+  const eps = (Array.isArray(memory?.episodes) ? memory!.episodes : []).slice(0, CONTEXT_EPISODES).map((e) => String(e?.summary ?? ''));
+  const threads = (Array.isArray(memory?.threads) ? memory!.threads : []).map((t) => String(t?.text ?? ''));
+  return keywords([...eps, ...threads].join(' '));
+}
+
+function factLines(memory: PartnerMemory | null | undefined): FactLine[] {
+  return (Array.isArray(memory?.facts) ? memory!.facts : [])
+    .map((x) => ({
+      text: oneLine(x?.text, 160),
+      seen: seenLabel(x?.last_seen),
+      last: String(x?.last_seen ?? ''),
+      importance: importanceOf(x?.importance),
+      past: x?.status === 'past',
+      until: String(x?.until ?? ''),
+    }))
+    .filter((x) => x.text);
+}
+
+const newestFirst = (a: FactLine, b: FactLine) => (a.last < b.last ? 1 : a.last > b.last ? -1 : b.importance - a.importance);
+const importantFirst = (a: FactLine, b: FactLine) => b.importance - a.importance || newestFirst(a, b);
+
+// 프롬프트에 넣을 사실을 고른다. 1) 중요도 4 이상은 예산과 상관없이 먼저(한도 FACT_CORE_CEILING까지),
+// 2) 남은 예산에 최근 대화·이어 갈 이야기와 낱말이 겹치는 사실, 3) 그다음 최근 사실 순. 고른 것은 최신순으로 내보낸다.
+// 지난(past) 사실은 지금 이야기와 관련 있을 때만 몇 개 따로 돌려준다.
+export function selectFacts(memory: PartnerMemory | null | undefined): { facts: FactLine[]; past: FactLine[] } {
+  const all = factLines(memory);
+  const context = contextWords(memory);
+  const related = (f: FactLine) => [...keywords(f.text)].some((w) => context.has(w));
+  const valid = all.filter((f) => !f.past);
+  const cost = (f: FactLine) => f.text.length + FACT_OVERHEAD;
+  const picked = new Set<FactLine>();
+  let used = 0;
+  for (const f of valid.filter((x) => x.importance >= 4).sort(importantFirst)) {
+    if (used + cost(f) > FACT_CORE_CEILING) break;
+    picked.add(f);
+    used += cost(f);
+  }
+  const rest = valid.filter((f) => !picked.has(f));
+  for (const f of [...rest.filter(related).sort(newestFirst), ...rest.filter((x) => !related(x)).sort(newestFirst)]) {
+    if (used + cost(f) > FACT_BUDGET) continue;
+    picked.add(f);
+    used += cost(f);
+  }
+  const past = all
+    .filter((f) => f.past && related(f))
+    .sort((a, b) => ((b.until || b.last) < (a.until || a.last) ? -1 : 1))
+    .slice(0, PAST_FACTS_MAX);
+  return { facts: [...picked].sort(newestFirst), past };
+}
+
+function reflectionText(memory: PartnerMemory | null | undefined): string {
+  return oneLine(memory?.reflection?.text, REFLECTION_CHARS);
+}
+
+function memoryItems(memory: PartnerMemory | null | undefined): { facts: FactLine[]; past: FactLine[]; threads: MemoryItem[] } {
+  const threads = (Array.isArray(memory?.threads) ? (memory!.threads as RawItem[]) : [])
+    .map((x) => ({ text: oneLine(x?.text, 80), seen: seenLabel(x?.last_seen) }))
+    .filter((x) => x.text)
+    .slice(0, 5);
+  return { ...selectFacts(memory), threads };
 }
 
 function storyItems(memory: PartnerMemory | null | undefined): StoryItem[] {
@@ -425,20 +507,24 @@ function episodeItems(memory: PartnerMemory | null | undefined): EpisodeItem[] {
 }
 
 function hasAnyMemory(memory: PartnerMemory | null | undefined): boolean {
-  const { facts, threads } = memoryItems(memory);
-  return facts.length > 0 || threads.length > 0 || storyItems(memory).length > 0 || jokeItems(memory).length > 0 || episodeItems(memory).length > 0;
+  const { facts, past, threads } = memoryItems(memory);
+  return facts.length > 0 || past.length > 0 || reflectionText(memory) !== '' || threads.length > 0 || storyItems(memory).length > 0 || jokeItems(memory).length > 0 || episodeItems(memory).length > 0;
 }
 
 // 친구가 지난 대화에서 기억하는 것. 기억이 없으면 빈 문자열이다. 오늘 날짜와 항목별 날짜를 함께 주어 "아직 앞으로 남은 일인지"를 모델이 가리게 한다.
 export function friendMemoryBlock(memory: PartnerMemory | null | undefined, now: Date = new Date()): string {
   if (!hasAnyMemory(memory)) return '';
-  const { facts, threads } = memoryItems(memory);
+  const { facts, past, threads } = memoryItems(memory);
   const stories = storyItems(memory);
   const jokes = jokeItems(memory);
   const episodes = episodeItems(memory);
-  const line = (x: MemoryItem) => `- ${x.text}${x.seen ? ` (learner said this on ${x.seen})` : ''}`;
+  const reflection = reflectionText(memory);
+  const line = (x: { text: string; seen: string }) => `- ${x.text}${x.seen ? ` (learner said this on ${x.seen})` : ''}`;
+  const pastLine = (x: FactLine) => `- ${x.text}${x.until ? ` (this stopped being true around ${x.until})` : ' (this is no longer true)'}`;
   const parts = [`Today is ${WEEKDAYS[now.getDay()]}, ${isoDay(now)}.`];
-  if (facts.length) parts.push(...facts.map(line));
+  if (reflection) parts.push(`What you know about the learner overall (your own summary from earlier chats): ${reflection}`);
+  if (facts.length) parts.push('What the learner has told you (newest first):', ...facts.map(line));
+  if (past.length) parts.push('Things that used to be true (mention them only as the past, for example "you used to ..."; never as the present):', ...past.map(pastLine));
   if (threads.length) parts.push('Things to pick up:', ...threads.map(line));
   if (facts.length || threads.length) parts.push('Work out from these dates whether each thing is still coming up or already happened, and ask accordingly ("Are you still going to ...?" vs "How was ...?").');
   if (stories.length) {
@@ -513,20 +599,23 @@ export function trimStoryBank(bank: string, memory: PartnerMemory | null | undef
   return lines.filter((l) => !isStory(l) || chosen.has(l)).join('\n');
 }
 
-// 기억 항목 중 가장 오래된 것부터 drop개를 뺀 기억(날짜 순. 날짜가 없는 항목이 가장 오래된 것으로 친다).
+// 덜 중요한 기억 항목부터 drop개를 뺀 기억. reflection 문단은 빼지 않는다.
 export function trimMemory(memory: PartnerMemory | null | undefined, drop: number): PartnerMemory | null {
   if (!memory) return null;
   if (drop <= 0) return memory;
-  type Slot = { item: unknown; date: string };
+  type Slot = { item: unknown; rank: number; date: string };
   const slots: Slot[] = [];
-  const add = (list: unknown, dateOf: (x: any) => unknown) =>
-    (Array.isArray(list) ? list : []).forEach((item) => slots.push({ item, date: String(dateOf(item) ?? '') }));
-  add(memory.facts, (x) => x?.last_seen);
-  add(memory.threads, (x) => x?.last_seen);
-  add(memory.self_story, (x) => x?.last_seen);
-  add(memory.jokes, (x) => x?.last_seen);
-  add(memory.episodes, (x) => x?.date);
-  const gone = new Set(slots.slice().sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)).slice(0, drop).map((s) => s.item));
+  const add = (list: unknown, rankOf: (x: any) => number, dateOf: (x: any) => unknown) =>
+    (Array.isArray(list) ? list : []).forEach((item) => slots.push({ item, rank: rankOf(item), date: String(dateOf(item) ?? '') }));
+  // 먼저 빠지는 순서(낮은 rank부터, 같은 rank에서는 오래된 것부터): 지난 사실 < 대화 요약·농담 < 중요도 1·2·3 사실 < 이어 갈 이야기·친구 이야기 < 중요도 4 < 중요도 5.
+  const factRank = (x: any) => (x?.status === 'past' ? 0 : [0, 2, 3, 4, 6, 7][importanceOf(x?.importance)]);
+  add(memory.facts, factRank, (x) => x?.last_seen);
+  add(memory.episodes, () => 1, (x) => x?.date);
+  add(memory.jokes, () => 1, (x) => x?.last_seen);
+  add(memory.threads, () => 5, (x) => x?.last_seen);
+  add(memory.self_story, () => 5, (x) => x?.last_seen);
+  const order = (a: Slot, b: Slot) => a.rank - b.rank || (a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+  const gone = new Set(slots.slice().sort(order).slice(0, drop).map((s) => s.item));
   const keep = <T,>(list: T[] | undefined): T[] => (Array.isArray(list) ? list : []).filter((x) => !gone.has(x));
   return { ...memory, facts: keep(memory.facts), threads: keep(memory.threads), self_story: keep(memory.self_story), jokes: keep(memory.jokes), episodes: keep(memory.episodes) };
 }
@@ -536,7 +625,8 @@ function memoryItemCount(memory: PartnerMemory | null | undefined): number {
 }
 
 // 통화·채팅 프롬프트가 PARTNER_PROMPT_LIMIT을 넘으면 이 순서로 줄여 다시 만든다:
-// 단어장 블록(줄인 뒤 통째로) -> STORY BANK(4개) -> 가장 오래된 기억 항목부터 하나씩.
+// 단어장 블록(줄인 뒤 통째로) -> STORY BANK(4개) -> 덜 중요한 기억 항목부터 하나씩(trimMemory의 순서).
+// 중요도 4 이상 사실과 reflection 문단은 마지막까지 남는다.
 // build는 줄인 단어장과 기억을 받아 같은 지시문을 다시 만든다(첫 인사 문구는 원래 기억을 그대로 쓴다).
 function fitPrompt(
   partner: Partner,

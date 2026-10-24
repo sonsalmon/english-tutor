@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { PartnerMemory, Wordbook } from './api';
-import { buildChatInstruction, freeTalkInstruction, friendMemoryBlock, missionInstruction, nativeBlock, openingStory, PARTNER_PROMPT_LIMIT, smallTalkInstruction, teachbackInstruction, trimMemory, trimStoryBank, wordbookBlock } from './instructions';
+import { buildChatInstruction, FACT_BUDGET, FACT_CORE_CEILING, freeTalkInstruction, friendMemoryBlock, missionInstruction, selectFacts, nativeBlock, openingStory, PARTNER_PROMPT_LIMIT, smallTalkInstruction, teachbackInstruction, trimMemory, trimStoryBank, wordbookBlock } from './instructions';
 import { PARTNERS, partnerById } from './partners';
 
 const FRIENDS = PARTNERS.filter((p) => p.id !== 'park');
@@ -345,13 +345,33 @@ describe('trimMemory', () => {
     episodes: [{ date: '2026-10-19', mode: 'call', summary: 'recent chat' }],
   };
 
-  test('removes the oldest items first, across every kind, and leaves the rest', () => {
+  test('removes the least important items first (episodes and jokes before facts), oldest first within a rank', () => {
     const two = trimMemory(memory, 2)!;
-    expect(two.facts.map((f) => f.text)).toEqual(['new fact']);
-    expect(two.self_story).toEqual([]);
-    expect(two.threads.length).toBe(1);
-    expect(two.jokes.length).toBe(1);
-    expect(two.episodes.length).toBe(1);
+    expect(two.episodes).toEqual([]);
+    expect(two.jokes).toEqual([]);
+    expect(two.facts.length).toBe(2);
+    const three = trimMemory(memory, 3)!;
+    expect(three.facts.map((f) => f.text)).toEqual(['new fact']);
+    expect(three.self_story.length).toBe(1);
+    expect(three.threads.length).toBe(1);
+  });
+
+  test('past facts go first, important facts and the reflection go last', () => {
+    const rich: PartnerMemory = {
+      ...memory,
+      reflection: { text: 'A runner and church Go club leader.', date: '2026-10-24' },
+      facts: [
+        { text: 'core', last_seen: '2026-09-01', importance: 5, status: 'valid' },
+        { text: 'ordinary', last_seen: '2026-10-20', importance: 3, status: 'valid' },
+        { text: 'trivia', last_seen: '2026-10-20', importance: 1, status: 'valid' },
+        { text: 'gone', last_seen: '2026-10-20', status: 'past', until: '2026-10-21' },
+      ],
+    };
+    expect(trimMemory(rich, 1)!.facts.map((f) => f.text)).not.toContain('gone');
+    const heavy = trimMemory(rich, 7)!;
+    expect(heavy.facts.map((f) => f.text)).toEqual(['core']);
+    expect(heavy.reflection?.text).toContain('Go club');
+    expect(trimMemory(rich, 99)!.reflection).toBeTruthy();
   });
 
   test('zero keeps the memory as is, null stays null, too many empties it', () => {
@@ -359,5 +379,80 @@ describe('trimMemory', () => {
     expect(trimMemory(null, 3)).toBeNull();
     const none = trimMemory(memory, 99)!;
     expect([none.facts, none.threads, none.self_story, none.jokes, none.episodes].every((l) => l.length === 0)).toBe(true);
+  });
+});
+
+describe('memory v2: fact selection under a character budget', () => {
+  const fact = (text: string, importance: number, last_seen: string, extra: Record<string, unknown> = {}) => ({ text, importance, last_seen, status: 'valid' as const, ...extra });
+  const base = (facts: PartnerMemory['facts'], extra: Partial<PartnerMemory> = {}): PartnerMemory => ({ partner: 'priya', updated: '', facts, threads: [], self_story: [], jokes: [], episodes: [], ...extra });
+  const chars = (list: { text: string }[]) => list.reduce((n, f) => n + f.text.length, 0);
+
+  test('important facts always make it, even when old and many low-importance facts compete', () => {
+    const important = Array.from({ length: 30 }, (_, i) => fact('Core fact number ' + i + ' about family and faith', 5, '2026-01-01'));
+    const noise = Array.from({ length: 400 }, (_, i) => fact('Passing detail number ' + i + ' from a short chat', 2, '2026-10-' + String(10 + (i % 15)).padStart(2, '0')));
+    const { facts } = selectFacts(base([...noise, ...important]));
+    for (const f of important) expect(facts.map((x) => x.text)).toContain(f.text);
+    expect(chars(facts)).toBeLessThanOrEqual(FACT_CORE_CEILING);
+    expect(facts.length).toBeLessThan(430);
+  });
+
+  test('ordinary facts fill only the budget, related ones before merely recent ones, newest first in the output', () => {
+    const filler = Array.from({ length: 120 }, (_, i) => fact('Unrelated ordinary detail ' + i + ' padded out to a decent length', 3, '2026-10-2' + (i % 5)));
+    const related = fact('Plays baduk at the church club on Sundays and has done so for many years with friends from the congregation, where he also helps teach beginners', 3, '2026-08-01');
+    const memory = base([...filler, related], { episodes: [{ date: '2026-10-24', mode: 'call', summary: 'The learner described a baduk game with friends.' }] });
+    const { facts } = selectFacts(memory);
+    expect(facts.map((f) => f.text)).toContain(related.text);
+    expect(chars(facts) + facts.length * 48).toBeLessThanOrEqual(FACT_BUDGET + 48);
+    const dates = facts.map((f) => f.last);
+    expect(dates).toEqual([...dates].sort().reverse());
+    const without = selectFacts(base([...filler, related]));
+    expect(without.facts.map((f) => f.text)).not.toContain(related.text);
+  });
+
+  test('past facts show up only when related to the recent talk, and are told as the past', () => {
+    const memory = base(
+      [
+        fact('Works at a cafeteria', 3, '2026-10-20', { status: 'past', until: '2026-10-21' }),
+        fact('Used to play the piano', 3, '2026-09-01', { status: 'past', until: '2026-09-15' }),
+        fact('Runs a Go club', 4, '2026-10-24'),
+      ],
+      { episodes: [{ date: '2026-10-22', mode: 'call', summary: 'Talked about the cafeteria job.' }] },
+    );
+    const block = friendMemoryBlock(memory, new Date(2026, 9, 24));
+    expect(block).toContain('Works at a cafeteria (this stopped being true around 2026-10-21)');
+    expect(block).not.toContain('piano');
+    expect(block).toContain('mention them only as the past');
+  });
+
+  test('the reflection paragraph is in the block, capped, and counts as memory by itself', () => {
+    const only = base([], { reflection: { text: 'Runs a Go club. ' + 'x'.repeat(900), date: '2026-10-24' } });
+    const block = friendMemoryBlock(only);
+    expect(block).toContain('What you know about the learner overall');
+    expect(block).toContain('Runs a Go club.');
+    expect(block.length).toBeLessThan(1300);
+    expect(smallTalkInstruction('', [], partnerById('priya'), [], only)).toContain('old friend');
+  });
+
+  test('v1-shaped facts (text and last_seen only) still work and count as importance 3', () => {
+    const v1 = base([{ text: 'Learner plays the saxophone', last_seen: '2026-10-18' }]);
+    expect(selectFacts(v1).facts[0].importance).toBe(3);
+    expect(friendMemoryBlock(v1)).toContain('Learner plays the saxophone (learner said this on Sunday 2026-10-18)');
+  });
+
+  test('a huge memory keeps the prompt within the limit and sheds trivia before important facts', () => {
+    const p = partnerById('brian');
+    const important = Array.from({ length: 5 }, (_, i) => fact('IMPORTANT-' + i + ' learner runs a club', 5, '2026-02-01'));
+    const trivia = Array.from({ length: 300 }, (_, i) => fact('TRIVIA-' + i + ' passing detail ' + 'z'.repeat(90), 1, '2026-10-' + String(1 + (i % 28)).padStart(2, '0')));
+    const huge = base([...trivia, ...important], { reflection: { text: 'REFLECTION-MARK the learner leads a Go club.', date: '2026-10-24' } });
+    const texts = [
+      smallTalkInstruction('x'.repeat(2000), WORDS, p, ['a'.repeat(60), 'b'.repeat(60)], huge, 'weekend plans', FULL_WORDBOOK),
+      buildChatInstruction(p, 'x'.repeat(2000), huge, [], FULL_WORDBOOK),
+    ];
+    for (const text of texts) {
+      expect(text.length).toBeLessThanOrEqual(PARTNER_PROMPT_LIMIT);
+      for (let i = 0; i < 5; i += 1) expect(text).toContain('IMPORTANT-' + i);
+      expect(text).toContain('REFLECTION-MARK');
+    }
+    expect(texts[0].match(/TRIVIA-/g)?.length ?? 0).toBeLessThan(300);
   });
 });
