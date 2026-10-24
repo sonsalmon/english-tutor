@@ -36,7 +36,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
 
 from server import call_bot, chat, clip_translate, clipdb, culture_filter, culturedb, feed, native_expr, people, phrase_gloss, pron, review, summary_jobs, tts, wordbook, youtube
 from server.call_bot import parse_call_config, run_bot, time_limit_for_mode
-from server import partner_memory
+from server import partner_memory, resume
 from server.history import list_calls, live_cost_of, load_call, totals as call_totals
 from server.pricing import combine_cost
 from server.readgloss import (
@@ -156,6 +156,7 @@ def _native_hints(wordbook_lists: dict) -> list:
 
 
 # 다리가 멈춰 있어도 홈 화면(기억 요약)이 오래 기다리지 않게 전체 시간을 자른다.
+LOG_CALL_PROMPT_ENV = "LOG_CALL_PROMPT"  # 켜 두면 통화를 걸 때마다 지시문 전체를 서버 로그에 남긴다(시험용).
 PRACTICE_DEADLINE_SEC = 3.0
 
 
@@ -413,6 +414,10 @@ async def offer(raw: Request, background_tasks: BackgroundTasks):
         config = parse_call_config(request.request_data) if not request.pc_id else None
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    if config:
+        config = await asyncio.to_thread(resume.with_resume, config)
+        if os.getenv(LOG_CALL_PROMPT_ENV):
+            logger.info("Call prompt (%s, %s):\n%s", config.mode, config.partner or "park", config.system_instruction)
 
     async def on_new_connection(connection):
         background_tasks.add_task(run_bot, connection, config or parse_call_config(request.request_data))

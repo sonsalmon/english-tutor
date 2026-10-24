@@ -376,10 +376,10 @@ _PARTNER_UPDATED: "set[str]" = set()
 _background_tasks: "set[asyncio.Task]" = set()
 
 
-def update_partner_memory_sync(partner_id: str, turns: List[Tuple[str, str]]) -> bool:
+def update_partner_memory_sync(partner_id: str, turns: List[Tuple[str, str]], source: Optional[str] = None) -> bool:
     from server.tutor import make_generate_text
 
-    return partner_memory.update(partner_id, turns, generate_text=make_generate_text())
+    return partner_memory.update(partner_id, turns, generate_text=make_generate_text(), source=source)
 
 
 def schedule_partner_memory_update(saved: Any, config: "CallConfig", record: "CallRecord") -> Optional[asyncio.Task]:
@@ -397,7 +397,7 @@ def schedule_partner_memory_update(saved: Any, config: "CallConfig", record: "Ca
 
     async def _run():
         try:
-            if await asyncio.to_thread(update_partner_memory_sync, partner_id, turns):
+            if await asyncio.to_thread(update_partner_memory_sync, partner_id, turns, getattr(saved, "stem", None)):
                 logger.info("Partner memory updated: %s", partner_id)
                 return
         except Exception as e:  # noqa: BLE001

@@ -639,7 +639,7 @@ class PartnerMemorySchedulingTest(unittest.IsolatedAsyncioTestCase):
         await self.run_task(first)
 
         self.assertIsNone(second)
-        self.update.assert_called_once_with("priya", [("Me", "I like jazz"), ("Partner", "Nice!")])
+        self.update.assert_called_once_with("priya", [("Me", "I like jazz"), ("Partner", "Nice!")], "2026-10-20-100000")
 
     async def test_no_update_for_ms_park_mission_or_no_learner_line(self):
         saved = Path("/tmp/a.md")
