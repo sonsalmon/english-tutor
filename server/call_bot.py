@@ -60,6 +60,16 @@ DEFAULT_VAD_START_SENSITIVITY = "LOW"
 DEFAULT_VAD_PREFIX_MS = 500
 # 입력 오디오 잡음 제거(RNNoise, 무료). NOISE_FILTER=off면 끈다.
 NOISE_FILTER_ENV = "NOISE_FILTER"
+# 상대가 말하는 동안 학습자가 맞장구가 아닌 낱말을 이만큼 말해야 상대 말을 끊는다(2026-10-24).
+# Gemini는 말 시작만 듣고 끊어서 "uh-huh"·길거리 목소리에도 멈췄다. 0이면 옛 방식(Gemini가 끊음).
+BARGE_IN_WORDS_ENV = "LIVE_BARGE_IN_WORDS"
+DEFAULT_BARGE_IN_WORDS = 3
+BARGE_IN_WORD_RE = re.compile(r"[^\W\d_]+(?:['’-][^\W\d_]+)*")
+BACKCHANNEL_WORDS = frozenset({
+    "mm", "mmm", "mhm", "mm-hm", "mm-hmm", "hm", "hmm", "uh", "um", "uh-huh", "ah", "oh", "aha",
+    "yeah", "yes", "yep", "yup", "ok", "okay", "right", "sure", "wow", "nice", "cool", "really",
+    "음", "어", "응", "네", "아", "오",
+})
 VAD_SILENCE_MS_RANGE = (100, 3000)
 CHAT_DEFAULT_SILENCE_MS = 500  # next10 실험 결정: 채팅 기본 end=HIGH, silence 500ms
 # LIVE_MODEL·LIVE_AFFECTIVE_DIALOG는 gemini-3.8-live 시험(next10)을 위해 남긴 노브다. 둘 다 기본은 꺼져 있다
@@ -184,6 +194,27 @@ def start_vad_settings(env=None) -> dict:
         "start_sensitivity": getattr(StartSensitivity, f"START_SENSITIVITY_{sensitivity}"),
         "prefix_padding_ms": prefix,
     }
+
+
+def barge_in_words_from_env(env=None) -> int:
+    """`LIVE_BARGE_IN_WORDS`(0 이상 정수). 없거나 잘못되면 기본 3. 0이면 Gemini 기본 끊기(옛 방식)."""
+    raw = ((os.environ if env is None else env).get(BARGE_IN_WORDS_ENV) or "").strip()
+    if not raw:
+        return DEFAULT_BARGE_IN_WORDS
+    try:
+        value = int(raw)
+    except ValueError:
+        value = -1
+    if value < 0:
+        logger.warning("%s=%r ignored (int >= 0)", BARGE_IN_WORDS_ENV, raw)
+        return DEFAULT_BARGE_IN_WORDS
+    return value
+
+
+def count_barge_in_words(text: str) -> int:
+    """끼어들기로 셀 낱말 수. 맞장구(uh-huh, yeah, 음 …)와 잡음 표시 `{}`는 세지 않는다."""
+    words = BARGE_IN_WORD_RE.findall(NOISE_MARK_RE.sub(" ", text or "").lower().replace("’", "'"))
+    return sum(1 for word in words if word not in BACKCHANNEL_WORDS)
 
 
 def noise_filter_enabled(env=None) -> bool:
@@ -608,16 +639,75 @@ def live_input_languages(env=None) -> List[str]:
 
 @functools.lru_cache(maxsize=1)
 def live_service_class():
+    from google.genai.types import ActivityHandling, RealtimeInputConfig
+    from pipecat.frames.frames import BotStartedSpeakingFrame, BotStoppedSpeakingFrame
     from pipecat.services.google.gemini_live.vertex.llm import GeminiLiveVertexLLMService
 
     class TranscriptHintedLiveService(GeminiLiveVertexLLMService):
-        """입력 전사에 언어 힌트를 넣는다. pipecat은 힌트 없는 AudioTranscriptionConfig를 만들어 짧은 추임새를 한자로 받아쓴다."""
+        """입력 전사에 언어 힌트를 넣는다. pipecat은 힌트 없는 AudioTranscriptionConfig를 만들어 짧은 추임새를 한자로 받아쓴다.
+
+        끼어들기(LIVE_BARGE_IN_WORDS>0, Gemini VAD 켜짐): Gemini에는 NO_INTERRUPTION을 주고, 상대가 말하는 동안
+        학습자 받아쓰기에서 맞장구가 아닌 낱말이 기준 수를 넘으면 여기서 끊는다. Gemini는 그 차례를 끝까지 만들므로,
+        끊은 뒤 같은 차례의 남은 음성은 turn_complete까지 버린다. 학습자 말에는 Gemini가 다음 차례에서 답한다."""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._barge_in_words = 0
+            self._partner_speaking = False
+            self._heard_words = 0
+            self._drop_rest_of_turn = False
 
         async def _connection_task_handler(self, config):
             languages = live_input_languages()
             if languages:
                 config.input_audio_transcription = AudioTranscriptionConfig(language_codes=languages)
+            self._drop_rest_of_turn = False
+            self._barge_in_words = 0
+            ric = config.realtime_input_config
+            vad_on = ric is not None and not getattr(ric.automatic_activity_detection, "disabled", False)
+            words = barge_in_words_from_env()
+            if vad_on and words:
+                ric.activity_handling = ActivityHandling.NO_INTERRUPTION
+                self._barge_in_words = words
+                logger.info("Barge-in by words: %d (Gemini NO_INTERRUPTION)", words)
             await super()._connection_task_handler(config)
+
+        async def process_frame(self, frame, direction):
+            if isinstance(frame, BotStartedSpeakingFrame):
+                self._partner_speaking = True
+                self._heard_words = 0
+            elif isinstance(frame, BotStoppedSpeakingFrame):
+                self._partner_speaking = False
+            await super().process_frame(frame, direction)
+
+        async def _handle_msg_input_transcription(self, message):
+            await super()._handle_msg_input_transcription(message)
+            if not (self._barge_in_words and self._partner_speaking):
+                return
+            text = message.server_content.input_transcription.text or ""
+            self._heard_words += count_barge_in_words(text)
+            if self._heard_words < self._barge_in_words:
+                logger.info("Barge-in held: %r (%d/%d words)", text, self._heard_words, self._barge_in_words)
+                return
+            # 생성이 아직 안 끝났으면(turn_complete 전) 같은 차례의 남은 음성이 더 온다. 보류된 turn_complete는
+            # 끊기가 버리므로(_discard_deferred_turn) 그때는 버리기를 켜지 않는다(다음 대답까지 삼키지 않게).
+            self._drop_rest_of_turn = self._bot_is_responding and not self._turn_complete_pending_idle
+            self._partner_speaking = False
+            logger.info("Barge-in: %d words while the partner speaks -> interrupt (drop rest: %s)",
+                        self._heard_words, self._drop_rest_of_turn)
+            await self.broadcast_interruption()
+
+        async def _handle_msg_model_turn(self, msg):
+            if not self._drop_rest_of_turn:
+                await super()._handle_msg_model_turn(msg)
+
+        async def _handle_msg_output_transcription(self, message):
+            if not self._drop_rest_of_turn:
+                await super()._handle_msg_output_transcription(message)
+
+        async def _handle_msg_turn_complete(self, message):
+            self._drop_rest_of_turn = False
+            await super()._handle_msg_turn_complete(message)
 
     return TranscriptHintedLiveService
 

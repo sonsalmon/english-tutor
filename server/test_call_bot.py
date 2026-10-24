@@ -375,6 +375,22 @@ class LiveKnobsTest(unittest.TestCase):
             self.assertIsNone(call_bot.build_audio_in_filter({}))
         warn.assert_called_once()
 
+    def test_barge_in_words_counts_only_non_backchannel_words(self):
+        for text in ("Mm-hmm, yeah.", "uh-huh", "Okay, right. Wow!", "{} 음 네", "", "Yeah, yeah."):
+            self.assertEqual(call_bot.count_barge_in_words(text), 0, text)
+        self.assertEqual(call_bot.count_barge_in_words("Wait, I don't get it"), 5)
+        self.assertEqual(call_bot.count_barge_in_words("yeah but that’s not it"), 4)
+        self.assertEqual(call_bot.count_barge_in_words("잠깐만 그거 아니야"), 3)
+
+    def test_barge_in_words_env(self):
+        self.assertEqual(call_bot.barge_in_words_from_env({}), 3)
+        self.assertEqual(call_bot.barge_in_words_from_env({"LIVE_BARGE_IN_WORDS": "0"}), 0)
+        self.assertEqual(call_bot.barge_in_words_from_env({"LIVE_BARGE_IN_WORDS": " 5 "}), 5)
+        for bad in ("-1", "abc"):
+            with mock.patch.object(call_bot.logger, "warning") as warn:
+                self.assertEqual(call_bot.barge_in_words_from_env({"LIVE_BARGE_IN_WORDS": bad}), 3)
+            warn.assert_called_once()
+
     def test_affective_dialog_defaults_on_and_can_be_turned_off(self):
         self.assertTrue(call_bot.affective_dialog_from_env({}))
         self.assertTrue(call_bot.affective_dialog_from_env({"LIVE_AFFECTIVE_DIALOG": "1"}))
