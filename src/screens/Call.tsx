@@ -10,6 +10,7 @@ import { QuietButton, useWide } from '../components/ui';
 import { WordText } from '../components/WordText';
 import { getPartnerMemory, serverNow, type Wordbook } from '../lib/api';
 import { elapsedNoticeText, elapsedSeconds, nextElapsedNotice, NOTICE_SHOW_MS, shouldOfferRedial } from '../lib/callTime';
+import { useKeyboardInset } from '../lib/keyboardInset';
 import { go } from '../lib/router';
 import { cleanInterests, sanitizeTopic, type PracticeWord } from '../lib/instructions';
 import { isPark, partnerById, PARK_ID } from '../lib/partners';
@@ -118,6 +119,10 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, wordbo
   const inCall = call.status === 'connecting' || live;
   const [screenMode] = useState(() => loadScreenMode());
   const screen = useScreenLock(inCall, screenMode);
+  const keyboard = useKeyboardInset(inCall);
+  useEffect(() => {
+    if (live && screen.denied) setNotice('저전력 모드라 화면이 꺼질 수 있어요. 화면이 꺼지면 통화가 끊길 수 있어요.');
+  }, [live, screen.denied]);
   const [blackOn, setBlackOn] = useState(false);
   const blackDone = useRef(false);
   // 친구 통화가 저절로 끊기면 요약으로 넘어가기 전에 다시 걸지 묻는다.
@@ -283,7 +288,9 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, wordbo
                   : '듣고 있어요';
 
   return (
-    <main className="mx-auto flex h-dvh w-full max-w-[480px] flex-col px-5 pt-[calc(12px+env(safe-area-inset-top))] pb-[calc(20px+env(safe-area-inset-bottom))] lg:grid lg:max-w-[1120px] lg:grid-cols-[360px_minmax(0,1fr)] lg:grid-rows-[auto_minmax(0,1fr)_auto] lg:gap-x-12 lg:px-10 lg:pt-10 lg:pb-10">
+    <main
+      style={keyboard ? { paddingBottom: keyboard + 12 } : undefined}
+      className="mx-auto flex h-dvh w-full max-w-[480px] flex-col px-5 pt-[calc(12px+env(safe-area-inset-top))] pb-[calc(20px+env(safe-area-inset-bottom))] lg:grid lg:max-w-[1120px] lg:grid-cols-[360px_minmax(0,1fr)] lg:grid-rows-[auto_minmax(0,1fr)_auto] lg:gap-x-12 lg:px-10 lg:pt-10 lg:pb-10">
       <header className="flex min-h-11 items-center justify-between gap-3 lg:col-start-1 lg:row-start-1">
         <p className="min-w-0 truncate font-semibold">{title}</p>
         {call.status === 'live' && (
@@ -362,6 +369,9 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, wordbo
                       href={line.share.url}
                       target="_blank"
                       rel="noreferrer"
+                      onClick={(e) => {
+                        if (inCall && !window.confirm('통화 중에 링크를 열면 상대 목소리가 끊길 수 있어요. 지금 열까요?')) e.preventDefault();
+                      }}
                       className={`mt-1 ml-auto flex w-fit max-w-full items-center gap-1.5 rounded-full border border-line bg-paper px-3 py-1.5 text-sm ${line.share.failed ? 'text-end-press' : 'text-ink-soft'}`}
                     >
                       <Link2 size={14} aria-hidden className="shrink-0" />
