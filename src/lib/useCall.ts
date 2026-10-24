@@ -2,6 +2,7 @@ import { PipecatClient } from '@pipecat-ai/client-js';
 import { SmallWebRTCTransport } from '@pipecat-ai/small-webrtc-transport';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { EMPTY_STATS, readStats, telemetryPayload, type StatsSample } from './callStats';
+import { friendlyError } from './errors';
 import { LatencyMeter, clearPendingLatency, stashLatency } from './latency';
 import {
   ATTEMPT_TIMEOUT_MS,
@@ -333,7 +334,7 @@ export function useCall() {
           onError: (message) => {
             if (!current()) return;
             const data = message?.data as { message?: string } | string | undefined;
-            setError((typeof data === 'string' ? data : data?.message) || '통화 중 오류가 났어요.');
+            setError(friendlyError(new Error((typeof data === 'string' ? data : data?.message) || ''), '통화 중 오류가 났어요.'));
           },
         },
       });
@@ -371,7 +372,7 @@ export function useCall() {
         }
         release();
         setStatus('error');
-        setError(e instanceof Error ? e.message : '연결하지 못했어요.');
+        setError(friendlyError(e, '연결하지 못했어요.'));
       }
     },
     [addChunk, clearTimers, failAttempt, finish, release],

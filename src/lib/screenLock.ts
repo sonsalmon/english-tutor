@@ -41,7 +41,7 @@ type WakeLockLike = { request(type: 'screen'): Promise<Sentinel> };
 type DocLike = Pick<Document, 'visibilityState' | 'addEventListener' | 'removeEventListener'>;
 
 // Wake Lock은 페이지가 숨겨지면 시스템이 풀어 버린다. 다시 보이면 새로 잡는다.
-export function createWakeLockKeeper(wakeLock: WakeLockLike, doc: DocLike) {
+export function createWakeLockKeeper(wakeLock: WakeLockLike, doc: DocLike, onDenied?: () => void) {
   let sentinel: Sentinel | null = null;
   let pending = false;
   let stopped = true;
@@ -54,7 +54,8 @@ export function createWakeLockKeeper(wakeLock: WakeLockLike, doc: DocLike) {
       if (stopped) await next.release();
       else sentinel = next;
     } catch {
-      // 절전 모드 등으로 거부되면 다음에 다시 보일 때 시도한다.
+      // 절전 모드 등으로 거부되면 화면에 알리고, 다음에 다시 보일 때 시도한다.
+      onDenied?.();
     } finally {
       pending = false;
     }
@@ -81,11 +82,13 @@ export function createWakeLockKeeper(wakeLock: WakeLockLike, doc: DocLike) {
 export function useScreenLock(active: boolean, mode: ScreenMode) {
   const supported = typeof navigator !== 'undefined' && 'wakeLock' in navigator;
   const [resumed, setResumed] = useState(false);
+  const [denied, setDenied] = useState(false);
   const hiddenAt = useRef<number | null>(null);
 
   useEffect(() => {
+    setDenied(false);
     if (!active || mode === 'system' || !supported) return;
-    const keeper = createWakeLockKeeper(navigator.wakeLock as WakeLockLike, document);
+    const keeper = createWakeLockKeeper(navigator.wakeLock as WakeLockLike, document, () => setDenied(true));
     keeper.start();
     return () => keeper.stop();
   }, [active, mode, supported]);
@@ -108,5 +111,5 @@ export function useScreenLock(active: boolean, mode: ScreenMode) {
   }, [active]);
 
   const dismissResumed = useCallback(() => setResumed(false), []);
-  return { supported, resumed, dismissResumed };
+  return { supported, resumed, denied, dismissResumed };
 }

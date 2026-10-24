@@ -76,6 +76,16 @@ describe('wake lock keeper', () => {
     expect(lock.sentinels.length).toBe(1);
   });
 
+  test('tells the caller when the system refuses the lock (low power mode)', async () => {
+    const { doc } = fakeDoc();
+    let denied = 0;
+    const keeper = createWakeLockKeeper({ request: () => Promise.reject(new Error('NotAllowedError')) }, doc, () => void (denied += 1));
+    keeper.start();
+    await tick();
+    expect(denied).toBe(1);
+    keeper.stop();
+  });
+
   test('re-acquires when the page becomes visible after the system released the lock', async () => {
     const lock = fakeWakeLock();
     const { doc, raw, fire } = fakeDoc();
