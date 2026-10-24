@@ -5,6 +5,7 @@ import { WordText } from '../components/WordText';
 import { QuietButton } from '../components/ui';
 import { closeChat, getChat, getPartnerMemory, sendChat, type ChatMessage, type PartnerMemory, type Wordbook } from '../lib/api';
 import { clock, sameDay, yesterdayOf } from '../lib/callFormat';
+import { friendlyError } from '../lib/errors';
 import { buildChatInstruction } from '../lib/instructions';
 import { partnerMeta, type Partner } from '../lib/partners';
 import { go } from '../lib/router';
@@ -61,7 +62,7 @@ function Conversation({ partner, brief, interests, wordbook, profileReady, onCal
     setLoadError(null);
     const controller = new AbortController();
     getChat(id, controller.signal).then(setMessages, (e) => {
-      if (!controller.signal.aborted) setLoadError(e instanceof Error ? e.message : '대화를 불러오지 못했어요.');
+      if (!controller.signal.aborted) setLoadError(friendlyError(e, '대화를 불러오지 못했어요.'));
     });
     return () => controller.abort();
   }, [id, reload]);
@@ -137,7 +138,7 @@ function Conversation({ partner, brief, interests, wordbook, profileReady, onCal
       }
     } catch (e) {
       setDraft(text);
-      setError(e instanceof Error ? e.message : '메시지를 보내지 못했어요. 잠시 뒤에 다시 보내 주세요.');
+      setError(friendlyError(e, '메시지를 보내지 못했어요. 잠시 뒤에 다시 보내 주세요.'));
     } finally {
       setPending(null);
       textarea.current?.focus({ preventScroll: true });
