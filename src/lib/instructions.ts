@@ -458,7 +458,20 @@ function parkSmallTalkOpening(chip?: string): string {
 
 // 친구의 첫 턴. 우선순위: 손수 적은 자유 대화 주제 > 칩 > 기억의 이어 갈 이야기 > 일반 인사.
 // 기억이 있으면 "오래된 친구" 인사로 열고, 없으면 greet(자기소개 포함 인사)로 연다. 칩은 기억 유무와 상관없이 첫 턴의 주제가 된다.
-function friendOpening(memory: PartnerMemory | null | undefined, chip: string, hasTopic: boolean, greet: string, fresh: string): string {
+// 첫 턴에 꺼낼 STORY BANK 이야기 한 줄. 모델은 큰 줄거리(예: Priya의 아침형 인간 도전)로만 인사를 열기 쉬워서,
+// 통화마다 무작위로 고르되 가장 최근에 말한 이야기(기억의 마지막 날짜 self_story)와 낱말이 겹치는 이야기는 뺀다.
+export function openingStory(bank: string | null | undefined, memory: PartnerMemory | null | undefined, rand: () => number = Math.random): string {
+  const stories = (bank ?? '').split('\n').filter((l) => /^\d+\.\s/.test(l)).map((l) => l.replace(/^\d+\.\s*/, '').trim());
+  const told = (Array.isArray(memory?.self_story) ? memory!.self_story : []) as { story?: unknown; progress?: unknown; last_seen?: unknown }[];
+  const last = told.reduce((max, s) => (String(s?.last_seen ?? '') > max ? String(s?.last_seen ?? '') : max), '');
+  const words = (s: string) => s.toLowerCase().split(/[^a-z0-9']+/).filter((w) => w.length > 3);
+  const recent = new Set(told.filter((s) => last && String(s?.last_seen ?? '') === last).flatMap((s) => words(`${s?.story ?? ''} ${s?.progress ?? ''}`)));
+  const fresh = stories.filter((l) => !words(l.split('. ')[0]).some((w) => recent.has(w)));
+  const pool = fresh.length ? fresh : stories;
+  return pool.length ? oneLine(pool[Math.floor(rand() * pool.length)], 400) : '';
+}
+
+function friendOpening(memory: PartnerMemory | null | undefined, chip: string, hasTopic: boolean, greet: string, fresh: string, story = ''): string {
   const { threads } = memoryItems(memory);
   const hasMemory = hasAnyMemory(memory);
   const old = 'greet the learner like an old friend you have chatted with before (do NOT introduce yourself or say your name again)';
@@ -473,7 +486,10 @@ function friendOpening(memory: PartnerMemory | null | undefined, chip: string, h
     return `${hasMemory ? old : greet}, and open with the topic they chose (${cleanChip}): say a short thought of your own about it, then a light question.${dated}`;
   }
   if (threads.length) return `${old}, and in this same first turn bring up one of the Things to pick up. Use its date and today's date to ask the right way: "Are you still going to ...?" if it is still coming up, "How was ...?" if it already happened.`;
-  return hasMemory ? `${old}, share one small thing from your own day (or the next small step of a story of yours), and ask how they are.` : fresh;
+  const hook = story ? ` Today, open with this story of yours, from the first beat you have not told yet, as a small thing from your day: <<<${story}>>>` : '';
+  return hasMemory
+    ? `${old}, share one NEW small thing from your own day, and ask how they are. Everything in your memory notes was already told in past calls, so never bring it back as today's news.${hook}`
+    : `${fresh}${hook}`;
 }
 
 const CHAT_STYLE = `
@@ -561,7 +577,7 @@ function partnerSmallTalkInstruction(partner: Partner, brief: string, words: Pra
   const fresh = partner.usesInterests
     ? `${greet}, share one small thing from your own day, and ask what they have been into lately.`
     : `${greet}, share one small thing from your own day, and ask how they are.`;
-  const openingText = friendOpening(memory, chip, false, greet, fresh);
+  const openingText = friendOpening(memory, chip, false, greet, fresh, openingStory(partner.storyBank, memory));
   return fitPrompt(partner, memory, wordbook, (bank, book, mem) => `${partnerPrefix(partner, brief, words, false, interests, book)}${friendMemoryBlock(mem)}${CHAT_STYLE}
 
 ${CONVERSATION_DYNAMICS}
@@ -599,7 +615,7 @@ ${clean}
     : partner.usesInterests
       ? `${greet}, share one small thing from your own day, and ask what they love or what they would like to talk about.`
       : `${greet}, share one small thing from your own day, and ask what they would like to talk about (or start one of your favorite topics).`;
-  const openingText = friendOpening(memory, cleanChip, !!clean, greet, fresh);
+  const openingText = friendOpening(memory, cleanChip, !!clean, greet, fresh, openingStory(partner.storyBank, memory));
   return fitPrompt(partner, memory, wordbook, (bank, book, mem) => `${partnerPrefix(partner, brief, words, true, interests, book)}${friendMemoryBlock(mem)}${CHAT_STYLE}
 
 ${CONVERSATION_DYNAMICS}
