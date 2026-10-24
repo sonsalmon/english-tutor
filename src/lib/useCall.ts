@@ -137,7 +137,10 @@ export function useCall() {
           },
           onTrackStarted: (track, participant) => {
             if (track.kind === 'audio') {
-              if (participant?.local) meterRef.current?.attachMic(track);
+              if (participant?.local) {
+                meterRef.current?.attachMic(track);
+                track.addEventListener('ended', () => recoverMicRef.current());
+              }
               else meterRef.current?.attachBot(track);
             }
             // SmallWebRTCTransport는 원격(Ms. Park) 트랙에 participant를 넘기지 않는다. local이 아니면 원격으로 본다.
@@ -203,6 +206,36 @@ export function useCall() {
     [addChunk, finish, release],
   );
 
+  // iOS는 상태창·제어 센터를 내리면 웹 페이지 마이크를 멈추고(트랙 muted/ended) 돌아와도 안 살릴 때가 있다.
+  // 화면이 다시 보이거나 포커스를 받을 때 마이크가 죽어 있으면 다시 잡고, 멈춘 상대 음성도 다시 튼다.
+  const recoverMic = useCallback(() => {
+    const client = clientRef.current;
+    if (!client || !liveRef.current || pausedAtRef.current !== null || document.visibilityState !== 'visible') return;
+    const mic = client.tracks().local.audio;
+    if (!mic || mic.readyState === 'ended' || mic.muted) client.updateMic(client.selectedMic.deviceId ?? '');
+    const audio = audioRef.current;
+    if (audio?.srcObject && audio.paused) {
+      audio.play().then(
+        () => setAudioBlocked(false),
+        () => setAudioBlocked(true),
+      );
+    }
+  }, []);
+  const recoverMicRef = useRef(recoverMic);
+  recoverMicRef.current = recoverMic;
+
+  useEffect(() => {
+    if (status !== 'live') return;
+    document.addEventListener('visibilitychange', recoverMic);
+    window.addEventListener('focus', recoverMic);
+    window.addEventListener('pageshow', recoverMic);
+    return () => {
+      document.removeEventListener('visibilitychange', recoverMic);
+      window.removeEventListener('focus', recoverMic);
+      window.removeEventListener('pageshow', recoverMic);
+    };
+  }, [status, recoverMic]);
+
   const hangUp = useCallback(() => finish('hangup'), [finish]);
 
   // 브라우저가 자동 재생을 막았을 때 사용자가 누른 버튼에서 다시 재생한다.
@@ -238,7 +271,8 @@ export function useCall() {
     setPausedTotal((total) => total + (Date.now() - since));
     setPausedAt(null);
     client.sendClientMessage('resume');
-  }, []);
+    recoverMic();
+  }, [recoverMic]);
 
   const toggleMic = useCallback(() => {
     const client = clientRef.current;
