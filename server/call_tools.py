@@ -642,6 +642,16 @@ def share_record_text(text: str, ctx: Optional[LinkContext]) -> str:
 CLIP_MIN_WORDS = 3
 CLIP_MAX_WORDS = 35
 CLIP_QUERY_MAX = 120
+CLIP_GAP_SEC = 90.0
+
+
+def share_clip_hold(chunks: Sequence[Tuple[str, str]], last_shared_at: Optional[float], now: float) -> Optional[Dict[str, Any]]:
+    """장면을 지금 보내지 말아야 하면 모델에게 돌려줄 결과, 보내도 되면 None. 첫 인사가 끝나기 전(실통화에서 인사 도중 보낸 적이 있다)과 직전 장면 뒤 90초 안에는 보내지 않는다."""
+    if not any(speaker == "Partner" for speaker, _ in chunks):
+        return {"status": "not_now", "note": "The call has only just started. Finish your greeting and talk first; a clip can wait."}
+    if last_shared_at is not None and now - last_shared_at < CLIP_GAP_SEC:
+        return {"status": "not_now", "note": "You sent a clip a moment ago. Keep talking about it; do not send another yet."}
+    return None
 
 
 def _clip_ok(clip: Dict[str, Any], exclude: Iterable[str]) -> bool:

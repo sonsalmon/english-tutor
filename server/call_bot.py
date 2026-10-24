@@ -521,6 +521,20 @@ def make_usage_collector(usage: UsageTotals):
     return UsageCollector()
 
 
+def make_input_text_filter():
+    """LLM 뒤에 둔다. 학습자 글(InputTextRawFrame)은 LLM이 받으면 끝이다. 더 흐르면 어시스턴트 집계기가 파트너 발화로 모아 전문·기억에 섞이므로 여기서 마스크한다."""
+    from pipecat.frames.frames import Frame, InputTextRawFrame
+    from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+
+    class InputTextFilter(FrameProcessor):
+        async def process_frame(self, frame: Frame, direction: FrameDirection):
+            await super().process_frame(frame, direction)
+            if not isinstance(frame, InputTextRawFrame):
+                await self.push_frame(frame, direction)
+
+    return InputTextFilter()
+
+
 def job_spec_for(config: "CallConfig"):
     """통화 정리 작업의 입력(mode·수업 날짜·연습 단어)."""
     from server.summary_jobs import JobSpec
@@ -800,6 +814,7 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
         transport.input(),
         user_aggregator,
         llm,
+        make_input_text_filter(),
         make_usage_collector(record.usage),
         transport.output(),
         audiobuffer,
@@ -825,13 +840,20 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
         await params.result_callback(result)
 
     shared_videos: "set[str]" = set()
+    last_clip_at: List[float] = []
 
     async def share_clip(params: FunctionCallParams):
         query = str((params.arguments or {}).get("phrase_or_topic") or "")
+        hold = call_tools.share_clip_hold(record.chunks, last_clip_at[-1] if last_clip_at else None, time.monotonic())
+        if hold:
+            logger.info("share_clip(%r): held", query)
+            await params.result_callback(hold)
+            return
         clip = await asyncio.to_thread(call_tools.find_clip, query, shared_videos)
         logger.info("share_clip(%r): %s", query, clip and clip["video_id"])
         if clip:
             shared_videos.add(clip["video_id"])
+            last_clip_at.append(time.monotonic())
             record.add_note("Partner (shared clip)", call_tools.clip_record_text(clip))
             await worker.queue_frames([RTVIServerMessageFrame(data={"type": "shared_clip", "clip": clip})])
         await params.result_callback(call_tools.share_clip_result(clip))

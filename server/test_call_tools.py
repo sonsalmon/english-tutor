@@ -351,6 +351,15 @@ class ShareClipTest(unittest.TestCase):
 
         self.assertEqual(clip["video_id"], "classVideo01")
 
+    def test_clip_is_held_during_the_greeting_and_for_90_seconds_after_a_clip(self):
+        greeting = [("Partner", "Hey! Good to hear you.")]
+
+        self.assertEqual(call_tools.share_clip_hold([], None, 100.0)["status"], "not_now")
+        self.assertEqual(call_tools.share_clip_hold([("Me", "hi there friend")], None, 100.0)["status"], "not_now")
+        self.assertIsNone(call_tools.share_clip_hold(greeting, None, 100.0))
+        self.assertEqual(call_tools.share_clip_hold(greeting, 50.0, 100.0)["status"], "not_now")
+        self.assertIsNone(call_tools.share_clip_hold(greeting, 50.0, 140.5))
+
     def test_missing_db_and_empty_query_give_none(self):
         self.assertIsNone(call_tools.find_clip("all of a sudden", db=Path(self.tmp.name) / "none.db", entries=[]))
         self.assertIsNone(call_tools.find_clip("   ", db=self.db, entries=[]))
