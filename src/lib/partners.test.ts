@@ -54,11 +54,12 @@ describe('Brian', () => {
   });
 
   test('a full memory trims the STORY BANK to four stories and keeps its marker', () => {
-    const storyCount = (text: string) => text.split('\n').filter((l) => /^\d+\.\s/.test(l) && l.includes('Beat 1')).length;
+    // CALL FLOW의 '1. OPENING' 줄에도 첫 화제 이야기(Beat 1 포함)가 들어가므로 STORY BANK 줄만 센다.
+    const storyCount = (text: string) => text.split('\n').filter((l) => /^\d+\.\s/.test(l) && l.includes('Beat 1') && !l.includes('OPENING')).length;
     const light = smallTalkInstruction('', [], brian, [], null, '');
     const full = freeTalkInstruction('', '', null, [], brian, [], FULL_MEMORY);
     expect(light).toContain('STORY BANK (Brian)');
-    expect(storyCount(light)).toBe(8);
+    expect(storyCount(light)).toBe(9);
     expect(full).toContain('STORY BANK (Brian)');
     expect(storyCount(full)).toBe(4);
   });
