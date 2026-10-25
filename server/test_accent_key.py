@@ -241,5 +241,45 @@ class BriefTest(unittest.TestCase):
         self.assertEqual({c["contrast"]: c["as_other"] for c in result["contrasts"]}["b_v"], 1)
 
 
+class AccentKeyHttpTest(TempPronDir):
+    def setUp(self):
+        super().setUp()
+        from fastapi.testclient import TestClient
+
+        from server import main
+
+        self.client = TestClient(main.app)
+        pron.finish(ANSWERS, now=MADE)
+
+    def test_get_returns_habits_and_words_without_the_removed_log(self):
+        accent_key.merge_call_words("2026-10-21-100000", [{"heard": "boat", "intended": "vote", "habit": "b_v:vote"}])
+
+        body = self.client.get("/api/accent-key").json()
+
+        self.assertEqual(body["source_date"], "2026-10-20")
+        self.assertIn("b_v:vote", {h["id"] for h in body["habits"]})
+        self.assertEqual([w["id"] for w in body["words"]], ["boat>vote"])
+        self.assertNotIn("removed", body)
+
+    def test_remove_a_habit_and_a_word_then_get_no_longer_lists_them(self):
+        accent_key.merge_call_words("2026-10-21-100000", [{"heard": "boat", "intended": "vote", "habit": "b_v:vote"}])
+
+        res = self.client.post("/api/accent-key/remove", json={"kind": "habit", "id": "b_v:vote"})
+        self.assertEqual(res.status_code, 200)
+        self.assertNotIn("b_v:vote", {h["id"] for h in res.json()["habits"]})
+        res = self.client.post("/api/accent-key/remove", json={"kind": "word", "id": "boat>vote"})
+        self.assertEqual(res.json()["words"], [])
+        again = self.client.get("/api/accent-key").json()
+        self.assertNotIn("b_v:vote", {h["id"] for h in again["habits"]})
+        self.assertEqual(again["words"], [])
+
+    def test_remove_rejects_bad_requests(self):
+        post = self.client.post
+        self.assertEqual(post("/api/accent-key/remove", json={"kind": "habit", "id": "nope:x"}).status_code, 404)
+        self.assertEqual(post("/api/accent-key/remove", json={"kind": "other", "id": "x"}).status_code, 400)
+        self.assertEqual(post("/api/accent-key/remove", json={}).status_code, 400)
+        self.assertEqual(post("/api/accent-key/remove", content="{}", headers={"content-type": "text/plain"}).status_code, 415)
+
+
 if __name__ == "__main__":
     unittest.main()
