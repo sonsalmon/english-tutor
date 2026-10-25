@@ -6,6 +6,7 @@ CHAT_DIR/<id>.jsonl 에 메시지를 한 줄씩 덧붙이고(role me|friend, tex
 partner_memory.update(mode="chat")를 돌린다.
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -67,6 +68,17 @@ def state_path(partner_id: str) -> Path:
     return get_chat_dir() / f"{partner_id}.state.json"
 
 
+def marks_path(partner_id: str) -> Path:
+    if not valid_partner(partner_id):
+        raise ValueError(f"알 수 없는 친구: {partner_id!r}")
+    return get_chat_dir() / f"{partner_id}.marks.json"
+
+
+def message_id(m: Dict[str, str]) -> str:
+    """메시지 파일을 고치지 않고도 정해지는 고정 id(역할·시각·글에서 만든다)."""
+    return hashlib.sha1(f"{m['role']}|{m['at']}|{m['text']}".encode("utf-8")).hexdigest()[:12]
+
+
 def partner_lock(partner_id: str) -> threading.Lock:
     with _FILE_LOCK:
         return _PARTNER_LOCKS.setdefault(partner_id, threading.Lock())
@@ -114,8 +126,90 @@ def read_all(partner_id: str) -> List[Dict[str, str]]:
     return messages
 
 
+def read_marks(partner_id: str) -> Dict[str, List[str]]:
+    """{'pinned': [...], 'deleted': [...]}. 파일이 없거나 깨졌으면 둘 다 비어 있다."""
+    try:
+        data = json.loads(marks_path(partner_id).read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError):
+        data = {}
+    out: Dict[str, List[str]] = {}
+    for key in ("pinned", "deleted"):
+        items = data.get(key) if isinstance(data, dict) else None
+        out[key] = [i for i in items if isinstance(i, str)] if isinstance(items, list) else []
+    return out
+
+
+def _write_marks(partner_id: str, marks: Dict[str, List[str]]) -> None:
+    path = marks_path(partner_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".marks-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(marks, f, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def read_visible(partner_id: str) -> List[Dict[str, Any]]:
+    """지워지지 않은 모든 메시지(id·pinned 포함). 화면과 모델 문맥은 이 목록만 쓴다."""
+    with _FILE_LOCK:
+        messages = read_all(partner_id)
+        marks = read_marks(partner_id)
+    deleted, pinned = set(marks["deleted"]), set(marks["pinned"])
+    out: List[Dict[str, Any]] = []
+    for m in messages:
+        mid = message_id(m)
+        if mid not in deleted:
+            out.append({**m, "id": mid, "pinned": mid in pinned})
+    return out
+
+
 def load_messages(partner_id: str, limit: int = SHOWN_MESSAGES) -> List[Dict[str, str]]:
-    return read_all(partner_id)[-limit:]
+    """지워진 메시지를 뺀 최근 메시지(role·text·at)."""
+    return [{k: m[k] for k in ("role", "text", "at")} for m in read_visible(partner_id)[-limit:]]
+
+
+def load_view(partner_id: str, limit: int = SHOWN_MESSAGES) -> Dict[str, Any]:
+    """화면용: 최근 메시지(id·pinned 포함)와, 오래되어 목록 밖이어도 보여 줄 고정 메시지 전부."""
+    visible = read_visible(partner_id)
+    return {"messages": visible[-limit:], "pinned": [m for m in visible if m["pinned"]]}
+
+
+def _toggle(partner_id: str, mid: str, update: Callable[[Dict[str, List[str]]], None]) -> None:
+    with _FILE_LOCK:
+        if not any(m["id"] == mid for m in read_visible(partner_id)):
+            raise KeyError(mid)
+        marks = read_marks(partner_id)
+        update(marks)
+        _write_marks(partner_id, marks)
+
+
+def set_pinned(partner_id: str, mid: str, pinned: bool) -> None:
+    """메시지를 고정하거나 고정을 푼다. 없는(또는 지워진) 메시지면 KeyError."""
+
+    def update(marks: Dict[str, List[str]]) -> None:
+        keep = [i for i in marks["pinned"] if i != mid]
+        marks["pinned"] = keep + [mid] if pinned else keep
+
+    _toggle(partner_id, mid, update)
+
+
+def delete_message(partner_id: str, mid: str) -> None:
+    """메시지를 지운 것으로 표시한다(파일의 줄은 그대로 두어 기억 반영 위치가 어긋나지 않는다). 없으면 KeyError."""
+
+    def update(marks: Dict[str, List[str]]) -> None:
+        marks["pinned"] = [i for i in marks["pinned"] if i != mid]
+        if mid not in marks["deleted"]:
+            marks["deleted"].append(mid)
+
+    _toggle(partner_id, mid, update)
 
 
 def append_messages(partner_id: str, messages: List[Dict[str, str]]) -> None:
@@ -213,7 +307,7 @@ def send(
     """학습자 메시지를 받아 친구의 답을 만들고 둘 다 파일에 덧붙인다. 답을 못 받으면 아무것도 쓰지 않고 ChatError."""
     generate = generate or generate_reply
     with partner_lock(partner_id):
-        history = read_all(partner_id)
+        history = [{k: m[k] for k in ('role', 'text', 'at')} for m in read_visible(partner_id)]
         mine = {"role": "me", "text": message, "at": _now()}
         try:
             reply = clean_reply(generate(instruction, history + [mine]))
@@ -224,7 +318,8 @@ def send(
             raise ChatError(str(type(e).__name__)) from e
         theirs = {"role": "friend", "text": reply, "at": _now()}
         append_messages(partner_id, [mine, theirs])
-    return {"reply": reply, "messages": [mine, theirs]}
+    shown = [{**m, "id": message_id(m), "pinned": False} for m in (mine, theirs)]
+    return {"reply": reply, "messages": shown}
 
 
 def _read_state(partner_id: str) -> int:
@@ -261,7 +356,8 @@ def prepare_close(partner_id: str) -> Optional[Tuple[List[Tuple[str, str]], int]
     with _FILE_LOCK:
         messages = read_all(partner_id)
         total = len(messages)
-        pending = messages[min(_read_state(partner_id), total) :]
+        deleted = set(read_marks(partner_id)["deleted"])
+        pending = [m for m in messages[min(_read_state(partner_id), total) :] if message_id(m) not in deleted]
         if not any(m["role"] == "me" for m in pending):
             return None
         if partner_id in _INFLIGHT:  # 진행 중이면 겹쳐 돌리지 않는다. 끝난 뒤 남은 메시지는 호출한 쪽이 한 번 더 건다.
