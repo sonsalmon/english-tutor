@@ -34,7 +34,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCRequestHandler,
 )
 
-from server import call_bot, chat, clip_translate, clipdb, culture_filter, culturedb, feed, native_expr, people, phrase_gloss, pron, review, summary_jobs, tts, wordbook, youtube
+from server import accent_key, call_bot, chat, clip_translate, clipdb, culture_filter, culturedb, feed, native_expr, people, phrase_gloss, pron, review, summary_jobs, tts, wordbook, youtube
 from server.call_bot import parse_call_config, run_bot, time_limit_for_mode
 from server import partner_memory, resume
 from server.history import list_calls, live_cost_of, load_call, totals as call_totals
@@ -129,10 +129,11 @@ async def learner_profile_endpoint():
         card = None
         broken = True
     pron_result = await asyncio.to_thread(pron.latest_result)
+    accent = await asyncio.to_thread(lambda: accent_key.get_key(pron_result, use_latest=False))
     practice, wordbook_lists = await _bridge_lists_within(PRACTICE_DEADLINE_SEC)
     return {
         "load_failed": broken,
-        "brief": "\n".join(part for part in (pron.pron_brief(pron_result), profile_brief(card)) if part),
+        "brief": "\n".join(part for part in (pron.pron_brief(pron_result, accent), profile_brief(card)) if part),
         "pron": pron.weak_summary(pron_result),
         "interests": list(card["interests"]) if card else [],
         "updated": card["updated"] if card else None,
@@ -967,6 +968,25 @@ async def pron_finish_endpoint(raw: Request):
 async def pron_latest_endpoint():
     """가장 최근 시험 결과 그대로. 없으면 {"result": null}."""
     return await asyncio.to_thread(pron.latest_result) or {"result": None}
+
+
+@app.get("/api/accent-key")
+async def accent_key_endpoint():
+    """내 말투 정답지(습관·통화에서 모은 오인식 단어). 최신 발음 시험 결과로 다시 만들어 PRON_DIR에 저장한다."""
+    return accent_key.public_key(await asyncio.to_thread(accent_key.refresh))
+
+
+@app.post("/api/accent-key/remove")
+async def accent_key_remove_endpoint(raw: Request):
+    """틀린 항목 하나를 지운다. 본문 {"kind": "habit"|"word", "id": "..."}. 없는 항목이면 404."""
+    body = await _json_object(raw)
+    try:
+        key = await asyncio.to_thread(accent_key.remove, body.get("kind"), body.get("id"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="그런 항목이 없어요.")
+    return accent_key.public_key(key)
 
 
 # 셸(index.html)·서비스 워커·매니페스트는 브라우저 HTTP 캐시가 옛 것을 주지 않게 매번 확인시킨다.

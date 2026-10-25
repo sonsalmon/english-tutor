@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { PartnerMemory, Wordbook } from './api';
-import { buildChatInstruction, CALL_TOOLS, FACT_BUDGET, FACT_CORE_CEILING, freeTalkInstruction, friendCoachBlock, friendMemoryBlock, missionInstruction, selectFacts, nativeBlock, openingStory, PARTNER_PROMPT_LIMIT, smallTalkInstruction, teachbackInstruction, trimMemory, trimStoryBank, wordbookBlock } from './instructions';
+import { accentBlock, ACCENT_KEY_RULE, buildChatInstruction, CALL_TOOLS, FACT_BUDGET, FACT_CORE_CEILING, freeTalkInstruction, friendCoachBlock, friendMemoryBlock, missionInstruction, selectFacts, nativeBlock, openingStory, PARTNER_PROMPT_LIMIT, smallTalkInstruction, teachbackInstruction, trimMemory, trimStoryBank, wordbookBlock } from './instructions';
 import type { CoachSettings } from './coachSettings';
 import { PARTNERS, partnerById } from './partners';
 import { buildInstruction } from './setup';
@@ -130,14 +130,60 @@ describe('buildChatInstruction', () => {
   });
 });
 
+describe('accent key rule', () => {
+  const BRIEF = 'Pronunciation check (reading test 2026-10-20): b / v: vote was heard as boat in 1 of 1 sentences.';
+  const park = partnerById('park');
+  const priya = partnerById('priya');
+  const LESSON = [{ heading: 'A', body: 'b' }];
+
+  test('every kind of call carries the rule when the notes hold a pronunciation check', () => {
+    const calls = [
+      smallTalkInstruction(BRIEF, [], park),
+      freeTalkInstruction('weekend', BRIEF, null, [], park),
+      missionInstruction(MISSION, BRIEF, null, [], park),
+      smallTalkInstruction(BRIEF, [], priya),
+      freeTalkInstruction('weekend', BRIEF, null, [], priya),
+      missionInstruction(MISSION, BRIEF, null, [], priya),
+      teachbackInstruction(LESSON, 'during', null, BRIEF),
+      teachbackInstruction(LESSON, 'after', null, BRIEF),
+    ];
+    for (const text of calls) expect(text).toContain(ACCENT_KEY_RULE);
+  });
+
+  test('no rule without a pronunciation check, and the rule never tells anyone to ask or comment', () => {
+    expect(accentBlock('')).toBe('');
+    expect(accentBlock('Level: B1.2.')).toBe('');
+    expect(smallTalkInstruction('Level: B1.2.', [], priya)).not.toContain('ACCENT KEY');
+    expect(teachbackInstruction(LESSON, 'during', null, '')).not.toContain('ACCENT KEY');
+    expect(ACCENT_KEY_RULE).toContain('do not comment on their pronunciation');
+    expect(ACCENT_KEY_RULE).toContain('Only when BOTH readings make sense');
+  });
+
+  test('the old ask-once rule is gone from every prompt', () => {
+    for (const text of [smallTalkInstruction(BRIEF, [], priya), freeTalkInstruction('x', BRIEF, null, [], priya), missionInstruction(MISSION, BRIEF, null, [], priya)]) {
+      expect(text).not.toContain('ask once');
+      expect(text).not.toContain('One exception: if the notes include a pronunciation check');
+    }
+  });
+
+  test('the key from the server is inside the notes and the rule stays outside the 2000-character notes cut', () => {
+    const long = `${BRIEF}\n${'x'.repeat(2500)}`;
+    const text = smallTalkInstruction(long, [], park);
+    expect(text).toContain('vote was heard as boat');
+    expect(text).toContain(ACCENT_KEY_RULE);
+  });
+});
+
 describe('review fixes (next11)', () => {
   const BRIEF = 'Pronunciation check: can vs can\'t. Expressions to recycle: no worries';
 
-  test('text chat ignores the pronunciation check, calls keep the exception', () => {
+  test('text chat ignores the pronunciation check, calls read it as the accent key', () => {
     const chat = buildChatInstruction(partnerById('priya'), BRIEF, null, []);
     expect(chat).toContain('In text chat, ignore any pronunciation check in the notes.');
-    expect(chat).not.toContain('Did you mean can or can');
-    expect(smallTalkInstruction(BRIEF, [], partnerById('priya'))).toContain('Did you mean can or can');
+    expect(chat).not.toContain('ACCENT KEY');
+    const call = smallTalkInstruction(BRIEF, [], partnerById('priya'));
+    expect(call).toContain(ACCENT_KEY_RULE);
+    expect(call).not.toContain('ask once');
   });
 
   test('no friend asks follow-up questions "because they really want to know"', () => {

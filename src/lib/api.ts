@@ -543,3 +543,64 @@ export async function getCallCulture(stem: string, signal?: AbortSignal): Promis
     attribution: typeof data?.attribution === 'string' ? data.attribution : '',
   };
 }
+
+
+// 내 말투 정답지(GET /api/accent-key). 습관은 발음 시험 결과에서, 단어는 통화 뒤 분석에서 온다.
+export type AccentAction = 'practice' | 'adjust'; // 연습할 발음 | 앱이 알아서 보정만
+export type AccentHabit = {
+  id: string;
+  label: string;
+  meant: string;
+  heard_as: string;
+  count: number;
+  total: number;
+  strength: 'strong' | 'mild' | 'slight';
+  action: AccentAction;
+  tip: string;
+  examples: { meant_text: string; heard_text: string }[];
+};
+export type AccentWord = { id: string; heard: string; intended: string; count: number; action: AccentAction; last_seen: string };
+export type AccentKey = { source_date: string; habits: AccentHabit[]; words: AccentWord[] };
+
+const str = (v: unknown) => (typeof v === 'string' ? v : '');
+const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+const actionOf = (v: unknown): AccentAction => (v === 'practice' ? 'practice' : 'adjust');
+
+export function parseAccentKey(data: any): AccentKey {
+  const habits = (Array.isArray(data?.habits) ? data.habits : []).filter((h: any) => typeof h?.id === 'string' && typeof h?.meant === 'string' && typeof h?.heard_as === 'string');
+  const words = (Array.isArray(data?.words) ? data.words : []).filter((w: any) => typeof w?.id === 'string' && typeof w?.heard === 'string' && typeof w?.intended === 'string');
+  return {
+    source_date: str(data?.source_date),
+    habits: habits.map((h: any) => ({
+      id: h.id,
+      label: str(h.label),
+      meant: h.meant,
+      heard_as: h.heard_as,
+      count: num(h.count),
+      total: num(h.total),
+      strength: h.strength === 'strong' || h.strength === 'mild' ? h.strength : 'slight',
+      action: actionOf(h.action),
+      tip: str(h.tip),
+      examples: (Array.isArray(h.examples) ? h.examples : []).map((e: any) => ({ meant_text: str(e?.meant_text), heard_text: str(e?.heard_text) })).filter((e: any) => e.heard_text),
+    })),
+    words: words.map((w: any) => ({ id: w.id, heard: w.heard, intended: w.intended, count: num(w.count) || 1, action: actionOf(w.action), last_seen: str(w.last_seen) })),
+  };
+}
+
+export async function getAccentKey(signal?: AbortSignal): Promise<AccentKey> {
+  const res = await fetch('/api/accent-key', { signal });
+  if (!res.ok) throw new Error(await errorMessage(res, '말투 정답지를 불러오지 못했어요.'));
+  return parseAccentKey(await res.json());
+}
+
+// 틀린 항목 하나를 정답지에서 지운다. 돌려받는 것은 지운 뒤의 정답지다.
+export async function removeAccentEntry(kind: 'habit' | 'word', id: string): Promise<AccentKey> {
+  let res: Response;
+  try {
+    res = await fetch('/api/accent-key/remove', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind, id }) });
+  } catch {
+    throw new Error('서버에 연결하지 못했어요.');
+  }
+  if (!res.ok) throw new Error(await errorMessage(res, '지우지 못했어요.'));
+  return parseAccentKey(await res.json());
+}

@@ -17,6 +17,7 @@ import {
   type Recorder,
 } from '../lib/pron';
 import { go } from '../lib/router';
+import { AccentKeySection } from './PronAccentKey';
 
 const METER_BARS = 14;
 const MIN_SECONDS = 0.5;
@@ -523,6 +524,8 @@ function Results({ result, onRetake, retaking }: { result: PronResult; onRetake:
         </section>
       )}
 
+      <AccentKeySection />
+
       <div className="mt-8 flex flex-col gap-3 lg:flex-row">
         <PrimaryButton onClick={onRetake} disabled={retaking}>
           <RotateCcw size={20} aria-hidden />
@@ -645,6 +648,8 @@ export function Pron() {
           </div>
         </section>
       )}
+
+      <AccentKeySection />
 
       {loadError && (
         <div role="alert" className="mt-4">
