@@ -28,7 +28,7 @@ function RemoveButton({ what, onRemove }: { what: string; onRemove: () => Promis
 
   if (!asking) {
     return (
-      <button type="button" onClick={() => setAsking(true)} aria-label={`${what} 지우기`} className="min-h-11 rounded-xl px-3 text-sm font-semibold text-ink-soft underline decoration-line underline-offset-4 active:text-ink">
+      <button type="button" onClick={() => setAsking(true)} aria-label={`${what} 지우기`} className="-ml-3 min-h-11 rounded-xl px-3 text-sm font-semibold text-ink-soft underline decoration-line underline-offset-4 active:text-ink">
         틀렸어요, 지우기
       </button>
     );
@@ -91,7 +91,7 @@ function HabitCard({ habit, onRemove }: { habit: AccentHabit; onRemove: () => Pr
           <p className="mt-1 text-[15px] leading-relaxed">{habit.tip}</p>
         </details>
       )}
-      <div className="mt-2 -ml-3">
+      <div className="mt-2">
         <RemoveButton what={`${habit.meant}가 ${habit.heard_as}로 들리는 습관`} onRemove={onRemove} />
       </div>
     </article>
@@ -112,7 +112,7 @@ function WordRow({ word, onRemove }: { word: AccentWord; onRemove: () => Promise
         </div>
         <ActionBadge action={word.action} />
       </div>
-      <div className="-ml-3">
+      <div>
         <RemoveButton what={`${word.intended}가 ${word.heard}로 들린 단어`} onRemove={onRemove} />
       </div>
     </li>
