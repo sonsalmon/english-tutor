@@ -2,6 +2,7 @@ import { PipecatClient } from '@pipecat-ai/client-js';
 import { SmallWebRTCTransport } from '@pipecat-ai/small-webrtc-transport';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { EMPTY_STATS, readStats, telemetryPayload, type StatsSample } from './callStats';
+import { EMPTY_TAKE_MS, MIN_SEGMENT_MS, REPLAY_RATE, TAIL_MS, TurnTape, parseCallNotice, recorderMime, type MicState } from './callux';
 import { friendlyError } from './errors';
 import { LatencyMeter, clearPendingLatency, stashLatency } from './latency';
 import {
@@ -65,6 +66,11 @@ export function useCall() {
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [sharedClips, setSharedClips] = useState<SharedClip[]>([]);
   const [reconnecting, setReconnecting] = useState(false);
+  const [thinking, setThinking] = useState(false);
+  const [micNotice, setMicNotice] = useState<MicState>('ok');
+  const [canReplay, setCanReplay] = useState(() => recorderMime() !== null);
+  const [replayReady, setReplayReady] = useState(false);
+  const [replaying, setReplaying] = useState(false);
   const shareCount = useRef(0);
   // 일시정지: 멈춘 시각(null이면 진행 중)과 지금까지 멈춰 있던 시간 합계(ms). 남은 시간 계산에 쓴다.
   const [pausedAt, setPausedAt] = useState<number | null>(null);
@@ -74,6 +80,16 @@ export function useCall() {
 
   const clientRef = useRef<PipecatClient | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  // 느리게 다시 듣기: 상대 소리를 차례마다 녹음해 두었다가 0.75배로 튼다.
+  const mimeRef = useRef(recorderMime());
+  const tapeRef = useRef(new TurnTape<Blob>());
+  const partnerTrackRef = useRef<MediaStreamTrack | null>(null);
+  const takeRef = useRef<{ recorder: MediaRecorder; chunks: Blob[]; startedAt: number } | null>(null);
+  const tailTimerRef = useRef<number | null>(null);
+  const replayAudioRef = useRef<HTMLAudioElement | null>(null);
+  const replayTokenRef = useRef(0);
+  const replayStopRef = useRef<() => void>(() => undefined);
+  const replayResumesRef = useRef(false);
   const reasonRef = useRef<EndReason | null>(null);
   const liveRef = useRef(false);
   const meterRef = useRef<LatencyMeter | null>(null);
@@ -96,6 +112,10 @@ export function useCall() {
   const connectRef = useRef<(params: DialParams, redial: boolean) => Promise<void>>(() => Promise.resolve());
   const lostRef = useRef<() => void>(() => undefined);
   const recoverMicRef = useRef<() => void>(() => undefined);
+  const cancelReplayRef = useRef<(resumeAfter: boolean) => void>(() => undefined);
+  const discardTakeRef = useRef<() => void>(() => undefined);
+  const startTakeRef = useRef<() => void>(() => undefined);
+  const stopTakeSoonRef = useRef<() => void>(() => undefined);
 
   const addChunk = useCallback((who: Speaker, chunk: string) => {
     if (!chunk || !chunk.replace(NOISE_MARK, '').trim()) return;
@@ -123,6 +143,8 @@ export function useCall() {
   // 현재 연결만 닫는다. 세션 번호를 올려 이 연결에서 뒤늦게 오는 콜백(onDisconnected 등)을 무시하게 한다.
   const dropClient = useCallback((stash: boolean) => {
     sessionRef.current += 1;
+    setThinking(false);
+    setMicNotice('ok');
     const client = clientRef.current;
     clientRef.current = null;
     const meter = meterRef.current;
@@ -141,6 +163,10 @@ export function useCall() {
 
   const release = useCallback(() => {
     clearTimers();
+    cancelReplayRef.current(false);
+    discardTakeRef.current();
+    tapeRef.current.clear();
+    setReplayReady(false);
     dropClient(true);
     reconnectingRef.current = false;
     setReconnecting(false);
@@ -280,7 +306,10 @@ export function useCall() {
                 meterRef.current?.attachMic(track);
                 track.addEventListener('ended', () => recoverMicRef.current());
               }
-              else meterRef.current?.attachBot(track);
+              else {
+                meterRef.current?.attachBot(track);
+                partnerTrackRef.current = track;
+              }
             }
             // SmallWebRTCTransport는 원격(Ms. Park) 트랙에 participant를 넘기지 않는다. local이 아니면 원격으로 본다.
             if (track.kind === 'audio' && !participant?.local && audioRef.current) {
@@ -291,8 +320,17 @@ export function useCall() {
               );
             }
           },
-          onBotStartedSpeaking: () => current() && setBotSpeaking(true),
-          onBotStoppedSpeaking: () => current() && setBotSpeaking(false),
+          onBotStartedSpeaking: () => {
+            if (!current()) return;
+            setBotSpeaking(true);
+            setThinking(false);
+            startTakeRef.current();
+          },
+          onBotStoppedSpeaking: () => {
+            if (!current()) return;
+            setBotSpeaking(false);
+            stopTakeSoonRef.current();
+          },
           onRemoteAudioLevel: (level) => current() && setBotLevel(level),
           onLocalAudioLevel: (level) => current() && setUserLevel(level),
           onUserInput: (data) => current() && addChunk('me', data.text),
@@ -310,6 +348,10 @@ export function useCall() {
               bell.volume = 0.6;
               void bell.play().catch(() => undefined);
               window.setTimeout(() => finish('mission_complete'), MISSION_END_DELAY_MS);
+            } else if (data?.type === 'thinking' || data?.type === 'mic_level') {
+              const notice = parseCallNotice(data);
+              if (notice?.kind === 'thinking') setThinking(notice.on);
+              else if (notice?.kind === 'mic_level') setMicNotice(notice.state);
             } else if (data?.type === 'time_limit') {
               reasonRef.current = data.reason === 'pause_limit' ? 'pause_limit' : 'time_limit';
             } else if (data?.type === 'shared_clip') {
@@ -393,6 +435,7 @@ export function useCall() {
       pausedAtRef.current = null;
       setAudioBlocked(false);
       setSharedClips([]);
+      setCanReplay(mimeRef.current !== null);
       reasonRef.current = null;
       liveRef.current = false;
       everLiveRef.current = false;
@@ -519,10 +562,11 @@ export function useCall() {
     meterRef.current?.setPaused(true);
     pausedAtRef.current = Date.now();
     setPausedAt(pausedAtRef.current);
+    setThinking(false);
     client.sendClientMessage('pause');
   }, []);
 
-  const resume = useCallback(() => {
+  const resumeBase = useCallback(() => {
     const client = clientRef.current;
     const since = pausedAtRef.current;
     if (!client || since === null) return;
@@ -535,6 +579,140 @@ export function useCall() {
     client.sendClientMessage('resume');
     recoverMic();
   }, [recoverMic]);
+
+  const cancelReplay = useCallback(
+    (resumeAfter: boolean) => {
+      if (!replayTokenRef.current) return;
+      const resumes = replayResumesRef.current;
+      replayTokenRef.current = 0;
+      replayAudioRef.current?.pause();
+      replayStopRef.current();
+      setReplaying(false);
+      if (resumeAfter && resumes) resumeBase();
+    },
+    [resumeBase],
+  );
+  cancelReplayRef.current = cancelReplay;
+
+  // 다시 시작 버튼: 다시 듣는 중이면 그것부터 멈춘다.
+  const resume = useCallback(() => {
+    cancelReplay(false);
+    resumeBase();
+  }, [cancelReplay, resumeBase]);
+
+  const startTake = useCallback(() => {
+    if (tailTimerRef.current !== null) {
+      window.clearTimeout(tailTimerRef.current);
+      tailTimerRef.current = null;
+    }
+    const track = partnerTrackRef.current;
+    const mime = mimeRef.current;
+    if (takeRef.current || !track || mime === null) return;
+    tapeRef.current.begin(Date.now());
+    try {
+      const recorder = new MediaRecorder(new MediaStream([track]), { mimeType: mime });
+      const take = { recorder, chunks: [] as Blob[], startedAt: Date.now() };
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) take.chunks.push(e.data);
+      };
+      recorder.start();
+      takeRef.current = take;
+    } catch {
+      mimeRef.current = null;
+      setCanReplay(false);
+    }
+  }, []);
+  startTakeRef.current = startTake;
+
+  // 녹음을 끝내고 조각을 차례 묶음에 넣는다. 소리가 없으면 넣지 않는다.
+  const stopTake = useCallback((): Promise<void> => {
+    if (tailTimerRef.current !== null) {
+      window.clearTimeout(tailTimerRef.current);
+      tailTimerRef.current = null;
+    }
+    const take = takeRef.current;
+    if (!take) return Promise.resolve();
+    takeRef.current = null;
+    return new Promise<void>((resolve) => {
+      take.recorder.onstop = () => {
+        const ms = Date.now() - take.startedAt;
+        const blob = new Blob(take.chunks, { type: take.recorder.mimeType });
+        if (blob.size === 0 && ms >= EMPTY_TAKE_MS) {
+          mimeRef.current = null;
+          setCanReplay(false);
+        }
+        tapeRef.current.finish(blob.size > 0 && ms >= MIN_SEGMENT_MS ? blob : null, Date.now());
+        setReplayReady(tapeRef.current.ready);
+        resolve();
+      };
+      try {
+        take.recorder.stop();
+      } catch {
+        resolve();
+      }
+    });
+  }, []);
+
+  stopTakeSoonRef.current = () => {
+    if (tailTimerRef.current !== null) window.clearTimeout(tailTimerRef.current);
+    tailTimerRef.current = window.setTimeout(() => {
+      tailTimerRef.current = null;
+      void stopTake();
+    }, TAIL_MS);
+  };
+
+  discardTakeRef.current = () => {
+    if (tailTimerRef.current !== null) window.clearTimeout(tailTimerRef.current);
+    tailTimerRef.current = null;
+    const take = takeRef.current;
+    takeRef.current = null;
+    if (take && take.recorder.state !== 'inactive') {
+      take.recorder.onstop = null;
+      take.recorder.stop();
+    }
+  };
+
+  // 느리게 다시 듣기: 통화를 멈추고 직전 상대 말을 0.75배로 틀고, 끝나면 이어 간다. 이미 멈춘 상태였다면 멈춘 채로 둔다.
+  const replayLast = useCallback(async () => {
+    if (replayTokenRef.current) {
+      cancelReplay(true);
+      return;
+    }
+    if (!liveRef.current) return;
+    await stopTake();
+    const clips = tapeRef.current.clips();
+    if (clips.length === 0 || !liveRef.current) return;
+    replayResumesRef.current = pausedAtRef.current === null;
+    if (replayResumesRef.current) pause();
+    const token = Date.now();
+    replayTokenRef.current = token;
+    setReplaying(true);
+    if (!replayAudioRef.current) replayAudioRef.current = new Audio();
+    const audio = replayAudioRef.current;
+    audio.preservesPitch = true;
+    (audio as HTMLAudioElement & { webkitPreservesPitch?: boolean }).webkitPreservesPitch = true;
+    for (const clip of clips) {
+      if (replayTokenRef.current !== token) return;
+      const url = URL.createObjectURL(clip);
+      try {
+        audio.src = url;
+        audio.defaultPlaybackRate = REPLAY_RATE;
+        audio.playbackRate = REPLAY_RATE;
+        const ended = new Promise<void>((resolve) => {
+          replayStopRef.current = resolve;
+          audio.onended = () => resolve();
+          audio.onerror = () => resolve();
+        });
+        await audio.play();
+        await ended;
+      } catch {
+        break;
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    }
+    if (replayTokenRef.current === token) cancelReplay(true);
+  }, [cancelReplay, pause, stopTake]);
 
   // 통화 중 글·링크 보내기. 보냈으면 true. 자막에는 바로 "나" 말풍선으로 넣고, 서버가 읽은 결과(share_ack)가 오면 칩 제목을 고친다.
   const share = useCallback((raw: string): boolean => {
@@ -563,6 +741,8 @@ export function useCall() {
   useEffect(
     () => () => {
       clearTimers();
+      cancelReplayRef.current(false);
+      discardTakeRef.current();
       sessionRef.current += 1;
       const client = clientRef.current;
       clientRef.current = null;
@@ -573,5 +753,5 @@ export function useCall() {
     [clearTimers],
   );
 
-  return { status, lines, botSpeaking, botLevel, userLevel, micOn, error, result, endReason, liveAt, audioBlocked, reconnecting, paused: pausedAt !== null, pausedAt, pausedTotal, sharedClips, start, hangUp, pause, resume, toggleMic, resumeAudio, share };
+  return { thinking, micNotice, canReplay, replayReady, replaying, replayLast, status, lines, botSpeaking, botLevel, userLevel, micOn, error, result, endReason, liveAt, audioBlocked, reconnecting, paused: pausedAt !== null, pausedAt, pausedTotal, sharedClips, start, hangUp, pause, resume, toggleMic, resumeAudio, share };
 }

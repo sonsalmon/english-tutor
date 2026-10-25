@@ -67,6 +67,17 @@ WAIT_LOG_START_SEC = 8
 WAIT_LOG_EVERY_SEC = 5
 WAIT_LOG_MAX_SEC = 120
 WAIT_LOUD_PEAK = 600  # 약 -35 dBFS: 이보다 크면 말소리나 또럷한 잡음
+# 화면 안내(2026-10-25, 통화 화면 2·3번). 같은 대기 감시에서 작은 RTVI 서버 메시지를 보낸다.
+# 생각 중: 학습자가 말한 뒤(큰 프레임 THINK_MIN_VOICE_FRAMES개 이상) 조용해진 지 THINK_AFTER_SEC가 지나도 대답이 없으면.
+THINK_AFTER_SEC = 2.5
+THINK_MIN_VOICE_FRAMES = 10
+# 마이크 작음: 낱말 QUIET_MIN_WORDS개 이상 받아쓴 말의 소리 최대치가 QUIET_PEAK(약 -24 dBFS) 아래인 일이 연달아 QUIET_STREAK번.
+QUIET_PEAK = 2000
+QUIET_MIN_WORDS = 3
+QUIET_STREAK = 2
+# 잡음 큼: 대답 없음 진단 로그 때 큰 프레임이 NOISY_LOUD_PCT% 이상이면(말에는 쉬는 틈이 있어 그렇게 꽉 차지 않는다).
+NOISY_LOUD_PCT = 90
+MIC_CLEAR_LOUD_PCT = 50
 BARGE_IN_WORDS_ENV = "LIVE_BARGE_IN_WORDS"
 DEFAULT_BARGE_IN_WORDS = 3
 BARGE_IN_WORD_RE = re.compile(r"[^\W\d_]+(?:['’-][^\W\d_]+)*")
@@ -690,6 +701,20 @@ def live_input_languages(env=None) -> List[str]:
     return [code.strip() for code in (DEFAULT_LIVE_INPUT_LANGUAGES if raw is None else raw).split(",") if code.strip()]
 
 
+def quiet_utterance(peak: int, words: int) -> Optional[bool]:
+    """받아쓴 말 하나의 소리가 작았는지. 소리 기록이 없거나 낱말이 적으면 판단하지 않는다(None)."""
+    if peak <= 0 or words < QUIET_MIN_WORDS:
+        return None
+    return peak < QUIET_PEAK
+
+
+def noisy_wait(loud_pct: int) -> Optional[bool]:
+    """대답을 기다리는 동안 마이크가 계속 큰지(True), 충분히 조용한지(False), 애매한지(None)."""
+    if loud_pct >= NOISY_LOUD_PCT:
+        return True
+    return False if loud_pct < MIC_CLEAR_LOUD_PCT else None
+
+
 @functools.lru_cache(maxsize=1)
 def live_service_class():
     import math
@@ -697,6 +722,7 @@ def live_service_class():
     import numpy as np
     from google.genai.types import ActivityHandling, RealtimeInputConfig
     from pipecat.frames.frames import BotStartedSpeakingFrame, BotStoppedSpeakingFrame, InputAudioRawFrame
+    from pipecat.processors.frameworks.rtvi.frames import RTVIServerMessageFrame
     from pipecat.services.google.gemini_live.vertex.llm import GeminiLiveVertexLLMService
 
     class TranscriptHintedLiveService(GeminiLiveVertexLLMService):
@@ -717,6 +743,64 @@ def live_service_class():
             self._wait_peak = 0
             self._wait_frames = 0
             self._wait_loud = 0
+        # 화면 안내(생각 중·마이크 소리) 상태. 보낼 메시지는 outbox에 쌓았다가 process_frame에서 흘려 보낸다.
+        # __init__ 없이 만든 객체(테스트)에서도 돌도록 기본값은 클래스에 둔다.
+        _voice_frames = 0
+        _last_voice_at = 0.0
+        _think_voice_mark = 0
+        _thinking = False
+        _utter_peak = 0
+        _quiet_streak = 0
+        _mic_state = "ok"
+
+        def _queue(self, message: dict) -> None:
+            self.__dict__.setdefault("_outbox", []).append(message)
+
+        def _reset_notices(self) -> None:
+            self._voice_frames = 0
+            self._think_voice_mark = 0
+            self._utter_peak = 0
+            self._thinking = False
+
+        def _set_thinking(self, on: bool) -> None:
+            if self._thinking != on:
+                self._thinking = on
+                logger.info("Thinking notice: %s", "on" if on else "off")
+                self._queue({"type": "thinking", "on": on})
+
+        def _set_mic_state(self, state: str, peak: int = 0) -> None:
+            if self._mic_state != state:
+                self._mic_state = state
+                db = round(20 * math.log10(max(peak, 1) / 32768), 1) if peak else None
+                logger.info("Mic level notice: %s (peak %s dBFS)", state, db)
+                self._queue({"type": "mic_level", "state": state, "db": db})
+
+        def _check_thinking(self, loud: bool, now: float) -> None:
+            if loud:
+                self._voice_frames += 1
+                self._last_voice_at = now
+                # 생각 중이라고 알린 뒤 학습자가 다시 말하면(큰 프레임이 이어지면) 끈다.
+                if self._thinking and self._voice_frames - self._think_voice_mark >= THINK_MIN_VOICE_FRAMES:
+                    self._set_thinking(False)
+            elif not self._thinking and self._voice_frames >= THINK_MIN_VOICE_FRAMES and now - self._last_voice_at >= THINK_AFTER_SEC:
+                self._think_voice_mark = self._voice_frames
+                self._set_thinking(True)
+
+        def _check_quiet(self, text: str) -> None:
+            quiet = quiet_utterance(self._utter_peak, len(BARGE_IN_WORD_RE.findall(text)))
+            peak, self._utter_peak = self._utter_peak, 0
+            if quiet is None:
+                return
+            self._quiet_streak = self._quiet_streak + 1 if quiet else 0
+            if self._quiet_streak >= QUIET_STREAK:
+                self._set_mic_state("quiet", peak)
+            elif not quiet and self._mic_state == "quiet":
+                self._set_mic_state("ok", peak)
+
+        async def _flush_outbox(self) -> None:
+            box = self.__dict__.get("_outbox")
+            while box:
+                await self.push_frame(RTVIServerMessageFrame(data=box.pop(0)))
 
         def _note_waiting_audio(self, frame) -> None:
             """상대가 말을 끝낸 뒤 다음 대답이 늦으면 마이크 크기를 주기적으로 남긴다(대답 없음 진단, 2026-10-24).
@@ -724,18 +808,25 @@ def live_service_class():
             if self._waiting_since is None:
                 return
             samples = np.frombuffer(frame.audio, dtype=np.int16)
+            now = time.monotonic()
             if samples.size:
                 peak = int(np.abs(samples.astype(np.int32)).max())
                 self._wait_peak = max(self._wait_peak, peak)
                 self._wait_frames += 1
                 self._wait_loud += peak > WAIT_LOUD_PEAK
-            now = time.monotonic()
+                self._utter_peak = max(self._utter_peak, peak)
+                self._check_thinking(peak > WAIT_LOUD_PEAK, now)
             waited = now - self._waiting_since
             if waited >= WAIT_LOG_START_SEC and now - self._wait_logged_at >= WAIT_LOG_EVERY_SEC and waited <= WAIT_LOG_MAX_SEC:
                 db = 20 * math.log10(max(self._wait_peak, 1) / 32768)
                 loud = 100 * self._wait_loud // max(self._wait_frames, 1)
                 logger.info("Waiting for partner reply: %ds since partner stopped; mic peak %.0f dBFS, loud frames %d%%",
                             int(waited), db, loud)
+                noisy = noisy_wait(loud)
+                if noisy:
+                    self._set_mic_state("noisy", self._wait_peak)
+                elif noisy is False and self._mic_state == "noisy":
+                    self._set_mic_state("ok", self._wait_peak)
                 self._wait_logged_at, self._wait_peak, self._wait_frames, self._wait_loud = now, 0, 0, 0
 
         async def send_learner_text(self, text: str) -> None:
@@ -765,17 +856,28 @@ def live_service_class():
                 self._partner_speaking = True
                 self._heard_words = 0
                 self._waiting_since = None
+                self._set_thinking(False)
+                if self._mic_state == "noisy":
+                    self._set_mic_state("ok")
             elif isinstance(frame, BotStoppedSpeakingFrame):
                 self._partner_speaking = False
                 self._waiting_since = time.monotonic()
                 self._wait_logged_at, self._wait_peak, self._wait_frames, self._wait_loud = self._waiting_since, 0, 0, 0
+                self._reset_notices()
             await super().process_frame(frame, direction)
+            await self._flush_outbox()
 
         async def _handle_msg_input_transcription(self, message):
             await super()._handle_msg_input_transcription(message)
+            text = message.server_content.input_transcription.text or ""
+            # 중간 자막 가능 여부 증거(통화 화면 6번): 조각이 말하는 동안 오는지, 말이 끝난 뒤에만 오는지 마지막 큰 마이크 프레임 대비 시각을 남긴다.
+            if self._last_voice_at:
+                logger.info("Input chunk %r: %.1fs after the last loud mic frame (%d voice frames this turn)",
+                            text, time.monotonic() - self._last_voice_at, self._voice_frames)
+            self._check_quiet(text)
+            await self._flush_outbox()
             if not (self._barge_in_words and self._partner_speaking):
                 return
-            text = message.server_content.input_transcription.text or ""
             self._heard_words += count_barge_in_words(text)
             if self._heard_words < self._barge_in_words:
                 logger.info("Barge-in held: %r (%d/%d words)", text, self._heard_words, self._barge_in_words)

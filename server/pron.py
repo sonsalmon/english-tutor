@@ -193,13 +193,20 @@ def weak_contrasts(result: Dict[str, Any]) -> List[Dict[str, Any]]:
     return weak
 
 
-def pron_brief(result: Optional[Dict[str, Any]]) -> str:
-    """통화 지시문에 붙일 영어 두 줄(약한 대비가 최대 3개). 약한 대비가 없으면 빈 글."""
-    if not result:
-        return ""
-    weak = weak_contrasts(result)[:3]
+def pron_brief(result: Optional[Dict[str, Any]], key: Optional[Dict[str, Any]] = None) -> str:
+    """통화 지시문에 붙일 영어 정답지 메모(약한 대비가 최대 3개 + 통화에서 모은 오인식 단어 한 줄).
+
+    되묻는 규칙은 여기에 없다. 정답지로 읽는 규칙은 클라이언트 지시문(instructions.ts)이 붙인다.
+    key를 주면 정답지에서 지운 습관은 빠지고 통화에서 모은 단어가 들어간다. 둘 다 없으면 빈 글.
+    """
+    from server import accent_key
+
+    if key is not None:
+        result = accent_key.without_removed(result, key)
+    words_line = accent_key.words_brief(key)
+    weak = weak_contrasts(result)[:3] if result else []
     if not weak:
-        return ""
+        return f"Pronunciation check (earlier calls): {words_line}" if words_line else ""
     parts = []
     for c in weak:
         total = c["total"]
@@ -218,18 +225,11 @@ def pron_brief(result: Optional[Dict[str, Any]]) -> str:
         if c["unclear"]:
             pieces.append(f"could not tell in {c['unclear']} of {total} sentences")
         parts.append(f"{c['label']}: " + ", ".join(pieces))
-    first = weak[0]
-    misheard = (first.get("misheard") or [{}])[0].get("target")
-    pair = _pair_of(first["contrast"], misheard)
-    question = ""
-    if pair:
-        words = sorted([pair["target"], pair["other"]])
-        question = f" e.g. 'Did you mean {words[0]} or {words[1]}?'"
     head = f"Pronunciation check (reading test {result.get('date', '')}): "
-    tail = ".\nWhen you are not sure which of these words the learner said, ask briefly," + (question or " by naming the two words.")
+    tail = "."
     while len(parts) > 1 and len(head) + len("; ".join(parts)) + len(tail) > BRIEF_MAX_CHARS:
         parts.pop()
-    return head + "; ".join(parts) + tail
+    return head + "; ".join(parts) + tail + ("\n" + words_line if words_line else "")
 
 
 def _worst_direction(contrast: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -330,6 +330,13 @@ def finish(answers: List[Dict[str, str]], now: Optional[datetime] = None, model:
         _write_atomic(path, result)
     except OSError as e:
         logger.error("발음 시험 결과 저장 실패 %s: %s", path, e)
+    else:
+        try:
+            from server import accent_key
+
+            accent_key.refresh(result)
+        except Exception as e:  # noqa: BLE001 - 정답지 갱신이 실패해도 시험 결과는 돌려준다
+            logger.error("정답지 갱신 실패: %s", e)
     return result
 
 

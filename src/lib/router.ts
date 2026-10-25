@@ -53,8 +53,13 @@ function parseParam(hash: string): string | null {
   return segments(hash)[1] || null;
 }
 
-export function go(route: Route, replace = false, param?: string) {
-  const path = route === 'home' ? '' : route + (param ? `/${encodeURIComponent(param)}` : '');
+// #/person/park/drill처럼 param 뒤에 한 칸 더 붙은 하위 화면 이름. 없으면 null.
+function parseSub(hash: string): string | null {
+  return segments(hash)[2] || null;
+}
+
+export function go(route: Route, replace = false, param?: string, sub?: string) {
+  const path = route === 'home' ? '' : route + (param ? `/${encodeURIComponent(param)}${sub ? `/${encodeURIComponent(sub)}` : ''}` : '');
   const hash = `#/${path}`;
   if (replace) window.location.replace(hash);
   else window.location.hash = hash;
@@ -77,6 +82,10 @@ function currentHash(): string {
 
 export function useRoute(): Route {
   return parse(useSyncExternalStore(subscribe, currentHash));
+}
+
+export function useRouteSub(): string | null {
+  return parseSub(useSyncExternalStore(subscribe, currentHash));
 }
 
 export function useRouteParam(): string | null {

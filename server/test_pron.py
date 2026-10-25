@@ -150,10 +150,10 @@ class BriefTest(unittest.TestCase):
             brief,
             "Pronunciation check (reading test 2026-10-20): "
             "can / can't: can't was heard as can in 4 of 4 sentences; "
-            "l / r: correct was heard as collect in 1 of 1 sentences.\n"
-            "When you are not sure which of these words the learner said, ask briefly, e.g. 'Did you mean can or can't?'",
+            "l / r: correct was heard as collect in 1 of 1 sentences.",
         )
         self.assertNotIn("p / f", brief)
+        self.assertNotIn("ask", brief)
 
     def test_unclear_only_contrast_is_reported(self):
         brief = pron.pron_brief(self.result([{"id": "p1", "text": "I bought a new [pan/fan?]."}]))
@@ -207,7 +207,7 @@ class BriefTest(unittest.TestCase):
         brief = pron.pron_brief(self.result(everything_wrong))
         self.assertLessEqual(len(brief), 600)
         self.assertTrue(brief.startswith("Pronunciation check (reading test 2026-10-20): "))
-        self.assertTrue(brief.endswith("'Did you mean can or can't?'"))
+        self.assertTrue(brief.endswith("."))
 
     def test_brief_drops_whole_contrast_parts_when_over_the_cap(self):
         everything_wrong = [{"id": i["id"], "text": f"I said {i['other']} today."} for i in ITEMS.values()]
@@ -217,7 +217,27 @@ class BriefTest(unittest.TestCase):
 
         self.assertIn("can / can't", brief)
         self.assertNotIn("b / v", brief)
-        self.assertTrue(brief.endswith("'Did you mean can or can't?'"))
+        self.assertTrue(brief.endswith("."))
+
+    def test_brief_with_a_key_skips_removed_habits_and_adds_call_words(self):
+        from server import accent_key
+
+        result = self.result(self.ANSWERS)
+        key = accent_key.get_key(result, use_latest=False)
+        key = {**key, "habits": [h for h in key["habits"] if h["id"] != "can_cant:can't"]}
+        key["words"] = [{"heard": "boat", "intended": "vote"}]
+
+        brief = pron.pron_brief(result, key)
+
+        self.assertNotIn("can / can't", brief)
+        self.assertIn("l / r: correct was heard as collect", brief)
+        self.assertTrue(brief.endswith("(meant -> heard): vote -> boat."))
+
+    def test_brief_from_call_words_alone(self):
+        brief = pron.pron_brief(None, {"habits": [], "words": [{"heard": "boat", "intended": "vote"}]})
+
+        self.assertTrue(brief.startswith("Pronunciation check (earlier calls): Words the learner meant"))
+        self.assertEqual(pron.pron_brief(None, {"habits": [], "words": []}), "")
 
 
 class PronHttpTest(unittest.TestCase):
@@ -292,8 +312,9 @@ class PronHttpTest(unittest.TestCase):
         )
         self.assertEqual((rows["l_r"]["total"], rows["l_r"]["as_target"]), (1, 1))
         self.assertEqual(len(result["contrasts"]), 7)
-        [saved] = list(self.pron_dir.glob("*.json"))
+        [saved] = [p for p in self.pron_dir.glob("*.json") if p.name != "accent-key.json"]
         self.assertRegex(saved.name, r"^\d{4}-\d{2}-\d{2}-\d{6}\.json$")
+        self.assertTrue((self.pron_dir / "accent-key.json").is_file())
         self.assertEqual(json.loads(saved.read_text(encoding="utf-8")), result)
         self.assertEqual(self.client.get("/api/pron/latest").json(), result)
 

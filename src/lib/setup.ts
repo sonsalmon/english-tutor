@@ -1,4 +1,5 @@
 import type { PartnerMemory, Wordbook } from './api';
+import { loadCoachSettings, type CoachSettings } from './coachSettings';
 import type { CallMode, EndReason, MissionResult } from './useCall';
 import {
   freeTalkInstruction,
@@ -57,12 +58,12 @@ export function callTitle(setup: CallSetup): string {
   return setup.topic ? freeTalkTitle(setup.topic) : 'Ms. Park과 자유 대화';
 }
 
-export function buildInstruction(setup: CallSetup, brief: string, words: PracticeWord[] = [], interests: string[] = [], memory: PartnerMemory | null = null, wordbook: Wordbook | null = null): string {
+export function buildInstruction(setup: CallSetup, brief: string, words: PracticeWord[] = [], interests: string[] = [], memory: PartnerMemory | null = null, wordbook: Wordbook | null = null, coach: CoachSettings = loadCoachSettings()): string {
   const partner = setupPartner(setup);
-  if (setup.kind === 'mission') return missionInstruction(setup.mission, brief, setup.retry, words, partner, interests);
-  if (setup.kind === 'smalltalk') return smallTalkInstruction(brief, words, partner, interests, memory, setup.chip, wordbook);
+  if (setup.kind === 'mission') return missionInstruction(setup.mission, brief, setup.retry, words, partner, interests, coach);
+  if (setup.kind === 'smalltalk') return smallTalkInstruction(brief, words, partner, interests, memory, setup.chip, wordbook, coach);
   if (setup.kind === 'teachback') return teachbackInstruction(setup.sections, setup.seniorMode, setup.retry, brief);
-  return freeTalkInstruction(setup.topic, brief, setup.retry, words, partner, interests, memory, setup.chip, wordbook);
+  return freeTalkInstruction(setup.topic, brief, setup.retry, words, partner, interests, memory, setup.chip, wordbook, coach);
 }
 
 // Teach-back은 수업 내용에 집중하도록 readgloss 단어를 넣지 않는다.

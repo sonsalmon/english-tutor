@@ -117,3 +117,18 @@ describe('American friends', () => {
     for (const word of ['Houston', 'Nairobi', 'Minneapolis', 'matatu', 'FAITH LIFE']) expect(brian).toContain(word);
   });
 });
+
+describe('friend coach mode across all friends', () => {
+  test('call prompts with the coach switch on keep the never-correct rule and add the coach block', () => {
+    for (const p of PARTNERS.filter((x) => x.id !== 'park')) {
+      const coach = { correction: 'normal' as const, friendCoach: true };
+      const small = smallTalkInstruction('', [], p, [], FULL_MEMORY, '', null, coach);
+      const free = freeTalkInstruction('', '', null, [], p, [], FULL_MEMORY, '', null, coach);
+      for (const text of [small, free]) {
+        expect(text.length).toBeLessThanOrEqual(PARTNER_PROMPT_LIMIT);
+        expect(text).toContain('COACH MOMENT');
+        expect(text).toContain('Never correct the learner');
+      }
+    }
+  });
+});

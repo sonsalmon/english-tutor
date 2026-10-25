@@ -2,6 +2,7 @@ import { History as HistoryIcon, Mic } from 'lucide-react';
 import { useState } from 'react';
 import { ScreenSettings } from '../components/ScreenSettings';
 import { List, RowLink, Screen } from '../components/ui';
+import { loadCorrection, loadFriendCoach, saveCorrection, saveFriendCoach, type CorrectionStrength } from '../lib/coachSettings';
 import { loadKoSettings, saveKoSettings } from '../lib/koLines';
 import { go } from '../lib/router';
 import { loadShareWordbook, saveShareWordbook } from '../lib/shareWordbook';
@@ -27,6 +28,37 @@ function ToggleRow({ label, desc, checked, onChange }: { label: string; desc: st
   );
 }
 
+const CORRECTION_OPTIONS: { value: CorrectionStrength; label: string; desc: string }[] = [
+  { value: 'off', label: '고치지 않기', desc: '틀려도 말하지 않고 잘한 점만 말해요.' },
+  { value: 'light', label: '약하게', desc: '분명한 실수만 말이 끝날 때 짧게 알려 줘요.' },
+  { value: 'normal', label: '보통', desc: '말하는 중에 바른 말로 자연스럽게 다시 말해 주고, 끝에 고칠 점을 알려 줘요.' },
+];
+
+function CorrectionSettings() {
+  const [strength, setStrength] = useState<CorrectionStrength>(() => loadCorrection());
+  const choose = (value: CorrectionStrength) => {
+    setStrength(value);
+    saveCorrection(value);
+  };
+  return (
+    <fieldset className="min-w-0">
+      <legend className="mb-2 font-bold">Ms. Park이 고쳐 주는 정도</legend>
+      <div className="space-y-2">
+        {CORRECTION_OPTIONS.map((o) => (
+          <label key={o.value} className="relative block">
+            <input type="radio" name="correction-strength" value={o.value} checked={strength === o.value} onChange={() => choose(o.value)} className="peer sr-only" />
+            <span className="block min-h-14 cursor-pointer rounded-2xl border border-line bg-surface px-4 py-3 peer-checked:border-ink peer-checked:ring-1 peer-checked:ring-ink peer-focus-visible:outline-3 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-ink/45">
+              <span className="block font-semibold">{o.label}</span>
+              <span className="mt-0.5 block text-sm text-ink-soft">{o.desc}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+      <p className="mt-3 text-sm text-ink-soft">다음 통화부터 적용돼요.</p>
+    </fieldset>
+  );
+}
+
 export function Settings() {
   const [showAll, setShowAll] = useState(() => loadShowAllFriends());
   const changeShowAll = (value: boolean) => {
@@ -37,6 +69,11 @@ export function Settings() {
   const changeShareBook = (value: boolean) => {
     setShareBook(value);
     saveShareWordbook(value);
+  };
+  const [friendCoach, setFriendCoach] = useState(() => loadFriendCoach());
+  const changeFriendCoach = (value: boolean) => {
+    setFriendCoach(value);
+    saveFriendCoach(value);
   };
   const [koEnabled, setKoEnabled] = useState(() => loadKoSettings().enabled);
   const changeKoEnabled = (value: boolean) => {
@@ -50,6 +87,13 @@ export function Settings() {
       </header>
       <div className="mt-4 space-y-8">
         <ScreenSettings />
+        <CorrectionSettings />
+        <ToggleRow
+          label="친구가 코치도 해 주기"
+          desc={'내가 "Was that right?"처럼 묻거나 같은 실수를 되풀이하면, 친구가 짧게 한마디 알려 주고 바로 친구로 돌아와요. 알려 주는 정도는 위 설정을 따라요. 끄면 친구는 영어를 고치지 않아요.'}
+          checked={friendCoach}
+          onChange={changeFriendCoach}
+        />
         <section>
           <h2 className="mb-2 font-bold">그 밖의 설정</h2>
           <List>

@@ -279,5 +279,82 @@ class CloseTest(ChatTestCase):
         self.assertEqual((len(turns), total, turns[-1][1]), (60, 100, "m99"))
 
 
+class PinDeleteTest(ChatTestCase):
+    def ids(self, pid):
+        return {m["text"]: m["id"] for m in chat.read_visible(pid)}
+
+    def test_pin_persists_and_shows_in_view_even_when_old(self):
+        self.say("priya", 250)
+        ids = self.ids("priya")
+        chat.set_pinned("priya", ids["m3"], True)
+        view = chat.load_view("priya")
+        self.assertEqual([m["text"] for m in view["pinned"]], ["m3"])
+        self.assertEqual(len(view["messages"]), 200)
+        self.assertNotIn("m3", [m["text"] for m in view["messages"]])  # 오래된 고정 메시지는 pinned로만 온다
+        self.assertTrue(chat.marks_path("priya").exists())
+        chat.set_pinned("priya", ids["m3"], False)
+        self.assertEqual(chat.load_view("priya")["pinned"], [])
+
+    def test_delete_persists_and_removes_from_view(self):
+        self.say("priya", 4)
+        ids = self.ids("priya")
+        chat.set_pinned("priya", ids["m1"], True)
+        chat.delete_message("priya", ids["m1"])
+        view = chat.load_view("priya")
+        self.assertEqual([m["text"] for m in view["messages"]], ["m0", "m2", "m3"])
+        self.assertEqual(view["pinned"], [])  # 지우면 고정도 풀린다
+        self.assertEqual(len(chat.read_all("priya")), 4)  # 파일의 줄은 그대로
+        with self.assertRaises(KeyError):
+            chat.set_pinned("priya", ids["m1"], True)
+        with self.assertRaises(KeyError):
+            chat.delete_message("priya", "nope")
+
+    def test_deleted_messages_are_not_sent_to_the_model(self):
+        self.say("priya", 4)  # me m0, friend m1, me m2, friend m3
+        ids = self.ids("priya")
+        chat.delete_message("priya", ids["m2"])
+        seen = {}
+
+        def fake(instruction, history):
+            seen["history"] = history
+            return "ok"
+
+        chat.send("priya", "be Priya", "hello", generate=fake)
+        texts = [m["text"] for m in seen["history"]]
+        self.assertEqual(texts, ["m0", "m1", "m3", "hello"])
+        self.assertNotIn("m2", [t for _, t in chat.contents_for(seen["history"])])
+        self.assertNotIn("m2", "\n".join(t for _, t in chat.contents_for(seen["history"])))
+
+    def test_deleted_messages_are_not_sent_to_memory(self):
+        self.say("priya", 4)
+        chat.delete_message("priya", self.ids("priya")["m2"])
+        turns, total = chat.prepare_close("priya")
+        self.assertEqual([t for _, t in turns], ["m0", "m1", "m3"])
+        self.assertEqual(total, 4)
+
+    def test_marks_survive_new_messages(self):
+        self.say("priya", 2)
+        chat.set_pinned("priya", self.ids("priya")["m0"], True)
+        chat.send("priya", "x", "more", generate=lambda i, h: "yes")
+        self.assertEqual([m["text"] for m in chat.load_view("priya")["pinned"]], ["m0"])
+
+    def test_routes(self):
+        from fastapi.testclient import TestClient
+
+        from server import main
+
+        client = TestClient(main.app)
+        self.say("priya", 2)
+        got = client.get("/api/chat/priya").json()
+        mid = got["messages"][0]["id"]
+        self.assertEqual(client.post("/api/chat/priya/pin", json={"id": mid, "pinned": True}).status_code, 200)
+        self.assertEqual([m["text"] for m in client.get("/api/chat/priya").json()["pinned"]], ["m0"])
+        self.assertEqual(client.post("/api/chat/priya/pin", json={"id": mid}).status_code, 400)
+        self.assertEqual(client.post("/api/chat/priya/delete", json={"id": mid}).status_code, 200)
+        self.assertEqual([m["text"] for m in client.get("/api/chat/priya").json()["messages"]], ["m1"])
+        self.assertEqual(client.post("/api/chat/priya/delete", json={"id": mid}).status_code, 404)
+        self.assertEqual(client.post("/api/chat/park/delete", json={"id": mid}).status_code, 400)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -34,7 +34,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCRequestHandler,
 )
 
-from server import call_bot, chat, clip_translate, clipdb, culture_filter, culturedb, feed, native_expr, people, phrase_gloss, pron, review, summary_jobs, tts, wordbook, youtube
+from server import accent_key, call_bot, chat, clip_translate, clipdb, culture_filter, culturedb, drill, feed, native_expr, people, phrase_gloss, pron, review, summary_jobs, tts, wordbook, youtube
 from server.call_bot import parse_call_config, run_bot, time_limit_for_mode
 from server import partner_memory, resume
 from server.history import list_calls, live_cost_of, load_call, totals as call_totals
@@ -129,10 +129,11 @@ async def learner_profile_endpoint():
         card = None
         broken = True
     pron_result = await asyncio.to_thread(pron.latest_result)
+    accent = await asyncio.to_thread(lambda: accent_key.get_key(pron_result, use_latest=False))
     practice, wordbook_lists = await _bridge_lists_within(PRACTICE_DEADLINE_SEC)
     return {
         "load_failed": broken,
-        "brief": "\n".join(part for part in (pron.pron_brief(pron_result), profile_brief(card)) if part),
+        "brief": "\n".join(part for part in (pron.pron_brief(pron_result, accent), profile_brief(card)) if part),
         "pron": pron.weak_summary(pron_result),
         "interests": list(card["interests"]) if card else [],
         "updated": card["updated"] if card else None,
@@ -536,8 +537,40 @@ async def partner_memory_forget(partner_id: str, kind: str, index: int, text: Op
 async def chat_get(partner_id: str):
     """친구와 주고받은 문자 최근 200개. 여섯 친구가 아니면 400."""
     _partner_or_400(partner_id)
-    messages = await asyncio.to_thread(chat.load_messages, partner_id)
-    return {"messages": messages}
+    view = await asyncio.to_thread(chat.load_view, partner_id)
+    if not view["pinned"]:  # 고정한 메시지가 없으면 예전 응답 모양({"messages": [...]})을 그대로 둔다
+        del view["pinned"]
+    return view
+
+
+@app.post("/api/chat/{partner_id}/pin")
+async def chat_pin(partner_id: str, raw: Request):
+    """메시지를 맨 위에 고정하거나({id, pinned:true}) 고정을 푼다({id, pinned:false}). 없는 메시지면 404."""
+    _partner_or_400(partner_id)
+    body = await _json_object(raw)
+    mid, pinned = body.get("id"), body.get("pinned")
+    if not isinstance(mid, str) or not isinstance(pinned, bool):
+        raise HTTPException(status_code=400, detail="id와 pinned가 필요해요.")
+    try:
+        await asyncio.to_thread(chat.set_pinned, partner_id, mid, pinned)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="해당 메시지가 없어요.")
+    return {"status": "ok"}
+
+
+@app.post("/api/chat/{partner_id}/delete")
+async def chat_delete(partner_id: str, raw: Request):
+    """메시지를 지운다({id}). 지운 메시지는 화면과 친구에게 보내는 대화 문맥에서 빠진다. 없는 메시지면 404."""
+    _partner_or_400(partner_id)
+    body = await _json_object(raw)
+    mid = body.get("id")
+    if not isinstance(mid, str):
+        raise HTTPException(status_code=400, detail="id가 필요해요.")
+    try:
+        await asyncio.to_thread(chat.delete_message, partner_id, mid)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="해당 메시지가 없어요.")
+    return {"status": "ok"}
 
 
 @app.post("/api/chat/{partner_id}")
@@ -967,6 +1000,57 @@ async def pron_finish_endpoint(raw: Request):
 async def pron_latest_endpoint():
     """가장 최근 시험 결과 그대로. 없으면 {"result": null}."""
     return await asyncio.to_thread(pron.latest_result) or {"result": None}
+
+
+@app.get("/api/accent-key")
+async def accent_key_endpoint():
+    """내 말투 정답지(습관·통화에서 모은 오인식 단어). 최신 발음 시험 결과로 다시 만들어 PRON_DIR에 저장한다."""
+    return accent_key.public_key(await asyncio.to_thread(accent_key.refresh))
+
+
+@app.post("/api/accent-key/remove")
+async def accent_key_remove_endpoint(raw: Request):
+    """틀린 항목 하나를 지운다. 본문 {"kind": "habit"|"word", "id": "..."}. 없는 항목이면 404."""
+    body = await _json_object(raw)
+    try:
+        key = await asyncio.to_thread(accent_key.remove, body.get("kind"), body.get("id"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="그런 항목이 없어요.")
+    return accent_key.public_key(key)
+
+
+DRILL_EMPTY_DETAIL = "아직 연습할 약점이 없어요. 통화를 한 번 하면 문제가 만들어져요."
+DRILL_FAILED_DETAIL = "문제를 만들지 못했어요. 잠시 후 다시 해 주세요."
+
+
+@app.get("/api/drill")
+async def drill_endpoint():
+    """오늘의 미니 드릴(문제만, 정답·해설 없음). 하루 한 벌만 만들어 저장하고 다시 열면 저장본을 준다."""
+    try:
+        today_drill = await asyncio.to_thread(drill.get_drill)
+    except drill.NoWeakPoints:
+        raise HTTPException(status_code=409, detail=DRILL_EMPTY_DETAIL)
+    except Exception as e:
+        logger.error(f"Drill generation failed: {e}")
+        raise HTTPException(status_code=502, detail=DRILL_FAILED_DETAIL)
+    return drill.public(today_drill)
+
+
+@app.post("/api/drill/check")
+async def drill_check_endpoint(raw: Request):
+    """{date, id, answer}로 한 문제를 판정하고 정답과 한국어 해설을 돌려준다. 모델은 부르지 않는다."""
+    body = await _json_object(raw)
+    date, question_id = body.get("date"), body.get("id")
+    if not isinstance(date, str) or not isinstance(question_id, str):
+        raise HTTPException(status_code=400, detail="요청 형식이 틀렸어요.")
+    try:
+        return await asyncio.to_thread(drill.check_answer, date, question_id, body.get("answer"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 # 셸(index.html)·서비스 워커·매니페스트는 브라우저 HTTP 캐시가 옛 것을 주지 않게 매번 확인시킨다.

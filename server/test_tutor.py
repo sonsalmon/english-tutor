@@ -467,5 +467,73 @@ class LearnerAlreadySaidTest(unittest.TestCase):
         self.assertEqual(len(tutor.normalize_tutor_json(raw)["vocab"]), 1)
 
 
+class AccentAnalysisTest(unittest.TestCase):
+    TRANSCRIPT = (
+        "# Call\n- partner: park\n\n"
+        "**Me:** I want to boat for him.\n"
+        "**Partner:** Oh, you want to vote for him? Nice.\n"
+        "**Me:** Yes he my friend.\n"
+    )
+    REPLY = {
+        "corrections": [
+            {"said": "I want to boat for him", "better": "I want to vote for him", "why": "x"},
+            {"said": "Yes he my friend", "better": "Yes, he is my friend", "why": "y"},
+        ],
+        "accent_misheard": [
+            {"heard": "boat", "intended": "vote", "habit": "b_v:vote"},
+            {"heard": "ghost", "intended": "most", "habit": "b_v:vote"},
+        ],
+    }
+
+    def setUp(self):
+        from server import accent_key, pron
+
+        answers = [{"id": "b2", "text": "We took the boat."}]
+        self.key = {"habits": accent_key.habits_from_result({"date": "2026-10-20", "contrasts": pron.judge_answers(answers)})}
+
+    def test_prompt_gets_the_accent_section_only_when_the_key_has_habits(self):
+        seen = []
+
+        def generate(prompt):
+            seen.append(prompt)
+            return json.dumps(self.REPLY)
+
+        tutor.analyze_transcript(self.TRANSCRIPT, generate_text=generate, accent=self.key)
+        tutor.analyze_transcript(self.TRANSCRIPT, generate_text=generate, accent={"habits": []})
+
+        self.assertIn("ACCENT KEY (", seen[0])
+        self.assertIn("[b_v:vote]", seen[0])
+        self.assertNotIn("ACCENT KEY (", seen[1])
+
+    def test_misheard_words_are_kept_and_not_counted_as_the_learners_mistake(self):
+        out = tutor.analyze_transcript(self.TRANSCRIPT, generate_text=lambda _p: json.dumps(self.REPLY), accent=self.key)
+
+        self.assertEqual(out["accent_misheard"], [{"heard": "boat", "intended": "vote", "habit": "b_v:vote"}])
+        self.assertEqual([c["said"] for c in out["corrections"]], ["Yes he my friend"])
+
+    def test_without_a_key_the_analysis_is_unchanged(self):
+        out = tutor.analyze_transcript(self.TRANSCRIPT, generate_text=lambda _p: json.dumps(self.REPLY), accent={})
+
+        self.assertNotIn("accent_misheard", out)
+        self.assertEqual(len(out["corrections"]), 2)
+
+    def test_run_tutoring_merges_the_words_once_per_call(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        path = root / "2026-10-20-090000.md"
+        path.write_text(self.TRANSCRIPT, encoding="utf-8")
+        env = {"TUTORING_DIR": str(root / "tutoring"), "AUDIO_DIR": str(root / "audio"), "PRON_DIR": str(root / "pron")}
+        with mock.patch.dict("os.environ", env):
+            for _ in range(2):
+                data, _saved = tutor.run_tutoring(path, generate_text=lambda _p: json.dumps(self.REPLY), known=[], accent=self.key)
+            stored = json.loads((root / "pron" / "accent-key.json").read_text(encoding="utf-8"))
+
+        self.assertEqual([w["id"] for w in stored["words"]], ["boat>vote"])
+        self.assertEqual(stored["words"][0]["count"], 1)
+        saved = json.loads((root / "tutoring" / "2026-10-20-090000.json").read_text(encoding="utf-8"))
+        self.assertEqual(saved["accent_misheard"], data["accent_misheard"])
+
+
 if __name__ == "__main__":
     unittest.main()
