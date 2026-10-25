@@ -63,11 +63,18 @@ class HabitsTest(unittest.TestCase):
             [("I can't go to the meeting tomorrow.", "I can go to the meeting tomorrow."), ("She can't drive on the highway.", "She can drive on the highway.")],
         )
 
-    def test_few_misses_among_many_sentences_are_only_adjusted(self):
+    def test_only_half_or_more_misses_are_practice_the_rest_are_adjusted(self):
         self.assertEqual(accent_key._strength(1, 5), "slight")
-        self.assertEqual(accent_key._action("slight"), "adjust")
         self.assertEqual(accent_key._strength(1, 4), "mild")
         self.assertEqual(accent_key._strength(2, 4), "strong")
+        self.assertEqual([accent_key._action(s) for s in ("strong", "mild", "slight")], ["practice", "adjust", "adjust"])
+
+    def test_a_single_miss_among_four_sentences_is_adjusted_not_practice(self):
+        result = make_result([{"id": "c1", "text": "I can go."}, {"id": "c3", "text": "She can't drive on the highway."}, {"id": "c6", "text": "We can finish it by Friday."}, {"id": "c8", "text": "You can park here."}])
+
+        habit = {h["id"]: h for h in accent_key.habits_from_result(result)}["can_cant:can"]
+
+        self.assertEqual((habit["count"], habit["total"], habit["strength"], habit["action"]), (1, 4, "mild", "adjust"))
 
     def test_habits_are_sorted_strongest_first(self):
         habits = accent_key.habits_from_result(make_result())

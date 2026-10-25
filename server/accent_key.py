@@ -123,8 +123,12 @@ def _strength(as_other: int, total: int) -> str:
 
 
 def _action(strength: str) -> str:
-    """연습할 발음("practice") | 앱이 알아서 보정만("adjust")."""
-    return "practice" if strength in ("strong", "mild") else "adjust"
+    """연습할 발음("practice") | 앱이 알아서 보정만("adjust").
+
+    방향별 시험 문장은 많아야 4개라 한 번 틀리면 비율이 0.25다. 반 이상 틀린 소리만 연습 대상으로 삼고,
+    그보다 적게 틀린 것은 우연일 수 있어 앱이 알아서 맞춰 듣는 것으로 둔다.
+    """
+    return "practice" if strength == "strong" else "adjust"
 
 
 def _item_text(contrast: str, target: str, heard_text: str = "") -> str:
