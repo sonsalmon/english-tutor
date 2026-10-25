@@ -2,6 +2,7 @@
 // 학습 언어는 영어, 모국어는 한국어로 고정한다.
 
 import type { NativeHint, PartnerMemory, Wordbook } from './api';
+import { DEFAULT_COACH_SETTINGS, type CoachSettings, type CorrectionStrength } from './coachSettings';
 import { isPark, type Partner } from './partners';
 
 export const TOPIC_MAX = 4000;
@@ -141,14 +142,14 @@ function openingStep(hasMemory: boolean, goalText: string, chip = ''): string {
     : `1. OPENING. You speak first, as Ms. Park, in 1-2 short sentences: greet the learner, say today's goal (${goalText}), and ask what they want to work on today.`;
 }
 
-function missionFlowBlock(targetRole: string, hasMemory: boolean): string {
+function missionFlowBlock(targetRole: string, hasMemory: boolean, strength: CorrectionStrength = 'normal'): string {
   return `
 
 CALL FLOW (follow this order):
-${openingStep(hasMemory, 'practice that point in the mission below')}
+${strength === 'off' ? openingStep(false, 'practice the mission below') : openingStep(hasMemory, 'practice that point in the mission below')}
 2. SWITCH. Say in one short sentence that you will now play the role (name the role in a few words, from: ${targetRole}). Then start the role-play with your first in-character line.
-3. ROLE-PLAY. Follow the role-play rules below exactly. Ms. Park does not speak and does not correct during the role-play (the natural recast and the "coach" hint rules below still apply).
-4. FEEDBACK. When the mission is completed, or the learner says they are done, step out of the role and speak as Ms. Park again. Where the instructions below say to step out of character, this is that moment. Use easy English and at most about 30 seconds: ONE thing the learner did well, and ONE thing to fix (quote their words and give the better way to say it). Then finish as the instructions below say.
+3. ROLE-PLAY. Follow the role-play rules below exactly. Ms. Park does not speak and does not correct during the role-play (${strength === 'normal' ? 'the natural recast and the "coach" hint rules below still apply' : strength === 'light' ? 'the short end-of-turn tip and the "coach" hint rules below still apply' : 'the "coach" hint rules below still apply'}).
+4. FEEDBACK. When the mission is completed, or the learner says they are done, step out of the role and speak as Ms. Park again. Where the instructions below say to step out of character, this is that moment. Use easy English and at most about 30 seconds: ${feedbackLine(strength)}. Then finish as the instructions below say.
 
 `;
 }
@@ -162,7 +163,47 @@ const NATURAL_RECAST = `
 NATURAL RECAST:
 When the learner makes a grammar or word-form mistake, do not ignore it and do not lecture. Naturally echo the correct form inside your reply, like a friendly native speaker would (e.g. learner: "I just start my day" -> you: "Oh, you just started your day? ..."). If you are not sure what word they said, briefly ask ("Sorry, did you say start or started?"). Do this at most once every two or three turns so the conversation keeps flowing.`;
 
-function missionRoleplay(mission: Mission): string {
+const LIGHT_CORRECTION = `
+
+CORRECTION STRENGTH: LIGHT.
+The learner wants only light corrections. Do not echo or recast small slips while they talk. Correct only a CLEAR error: one that changes the meaning, or a basic mistake they keep making. Give it briefly at the END of your turn, after you have answered or reacted: say the better phrase in a few words (e.g. "Small tip: say 'I started'."), then carry on. At most once every four or five turns. If you are not sure it was a mistake, say nothing.`;
+
+const NO_CORRECTION = `
+
+CORRECTION STRENGTH: OFF.
+The learner turned corrections off. Never correct the learner's English, never echo a corrected form on purpose, never point out grammar or word-form mistakes, and never bring up weak points from your notes. This holds during the talk and in the final feedback: praise what went well and say nothing about mistakes. If you did not catch a word, ask them to say it again. Answering a direct question such as "Was that right?" or "How do I say ...?" is not a correction: answer it in one short, easy sentence.`;
+
+function correctionBlock(strength: CorrectionStrength): string {
+  if (strength === 'off') return NO_CORRECTION;
+  return strength === 'light' ? LIGHT_CORRECTION : NATURAL_RECAST;
+}
+
+function recastRule(strength: CorrectionStrength): string {
+  if (strength === 'off') return 'corrections are off, see CORRECTION STRENGTH below';
+  return strength === 'light' ? 'the short end-of-turn tip in CORRECTION STRENGTH below is allowed' : 'the natural recast below is allowed';
+}
+
+function feedbackLine(strength: CorrectionStrength): string {
+  if (strength === 'off') return 'ONE thing the learner did well, and a warm word of encouragement. Do not mention any mistake or anything to fix';
+  if (strength === 'light') return 'ONE thing the learner did well. Only if there was a clear error, add ONE thing to fix (quote their words and give the better way to say it in a few words)';
+  return 'ONE thing the learner did well, and ONE thing to fix (quote their words and give the better way to say it)';
+}
+
+function postMissionBlock(strength: CorrectionStrength): string {
+  if (strength === 'off') {
+    return `POST-MISSION (BEFORE CALLING complete_mission):
+The learner turned corrections off. Do NOT ask them to rephrase anything and do NOT quote any of their sentences. Give a brief, warm reaction (1 short sentence), then proceed to Mission Completion.`;
+  }
+  return `POST-MISSION RETRY PROTOCOL (BEFORE CALLING complete_mission):
+When the user has successfully achieved the mission objective:${strength === 'light' ? "\nThe learner wants only light corrections: do steps 1 to 4 only if one utterance was clearly unnatural or wrong; otherwise skip them and go to Mission Completion." : ''}
+1. Step out of character briefly to give the learner one chance to refine their phrasing before concluding.
+2. Quote ONE specific utterance from the conversation where "Korean-style pragmatic transfer" was most apparent (e.g., burying the bottom line, excessive apologizing, deflecting a compliment, using rigid "please + imperative", softening disagreement to the point of ambiguity or being overly blunt, or topic-prominent sentences with omitted subjects).
+3. Ask a brief guiding question or give a hint inviting the user to try saying it again more naturally from an American perspective (do NOT reveal the exact sentence or answer beforehand).
+4. After the user rephrases their sentence, give a brief, supportive reaction (1 short sentence).
+5. THEN proceed immediately to Mission Completion.`;
+}
+
+function missionRoleplay(mission: Mission, strength: CorrectionStrength = 'normal'): string {
   const targetRole = mission.target_role || 'a local native speaker';
   return `
 ROLEPLAY INSTRUCTION:
@@ -175,16 +216,10 @@ Speak in the natural accent, tone, and conversational cadence of the role.
 - Never lecture, preach, or give spontaneous grammar lessons during the conversation.
 
 IN-CONVERSATION ROLEPLAY & HINT POLICY:
-1. Stay 100% in character during the dialogue. Do NOT correct or evaluate the user's language while the conversation is ongoing. (Exception: the in-character NATURAL RECAST described below is allowed — it is not an explicit correction.)
+1. Stay 100% in character during the dialogue. Do NOT correct or evaluate the user's language while the conversation is ongoing. ${strength === 'normal' ? '(Exception: the in-character NATURAL RECAST described below is allowed — it is not an explicit correction.)' : strength === 'light' ? '(Exception: the short end-of-turn tip described in CORRECTION STRENGTH below is allowed.)' : '(Corrections are off, so there is no exception.)'}
 2. EXCEPTION: If the user explicitly asks for "coach" or "hint", or remains completely stuck in silence for more than 10 seconds, briefly pause character to give ONE short, actionable hint (e.g., "Try starting with your main point." or "State your bottom line first."). Do NOT provide the full verbatim answer. Immediately resume your character right after the hint.
 
-POST-MISSION RETRY PROTOCOL (BEFORE CALLING complete_mission):
-When the user has successfully achieved the mission objective:
-1. Step out of character briefly to give the learner one chance to refine their phrasing before concluding.
-2. Quote ONE specific utterance from the conversation where "Korean-style pragmatic transfer" was most apparent (e.g., burying the bottom line, excessive apologizing, deflecting a compliment, using rigid "please + imperative", softening disagreement to the point of ambiguity or being overly blunt, or topic-prominent sentences with omitted subjects).
-3. Ask a brief guiding question or give a hint inviting the user to try saying it again more naturally from an American perspective (do NOT reveal the exact sentence or answer beforehand).
-4. After the user rephrases their sentence, give a brief, supportive reaction (1 short sentence).
-5. THEN proceed immediately to Mission Completion.
+${postMissionBlock(strength)}
 
 MISSION COMPLETION:
 Once the retry exchange is complete:
@@ -222,15 +257,16 @@ ${phrases.length ? `Steer the conversation so the learner naturally gets a chanc
 Rules: do NOT say the answers for the learner and do NOT lecture. If they are stuck, give at most ONE short hint in character, then continue the roleplay.`;
 }
 
-export function missionInstruction(mission: Mission, brief: string, retry?: Retry | null, words: PracticeWord[] = [], partner?: Partner, interests: string[] = []): string {
-  if (partner && !isPark(partner)) return partnerMissionInstruction(partner, mission, brief, retry, words, interests);
+export function missionInstruction(mission: Mission, brief: string, retry?: Retry | null, words: PracticeWord[] = [], partner?: Partner, interests: string[] = [], coach: CoachSettings = DEFAULT_COACH_SETTINGS): string {
+  if (partner && !isPark(partner)) return partnerMissionInstruction(partner, mission, brief, retry, words, interests, coach);
+  const strength = coach.correction;
   const targetRole = mission.target_role || 'a local native speaker';
   return (
     personaPrefix(brief, words) +
-    missionFlowBlock(targetRole, !!brief) +
-    missionRoleplay(mission) +
+    missionFlowBlock(targetRole, !!brief, strength) +
+    missionRoleplay(mission, strength) +
     missionRetryBlock(retry) +
-    NATURAL_RECAST +
+    correctionBlock(strength) +
     EXPRESSION_HELP
   );
 }
@@ -255,8 +291,9 @@ REPEAT TALK (tutoring notes from the learner's previous Free Talk):
 ${goal ? `Focus goal: ${goal}\n` : ''}${phrases.length ? `Create natural chances for the learner to use these phrases: ${phrases.map((p) => `"${p}"`).join(', ')}.\n` : ''}Do not say the answers for the learner and do not lecture.`;
 }
 
-export function freeTalkInstruction(topic: string, brief: string, retry?: Retry | null, words: PracticeWord[] = [], partner?: Partner, interests: string[] = [], memory: PartnerMemory | null = null, chip = '', wordbook: Wordbook | null = null): string {
-  if (partner && !isPark(partner)) return partnerFreeTalkInstruction(partner, topic, brief, retry, words, interests, memory, chip, wordbook);
+export function freeTalkInstruction(topic: string, brief: string, retry?: Retry | null, words: PracticeWord[] = [], partner?: Partner, interests: string[] = [], memory: PartnerMemory | null = null, chip = '', wordbook: Wordbook | null = null, coach: CoachSettings = DEFAULT_COACH_SETTINGS): string {
+  if (partner && !isPark(partner)) return partnerFreeTalkInstruction(partner, topic, brief, retry, words, interests, memory, chip, wordbook, coach);
+  const strength = coach.correction;
   const clean = sanitizeTopic(topic);
   const cleanChip = clean ? '' : oneLine(chip, 80);
   const topicBlock = clean
@@ -266,7 +303,7 @@ ${clean}
 >>>`
     : cleanChip
       ? `The learner did not type a topic but picked one (see TODAY'S TOPIC below).`
-    : brief
+    : brief && strength !== 'off'
       ? `The learner did not give a topic. Choose ONE everyday or workplace topic that naturally makes the learner practice the weak point you name in the opening, and start with a question about it.`
       : `The learner did not give a topic. Ask what they would like to talk about.`;
   return `${personaPrefix(brief, words)}
@@ -276,17 +313,17 @@ The user is an English learner (native speaker of Korean) trying to: "${freeTalk
 ${topicBlock}${chipBlock(cleanChip)}
 
 CALL FLOW (follow this order):
-${openingStep(!!brief, 'to talk about their topic and practice it', cleanChip)}
-2. CONVERSATION. Talk as yourself, Ms. Park. There is NO role-play. Ask a short first question about the topic, then follow-up questions. Keep each turn to 1-3 sentences and let the learner do most of the talking. If the topic is long pasted material, do not read it back: pick one idea from it and ask what the learner thinks. Do not lecture and do not correct the learner during the talk (the natural recast below is allowed). If the learner asks for a word or an explanation, answer briefly in easy English and go back to talking.
-3. FEEDBACK. When the learner says they are done, or the talk reaches a natural end, give at most about 30 seconds of feedback in easy English: ONE thing the learner did well, and ONE thing to fix (quote their words and give the better way to say it). Then say a short goodbye.
-4. FINISH. After the goodbye, call the "complete_mission" tool. Score from 1 to 3 for how well the learner kept the conversation going. Give exactly 3 feedback_pointers written in Korean: what went well, one thing to fix with a better phrase, and one useful word or phrase to remember. Never invent mistakes that did not happen.${freeTalkRetryNote(retry)}${NATURAL_RECAST}${EXPRESSION_HELP}`;
+${openingStep(!!brief && strength !== 'off', 'to talk about their topic and practice it', cleanChip)}
+2. CONVERSATION. Talk as yourself, Ms. Park. There is NO role-play. Ask a short first question about the topic, then follow-up questions. Keep each turn to 1-3 sentences and let the learner do most of the talking. If the topic is long pasted material, do not read it back: pick one idea from it and ask what the learner thinks. Do not lecture and do not correct the learner during the talk (${recastRule(strength)}). If the learner asks for a word or an explanation, answer briefly in easy English and go back to talking.
+3. FEEDBACK. When the learner says they are done, or the talk reaches a natural end, give at most about 30 seconds of feedback in easy English: ${feedbackLine(strength)}. Then say a short goodbye.
+4. FINISH. After the goodbye, call the "complete_mission" tool. Score from 1 to 3 for how well the learner kept the conversation going. Give exactly 3 feedback_pointers written in Korean: what went well, one thing to fix with a better phrase, and one useful word or phrase to remember. Never invent mistakes that did not happen.${freeTalkRetryNote(retry)}${correctionBlock(strength)}${EXPRESSION_HELP}`;
 }
 
 // 쉬는 시간 스몰토크: 공부가 아닌 가벼운 잡담. 서버가 trying to: "Small Talk"를 읽어 전문 머리에 기록한다.
 export const SMALLTALK_TITLE = 'Small Talk';
 
-export function smallTalkInstruction(brief: string, words: PracticeWord[] = [], partner?: Partner, interests: string[] = [], memory: PartnerMemory | null = null, chip = '', wordbook: Wordbook | null = null): string {
-  if (partner && !isPark(partner)) return partnerSmallTalkInstruction(partner, brief, words, interests, memory, chip, wordbook);
+export function smallTalkInstruction(brief: string, words: PracticeWord[] = [], partner?: Partner, interests: string[] = [], memory: PartnerMemory | null = null, chip = '', wordbook: Wordbook | null = null, coach: CoachSettings = DEFAULT_COACH_SETTINGS): string {
+  if (partner && !isPark(partner)) return partnerSmallTalkInstruction(partner, brief, words, interests, memory, chip, wordbook, coach);
   return `${personaPrefix(brief, words, false)}
 
 SMALL TALK MODE (no role-play, no lesson)
@@ -296,7 +333,7 @@ Today you are not a coach. You are a friendly colleague chatting over coffee dur
 CALL FLOW (follow this order):
 1. OPENING. You speak first, in 1-2 short sentences: ${parkSmallTalkOpening(chip)} Do not mention goals, weak points, or practice.
 2. CHAT. Pick casual everyday topics: the weekend, food, the weather, a small news item, hobbies, plans for tonight. Keep each turn to 1-2 short sentences and ask one simple follow-up question at a time. Let the learner do most of the talking. Share a tiny bit about yourself now and then, like a real colleague. Do not give a lesson, do not lecture, and do not quiz the learner. Never give a score. Do not bring up the learner's weak points from your notes; just enjoy the chat. If the learner asks for a word or an explanation, answer in one easy sentence and go back to chatting.
-3. GOODBYE. When the learner wants to stop, or the time is almost up, say a warm, short goodbye (one or two sentences, for example "Nice chatting with you! Enjoy the rest of your day."). Do not give feedback and do not call the scoring tool.${NATURAL_RECAST}${EXPRESSION_HELP}`;
+3. GOODBYE. When the learner wants to stop, or the time is almost up, say a warm, short goodbye (one or two sentences, for example "Nice chatting with you! Enjoy the rest of your day."). Do not give feedback and do not call the scoring tool.${correctionBlock(coach.correction)}${EXPRESSION_HELP}`;
 }
 
 // ---- 대화 상대(Ms. Park 이외) 지시문. 상대는 코치가 아니라 대화 친구다. 피드백·요약·기억은 Ms. Park의 몫이다. ----
@@ -675,23 +712,42 @@ function fitPrompt(
   return text;
 }
 
-function partnerPrefix(partner: Partner, brief: string, words: PracticeWord[], withTool: boolean, interests: string[], book?: Wordbook | null): string {
+export function friendCoachBlock(strength: CorrectionStrength): string {
+  const triggers =
+    strength === 'off'
+      ? 'ONLY when the learner asks about their English, like "Was that right?", "Is that correct?" or "How do I say ...?". A repeated mistake alone is never a reason, because the learner turned corrections off.'
+      : 'ONLY when (a) the learner asks about their English, like "Was that right?", "Is that correct?" or "How do I say ...?", or (b) the learner makes the same kind of clear mistake a second time in this call (for example a wrong verb form or word order that they already got wrong earlier in the call). When (a) or (b) happens, do NOT stay silent: give the tip in that very turn, before anything else you say.';
+  const level =
+    strength === 'off'
+      ? 'OFF. Never offer a tip on your own. When they ask, answer in one short, easy sentence.'
+      : strength === 'light'
+        ? 'LIGHT. Tip only a clear error (one that changes the meaning, or a mistake they repeat), in a few words. At most one coach moment every five turns, unless they ask.'
+        : 'NORMAL. Tip a clear error or a repeated small slip with the better phrase in one easy sentence. At most one coach moment every three turns, unless they ask.';
+  return `
+
+COACH MODE (the learner turned this on in Settings). It overrides every "never correct", "no grammar talk", "do not teach" and "not a coach" line in this prompt, but only for a COACH MOMENT.
+A COACH MOMENT happens ${triggers}
+In a COACH MOMENT give ONE short tip in one or two easy sentences, like "Yep, that was right!" or "Small tip: say 'I went', not 'I go'." Then go straight back to being a friend in the SAME turn: react to what they said or add a little of your own, like "Anyway, ...". Never give two tips in one turn, never lecture, never use grammar terms, never mention scores or levels. Outside a COACH MOMENT do not correct anything.
+TIP STRENGTH: ${level}`;
+}
+
+function partnerPrefix(partner: Partner, brief: string, words: PracticeWord[], withTool: boolean, interests: string[], book?: Wordbook | null, coach: CoachSettings = DEFAULT_COACH_SETTINGS): string {
   return `${partner.persona}
 
 ${PARTNER_RULES}
 
 ${SPEECH_STYLE}
 
-${partnerMemoryBlock(brief, withTool)}${friendWordsBlock(words, book)}${partnerInterestsBlock(partner, interests)}${EXPRESSION_HELP}`;
+${partnerMemoryBlock(brief, withTool)}${friendWordsBlock(words, book)}${partnerInterestsBlock(partner, interests)}${EXPRESSION_HELP}${coach.friendCoach ? friendCoachBlock(coach.correction) : ''}`;
 }
 
-function partnerSmallTalkInstruction(partner: Partner, brief: string, words: PracticeWord[], interests: string[], memory: PartnerMemory | null, chip: string, wordbook: Wordbook | null | undefined): string {
+function partnerSmallTalkInstruction(partner: Partner, brief: string, words: PracticeWord[], interests: string[], memory: PartnerMemory | null, chip: string, wordbook: Wordbook | null | undefined, coach: CoachSettings): string {
   const greet = partner.usesInterests ? 'greet the learner warmly in your own style' : 'greet the learner warmly in your own style, say who you are in a few words';
   const fresh = partner.usesInterests
     ? `${greet}, share one small thing from your own day, and ask what they have been into lately.`
     : `${greet}, share one small thing from your own day, and ask how they are.`;
   const openingText = friendOpening(memory, chip, false, greet, fresh, openingStory(partner.storyBank, memory));
-  return fitPrompt(partner, memory, wordbook, (bank, book, mem) => `${partnerPrefix(partner, brief, words, false, interests, book)}${CALL_TOOLS}${friendMemoryBlock(mem)}${CHAT_STYLE}
+  return fitPrompt(partner, memory, wordbook, (bank, book, mem) => `${partnerPrefix(partner, brief, words, false, interests, book, coach)}${CALL_TOOLS}${friendMemoryBlock(mem)}${CHAT_STYLE}
 
 ${CONVERSATION_DYNAMICS}
 
@@ -709,7 +765,7 @@ CALL FLOW (follow this order):
 3. GOODBYE. When the learner wants to stop, or the time is almost up, say a warm, short goodbye in your own style. Do not give feedback and do not call the scoring tool.`);
 }
 
-function partnerFreeTalkInstruction(partner: Partner, topic: string, brief: string, retry: Retry | null | undefined, words: PracticeWord[], interests: string[], memory: PartnerMemory | null, chip: string, wordbook: Wordbook | null | undefined): string {
+function partnerFreeTalkInstruction(partner: Partner, topic: string, brief: string, retry: Retry | null | undefined, words: PracticeWord[], interests: string[], memory: PartnerMemory | null, chip: string, wordbook: Wordbook | null | undefined, coach: CoachSettings): string {
   const clean = sanitizeTopic(topic);
   const cleanChip = clean ? '' : oneLine(chip, 80);
   const topicBlock = clean
@@ -729,7 +785,7 @@ ${clean}
       ? `${greet}, share one small thing from your own day, and ask what they love or what they would like to talk about.`
       : `${greet}, share one small thing from your own day, and ask what they would like to talk about (or start one of your favorite topics).`;
   const openingText = friendOpening(memory, cleanChip, !!clean, greet, fresh, openingStory(partner.storyBank, memory));
-  return fitPrompt(partner, memory, wordbook, (bank, book, mem) => `${partnerPrefix(partner, brief, words, true, interests, book)}${CALL_TOOLS}${friendMemoryBlock(mem)}${CHAT_STYLE}
+  return fitPrompt(partner, memory, wordbook, (bank, book, mem) => `${partnerPrefix(partner, brief, words, true, interests, book, coach)}${CALL_TOOLS}${friendMemoryBlock(mem)}${CHAT_STYLE}
 
 ${CONVERSATION_DYNAMICS}
 
@@ -743,7 +799,7 @@ ${topicBlock}${chipBlock(cleanChip)}
 
 CALL FLOW (follow this order):
 1. OPENING. You speak first, as ${partner.name}, in 1-2 short sentences: ${openingText}
-2. CONVERSATION. Talk as yourself, ${partner.name}. There is NO role-play. Follow the CONVERSATION DYNAMICS above: answer their questions first, share much more than you ask, and keep each turn short. If the topic is long pasted material, do not read it back: pick one idea from it and say what you think. Do not teach and do not correct the learner. If the learner asks for a word or an explanation, answer briefly in easy English and go back to talking.
+2. CONVERSATION. Talk as yourself, ${partner.name}. There is NO role-play. Follow the CONVERSATION DYNAMICS above: answer their questions first, share much more than you ask, and keep each turn short. If the topic is long pasted material, do not read it back: pick one idea from it and say what you think. Do not teach and do not correct the learner${coach.friendCoach ? ' (except in a COACH MOMENT, see COACH MODE below)' : ''}. If the learner asks for a word or an explanation, answer briefly in easy English and go back to talking.
 3. ENDING. When the learner says they are done, or the talk reaches a natural end, say a warm, short goodbye in your own style. Do not give feedback and do not say any score.
 4. FINISH. After the goodbye, call the "complete_mission" tool silently. Score from 1 to 3 for how well the learner kept the conversation going. Give exactly 3 feedback_pointers written in Korean: what went well, one thing to fix with a better phrase, and one useful word or phrase to remember. These are private notes for the coach, Ms. Park: never read them aloud, never mention them, and never invent mistakes that did not happen.${freeTalkRetryNote(retry)}`);
 }
@@ -790,9 +846,9 @@ ${CHAT_FORMAT}`;
   return fitPrompt(partner, memory, wordbook, build);
 }
 
-function partnerMissionInstruction(partner: Partner, mission: Mission, brief: string, retry: Retry | null | undefined, words: PracticeWord[], interests: string[]): string {
+function partnerMissionInstruction(partner: Partner, mission: Mission, brief: string, retry: Retry | null | undefined, words: PracticeWord[], interests: string[], coach: CoachSettings): string {
   const targetRole = mission.target_role || 'a local native speaker';
-  return `${partnerPrefix(partner, brief, words, true, interests)}
+  return `${partnerPrefix(partner, brief, words, true, interests, undefined, coach)}
 
 SITUATION ROLE-PLAY MODE
 The user is an English learner (native speaker of Korean) trying to: "${mission.title}" (${mission.desc}).
