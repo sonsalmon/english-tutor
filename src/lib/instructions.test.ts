@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import type { PartnerMemory, Wordbook } from './api';
-import { buildChatInstruction, CALL_TOOLS, FACT_BUDGET, FACT_CORE_CEILING, freeTalkInstruction, friendMemoryBlock, missionInstruction, selectFacts, nativeBlock, openingStory, PARTNER_PROMPT_LIMIT, smallTalkInstruction, teachbackInstruction, trimMemory, trimStoryBank, wordbookBlock } from './instructions';
+import { buildChatInstruction, CALL_TOOLS, FACT_BUDGET, FACT_CORE_CEILING, freeTalkInstruction, friendCoachBlock, friendMemoryBlock, missionInstruction, selectFacts, nativeBlock, openingStory, PARTNER_PROMPT_LIMIT, smallTalkInstruction, teachbackInstruction, trimMemory, trimStoryBank, wordbookBlock } from './instructions';
+import type { CoachSettings } from './coachSettings';
 import { PARTNERS, partnerById } from './partners';
+import { buildInstruction } from './setup';
 
 const FRIENDS = PARTNERS.filter((p) => p.id !== 'park');
 const MISSION = { id: 1, title: 'Ask for a deadline', difficulty: 'B1', desc: 'Ask politely', target_role: 'a manager' };
@@ -471,5 +473,173 @@ describe('memory v2: fact selection under a character budget', () => {
       expect(text).toContain('REFLECTION-MARK');
     }
     expect(texts[0].match(/TRIVIA-/g)?.length ?? 0).toBeLessThan(300);
+  });
+});
+
+// 친구 첫 이야기는 무작위라 같은 입력끼리 비교하려면 난수를 고정한다.
+function pinned<T>(fn: () => T): T {
+  const original = Math.random;
+  Math.random = () => 0.37;
+  try {
+    return fn();
+  } finally {
+    Math.random = original;
+  }
+}
+
+const PARK = partnerById('park');
+const STRENGTHS = ['off', 'light', 'normal'] as const;
+const coachOf = (correction: CoachSettings['correction'], friendCoach = false): CoachSettings => ({ correction, friendCoach });
+
+function parkPrompts(coach?: CoachSettings) {
+  return {
+    mission: missionInstruction(MISSION, 'weak point notes', null, [], PARK, [], coach),
+    free: freeTalkInstruction('my topic', 'weak point notes', null, [], PARK, [], null, '', null, coach),
+    small: smallTalkInstruction('weak point notes', [], PARK, [], null, '', null, coach),
+  };
+}
+
+describe('Ms. Park correction strength', () => {
+  test('no setting and normal give the same prompts, and normal keeps the original correction rules', () => {
+    expect(parkPrompts(coachOf('normal'))).toEqual(parkPrompts());
+    for (const text of Object.values(parkPrompts())) {
+      expect(text).toContain('NATURAL RECAST');
+      expect(text).not.toContain('CORRECTION STRENGTH');
+    }
+    const { mission, free } = parkPrompts();
+    expect(mission).toContain('POST-MISSION RETRY PROTOCOL');
+    expect(mission).toContain('ONE thing to fix (quote their words and give the better way to say it)');
+    expect(free).toContain('ONE thing to fix (quote their words and give the better way to say it)');
+    expect(free).toContain('name ONE weak point from your notes');
+  });
+
+  test('light drops the recast and keeps only a short end-of-turn tip for clear errors', () => {
+    for (const text of Object.values(parkPrompts(coachOf('light')))) {
+      expect(text).toContain('CORRECTION STRENGTH: LIGHT');
+      expect(text).toContain('END of your turn');
+      expect(text).not.toContain('NATURAL RECAST');
+    }
+    const { mission, free } = parkPrompts(coachOf('light'));
+    expect(mission).toContain('POST-MISSION RETRY PROTOCOL');
+    expect(mission).toContain('only if one utterance was clearly unnatural or wrong');
+    expect(free).toContain('Only if there was a clear error, add ONE thing to fix');
+  });
+
+  test('off removes every correction path but keeps answers to direct questions', () => {
+    for (const text of Object.values(parkPrompts(coachOf('off')))) {
+      expect(text).toContain('CORRECTION STRENGTH: OFF');
+      expect(text).toContain('Never correct the learner');
+      expect(text).toContain('EXPRESSION HELP');
+      expect(text).not.toContain('NATURAL RECAST');
+      expect(text).not.toContain('ONE thing to fix');
+      expect(text).not.toContain('POST-MISSION RETRY PROTOCOL');
+      expect(text).not.toContain('Naturally echo the correct form');
+    }
+    const { mission, free } = parkPrompts(coachOf('off'));
+    expect(mission).toContain('Do NOT ask them to rephrase anything');
+    expect(mission).toContain('Corrections are off, so there is no exception');
+    expect(mission).not.toContain('name ONE weak point from your notes');
+    expect(free).not.toContain('name ONE weak point from your notes');
+    expect(free).not.toContain('practice the weak point you name');
+    expect(free).toContain('Do not mention any mistake or anything to fix');
+  });
+
+  test('the three strengths give three different prompts', () => {
+    const texts = STRENGTHS.map((s) => parkPrompts(coachOf(s)).free);
+    expect(new Set(texts).size).toBe(3);
+  });
+
+  test('the friend coach switch does not change Ms. Park', () => {
+    for (const s of STRENGTHS) expect(parkPrompts(coachOf(s, true))).toEqual(parkPrompts(coachOf(s, false)));
+  });
+});
+
+describe('friend coach mode', () => {
+  function friendPrompts(p: (typeof FRIENDS)[number], coach?: CoachSettings) {
+    return pinned(() => ({
+      small: smallTalkInstruction('', [], p, [], MEMORY, '', null, coach),
+      free: freeTalkInstruction('', '', null, [], p, [], MEMORY, '', null, coach),
+      mission: missionInstruction(MISSION, '', null, [], p, [], coach),
+    }));
+  }
+
+  test('off by default: the prompts are exactly the old never-correct friend', () => {
+    for (const p of FRIENDS) {
+      const base = friendPrompts(p);
+      expect(friendPrompts(p, coachOf('normal', false))).toEqual(base);
+      expect(friendPrompts(p, coachOf('off', false))).toEqual(base);
+      expect(friendPrompts(p, coachOf('light', false))).toEqual(base);
+      for (const text of Object.values(base)) {
+        expect(text).toContain('Never correct the learner');
+        expect(text).not.toContain('COACH');
+      }
+      expect(base.free).toContain('Do not teach and do not correct the learner. If the learner asks');
+    }
+  });
+
+  test('on: a short coach moment is allowed only when asked or after a repeated clear mistake, then back to friend in the same turn', () => {
+    for (const p of FRIENDS) {
+      for (const text of Object.values(friendPrompts(p, coachOf('normal', true)))) {
+        expect(text).toContain('COACH MODE');
+        expect(text).toContain('COACH MOMENT');
+        expect(text).toContain('"Was that right?"');
+        expect(text).toContain('"How do I say ...?"');
+        expect(text).toContain('repeats the same clear mistake');
+        expect(text).toContain('ONE short tip');
+        expect(text).toContain('straight back to being a friend in the SAME turn');
+        expect(text).toContain('Outside a COACH MOMENT do not correct anything');
+        expect(text).toContain('Never correct the learner');
+      }
+      expect(friendPrompts(p, coachOf('normal', true)).free).toContain('except in a COACH MOMENT');
+    }
+  });
+
+  test('the tip strength follows the correction setting', () => {
+    expect(friendCoachBlock('light')).toContain('TIP STRENGTH: LIGHT');
+    expect(friendCoachBlock('normal')).toContain('TIP STRENGTH: NORMAL');
+    const off = friendCoachBlock('off');
+    expect(off).toContain('TIP STRENGTH: OFF');
+    expect(off).toContain('A repeated mistake alone is never a reason');
+    expect(off).not.toContain('repeats the same clear mistake');
+  });
+
+  test('every friend stays within PARTNER_PROMPT_LIMIT with coach mode on', () => {
+    const worst: PartnerMemory = {
+      ...MEMORY,
+      facts: Array.from({ length: 14 }, (_, i) => ({ text: `Fact ${i} `.padEnd(160, 'x'), last_seen: '2026-10-20', importance: 4 })),
+      episodes: Array.from({ length: 12 }, (_, i) => ({ date: '2026-10-20', mode: 'call' as const, summary: `Episode ${i} `.padEnd(220, 'e') })),
+    };
+    const book: Wordbook = { words: Array.from({ length: 30 }, (_, i) => ({ lemma: `word${i}`, gloss: '뜻' })), phrases: [] };
+    for (const p of FRIENDS) {
+      for (const s of STRENGTHS) {
+        const coach = coachOf(s, true);
+        const texts = [
+          smallTalkInstruction('x'.repeat(2000), [], p, ['a', 'b'], worst, 'weekend', book, coach),
+          freeTalkInstruction('', 'x'.repeat(2000), null, [], p, [], worst, '', book, coach),
+        ];
+        for (const text of texts) {
+          expect(text.length).toBeLessThanOrEqual(PARTNER_PROMPT_LIMIT);
+          expect(text).toContain('COACH MODE');
+        }
+        const longTopic = freeTalkInstruction('t'.repeat(4000), 'x'.repeat(2000), null, [], p, [], worst, '', book, coach);
+        expect(longTopic.length).toBeLessThanOrEqual(PARTNER_PROMPT_LIMIT + 4000);
+      }
+    }
+  });
+});
+
+describe('buildInstruction with coach settings', () => {
+  test('passes the settings to Ms. Park and to friends', () => {
+    const park = buildInstruction({ kind: 'freetalk', topic: 'x' }, '', [], [], null, null, coachOf('off'));
+    expect(park).toContain('CORRECTION STRENGTH: OFF');
+    const friend = pinned(() => buildInstruction({ kind: 'smalltalk', partner: 'jake' }, '', [], [], null, null, coachOf('light', true)));
+    expect(friend).toContain('TIP STRENGTH: LIGHT');
+    const plain = pinned(() => buildInstruction({ kind: 'smalltalk', partner: 'jake' }, '', [], [], null, null, coachOf('light', false)));
+    expect(plain).not.toContain('COACH');
+  });
+
+  test('without settings it reads the stored ones and falls back to the defaults', () => {
+    const text = buildInstruction({ kind: 'freetalk', topic: 'x' }, '');
+    expect(text).toContain('NATURAL RECAST');
   });
 });
