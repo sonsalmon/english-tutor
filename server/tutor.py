@@ -33,6 +33,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from google import genai
 from google.genai import types
 
+from server import accent_key
 from server import known as known_store
 from server.config_utils import get_project_id
 from server.partner_memory import PARTNER_NAMES
@@ -442,11 +443,13 @@ def normalize_tutor_json(
     *,
     verbatim: Optional[str] = None,
     known: Iterable[str] = (),
+    accent: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """모델 출력을 고정 계약 모양으로 정리한다(누락 키 기본값, 개수 제한).
 
     pragmatics는 항상 빈 목록이다(일반 조언은 내지 않고 us_style가 대신한다). known은 학습자가 이미 아는 표현이라
-    corrections의 better·vocab의 word·us_style의 natural에서 빠진다.
+    corrections의 better·vocab의 word·us_style의 natural에서 빠진다. accent(발음 정답지)가 있으면 말투 때문에
+    잘못 받아쓴 단어를 accent_misheard로 남기고(비면 키를 넣지 않는다), 그 한 단어만 고친 교정은 뺀다.
     """
     data = extract_json(raw)
     known = list(known)
@@ -465,7 +468,12 @@ def normalize_tutor_json(
     if transcript is not None:
         lines = _learner_line_tokens(transcript, verbatim)
         vocab = [r for r in vocab if not _used_by_learner(r["word"], lines)]
-    return {
+    misheard: List[Dict[str, str]] = []
+    if accent and transcript is not None:
+        spoken = set().union(*_learner_line_tokens(transcript, verbatim))
+        misheard = accent_key.normalize_misheard(data.get("accent_misheard"), spoken, accent)
+        corrections = accent_key.drop_explained(corrections, misheard)
+    result = {
         "clip_query": normalize_clip_query(_clean_str(data.get("clip_query"))),
         "corrections": corrections,
         "good": _rows(data, "good", ["said", "note"], MAX_GOOD),
@@ -487,6 +495,9 @@ def normalize_tutor_json(
             "target_phrases": phrases,
         },
     }
+    if misheard:
+        result["accent_misheard"] = misheard
+    return result
 
 
 def is_empty_result(data: Dict[str, Any]) -> bool:
@@ -587,6 +598,19 @@ def with_known(prompt: str, known: Iterable[str]) -> str:
     return prompt + known_store.prompt_block(list(known))
 
 
+def with_accent(prompt: str, accent: Optional[Dict[str, Any]]) -> str:
+    """프롬프트 끝에 발음 정답지 구간을 붙인다(정답지에 습관이 없으면 그대로)."""
+    return prompt + accent_key.analysis_section(accent)
+
+
+def _load_accent() -> Dict[str, Any]:
+    try:
+        return accent_key.get_key()
+    except Exception as e:  # noqa: BLE001 - 정답지를 못 읽어도 분석은 예전처럼 한다
+        logger.warning("발음 정답지를 읽지 못해 쓰지 않고 분석합니다: %s", e)
+        return {}
+
+
 def transcribe_verbatim(wav_path, *, model_name: Optional[str] = None) -> str:
     """마이크 원음 WAV를 교정 없이 들린 그대로 받아쓴다(Vertex, TUTOR_MODEL)."""
     data = Path(wav_path).read_bytes()
@@ -641,8 +665,11 @@ def analyze_transcript(
     model_name: Optional[str] = None,
     verbatim: Optional[str] = None,
     known: Iterable[str] = (),
+    accent: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """대화 전문을 분석해 계약 JSON을 돌려준다.
+
+    accent는 발음 정답지다. 있으면 프롬프트에 구간이 붙고 결과에 accent_misheard가 생길 수 있다.
 
     generate_text를 주면 그걸 호출한다(테스트용). 없으면 Vertex AI 텍스트 모델을
     한 번 부르고, 파싱에 실패하면 한 번 더 시도한다. known은 학습자가 이미 아는 표현(프롬프트와 코드 필터 둘 다에 쓴다).
@@ -651,11 +678,11 @@ def analyze_transcript(
         generate_text = make_generate_text(model_name)
 
     known = list(known)
-    prompt = with_known(with_verbatim(build_prompt(transcript), verbatim), known)
+    prompt = with_accent(with_known(with_verbatim(build_prompt(transcript), verbatim), known), accent)
     last_error: Optional[Exception] = None
     for attempt in range(2):
         try:
-            result = normalize_tutor_json(generate_text(prompt), transcript, verbatim=verbatim, known=known)
+            result = normalize_tutor_json(generate_text(prompt), transcript, verbatim=verbatim, known=known, accent=accent)
             if is_empty_result(result):
                 raise ValueError("빈 결과(5개 섹션이 모두 비었습니다)")
             return result
@@ -696,19 +723,27 @@ def run_tutoring(
     generate_text: Optional[Callable[[str], Any]] = None,
     transcribe: Optional[Callable[[Any], str]] = None,
     known: Optional[Iterable[str]] = None,
+    accent: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Dict[str, Any], bool]:
     """전문 파일을 읽어 분석·저장하고 (계약 JSON, 저장 성공 여부)를 돌려준다.
 
     분석이 실패(빈 결과 포함)하면 예외를 그대로 올리며, 이때 저장은 하지 않아
     기존 JSON을 빈 내용으로 덮어쓰지 않는다. known을 주지 않으면 알려 준 표현 저장소와 학습자 카드에서 읽는다.
+    accent(발음 정답지)를 주지 않으면 PRON_DIR에서 읽고, 분석이 찾은 오인식 단어는 정답지 파일에 합친다.
     """
     path = Path(transcript_path)
     text = path.read_text(encoding="utf-8")
     if known is None:
         known = known_store.analysis_expressions()
+    if accent is None:
+        accent = _load_accent()
     with track_usage() as usage:
         verbatim = _verbatim_for(path, get_tutoring_dir(), transcribe)
-        data = analyze_transcript(text, generate_text=generate_text, verbatim=verbatim, known=known)
+        data = analyze_transcript(text, generate_text=generate_text, verbatim=verbatim, known=known, accent=accent)
+    try:
+        accent_key.merge_call_words(path.stem, data.get("accent_misheard"))
+    except Exception as e:  # noqa: BLE001 - 정답지에 못 합쳐도 분석 결과는 저장한다
+        logger.error("오인식 단어를 정답지에 합치지 못했어요: %s", e)
     _add_cost(data, usage)
     saved = save_tutoring(data, path) is not None
     return data, saved
