@@ -1,17 +1,18 @@
-import { Briefcase, ChevronLeft, ChevronRight, GraduationCap, MessageCircle, MessageSquareText, Phone } from 'lucide-react';
+import { Briefcase, ChevronLeft, ChevronRight, GraduationCap, ListChecks, MessageCircle, MessageSquareText, Phone } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Avatar } from '../components/Avatar';
 import { FriendMemory, type MemoryState } from '../components/FriendMemory';
 import { SummaryBadge } from '../components/SummaryState';
 import { PeopleList, TwoPane } from '../components/PeopleList';
 import { CallButton, List, QuietButton, RowLink, Screen, useWide } from '../components/ui';
+import { Drill } from './Drill';
 import { WordText } from '../components/WordText';
 import { getPartnerMemory, type CallSummary, type LearnerProfile, type PartnerMemory } from '../lib/api';
 import { getPersonCalls } from '../lib/apiPeople';
 import { formatShortDuration, formatWhen } from '../lib/callFormat';
 import { PARK_ID, isPark, partnerMeta, type Partner } from '../lib/partners';
 import { pronSummaryOf, type PronWeak } from '../lib/pron';
-import { go } from '../lib/router';
+import { go, useRouteSub } from '../lib/router';
 import { useSummaryPolling } from '../lib/useSummaryPolling';
 import { useSwipe } from '../lib/swipe';
 import { visiblePartners } from '../lib/visibility';
@@ -294,6 +295,7 @@ export function PersonView({
               <RowLink icon={MessageSquareText} title="자유 대화" desc="주제 정하기" onClick={() => go('topic')} />
               <RowLink icon={Briefcase} title="상황 역할극" desc="미국 회사와 생활 장면 12개" onClick={() => go('missions')} />
               <RowLink icon={GraduationCap} title="가르치며 배우기" desc="오늘 공부한 내용을 영어로 설명해요" onClick={() => go('teachback')} />
+              <RowLink icon={ListChecks} title="문법 미니 드릴" desc="잘 틀리는 표현으로 만든 5문제" onClick={() => go('person', false, partner.id, 'drill')} />
             </List>
           </section>
           <ParkCards profile={profile} onRetryProfile={onRetryProfile} />
@@ -319,12 +321,24 @@ export function Person({
   onRetryProfile: () => void;
 }) {
   const wide = useWide();
+  const sub = useRouteSub();
   const partner = partnerId ? visiblePartners().find((p) => p.id === partnerId) : undefined;
   useEffect(() => {
     if (!partner) go('home', true);
   }, [partner]);
   if (!partner) return null;
   const hint = profile?.weak_points?.[0]?.pattern;
+  if (sub === 'drill' && isPark(partner)) {
+    return wide ? (
+      <Screen wide>
+        <TwoPane list={<PeopleList activeId={partner.id} parkHint={hint} />}>
+          <Drill embedded />
+        </TwoPane>
+      </Screen>
+    ) : (
+      <Drill />
+    );
+  }
   const view = <PersonView partnerId={partner.id} profile={profile} onCall={onCall} onRetryProfile={onRetryProfile} />;
   if (wide) {
     return (
