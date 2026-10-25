@@ -536,8 +536,40 @@ async def partner_memory_forget(partner_id: str, kind: str, index: int, text: Op
 async def chat_get(partner_id: str):
     """친구와 주고받은 문자 최근 200개. 여섯 친구가 아니면 400."""
     _partner_or_400(partner_id)
-    messages = await asyncio.to_thread(chat.load_messages, partner_id)
-    return {"messages": messages}
+    view = await asyncio.to_thread(chat.load_view, partner_id)
+    if not view["pinned"]:  # 고정한 메시지가 없으면 예전 응답 모양({"messages": [...]})을 그대로 둔다
+        del view["pinned"]
+    return view
+
+
+@app.post("/api/chat/{partner_id}/pin")
+async def chat_pin(partner_id: str, raw: Request):
+    """메시지를 맨 위에 고정하거나({id, pinned:true}) 고정을 푼다({id, pinned:false}). 없는 메시지면 404."""
+    _partner_or_400(partner_id)
+    body = await _json_object(raw)
+    mid, pinned = body.get("id"), body.get("pinned")
+    if not isinstance(mid, str) or not isinstance(pinned, bool):
+        raise HTTPException(status_code=400, detail="id와 pinned가 필요해요.")
+    try:
+        await asyncio.to_thread(chat.set_pinned, partner_id, mid, pinned)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="해당 메시지가 없어요.")
+    return {"status": "ok"}
+
+
+@app.post("/api/chat/{partner_id}/delete")
+async def chat_delete(partner_id: str, raw: Request):
+    """메시지를 지운다({id}). 지운 메시지는 화면과 친구에게 보내는 대화 문맥에서 빠진다. 없는 메시지면 404."""
+    _partner_or_400(partner_id)
+    body = await _json_object(raw)
+    mid = body.get("id")
+    if not isinstance(mid, str):
+        raise HTTPException(status_code=400, detail="id가 필요해요.")
+    try:
+        await asyncio.to_thread(chat.delete_message, partner_id, mid)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="해당 메시지가 없어요.")
+    return {"status": "ok"}
 
 
 @app.post("/api/chat/{partner_id}")

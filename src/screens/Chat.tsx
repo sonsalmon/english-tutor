@@ -1,9 +1,10 @@
-import { ChevronLeft, Phone, SendHorizontal } from 'lucide-react';
+import { ChevronLeft, MoreHorizontal, Phone, Pin, PinOff, SendHorizontal, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Avatar } from '../components/Avatar';
 import { WordText } from '../components/WordText';
 import { QuietButton } from '../components/ui';
-import { closeChat, getChat, getPartnerMemory, sendChat, type ChatMessage, type PartnerMemory, type Wordbook } from '../lib/api';
+import { closeChat, getPartnerMemory, sendChat, type PartnerMemory, type Wordbook } from '../lib/api';
+import { deleteChat, getChatView, pinChat, type ChatItem } from '../lib/apiChat';
 import { clock, sameDay, yesterdayOf } from '../lib/callFormat';
 import { friendlyError } from '../lib/errors';
 import { buildChatInstruction } from '../lib/instructions';
@@ -15,6 +16,8 @@ import { visibleFriends } from '../lib/visibility';
 const IDLE_CLOSE_MS = 2 * 60 * 1000;
 const MAX_LENGTH = 1000;
 const GAP_MS = 5 * 60 * 1000;
+const LONG_PRESS_MS = 450;
+const MOVE_CANCEL_PX = 8;
 
 function dayLabel(d: Date, now = new Date()): string {
   if (sameDay(d, now)) return '오늘';
@@ -33,7 +36,14 @@ type ConversationProps = {
 
 function Conversation({ partner, brief, interests, wordbook, profileReady, onCall }: ConversationProps) {
   const id = partner.id;
-  const [messages, setMessages] = useState<ChatMessage[] | null>(null);
+  const [messages, setMessages] = useState<ChatItem[] | null>(null);
+  const [pinned, setPinned] = useState<ChatItem[]>([]);
+  const [menu, setMenu] = useState<ChatItem | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [menuBusy, setMenuBusy] = useState(false);
+  const [menuError, setMenuError] = useState<string | null>(null);
+  const press = useRef<{ timer: number; x: number; y: number } | null>(null);
+  const pressed = useRef(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
   const [draft, setDraft] = useState('');
@@ -61,9 +71,15 @@ function Conversation({ partner, brief, interests, wordbook, profileReady, onCal
     setMessages(null);
     setLoadError(null);
     const controller = new AbortController();
-    getChat(id, controller.signal).then(setMessages, (e) => {
-      if (!controller.signal.aborted) setLoadError(friendlyError(e, '대화를 불러오지 못했어요.'));
-    });
+    getChatView(id, controller.signal).then(
+      (v) => {
+        setMessages(v.messages);
+        setPinned(v.pinned);
+      },
+      (e) => {
+        if (!controller.signal.aborted) setLoadError(friendlyError(e, '대화를 불러오지 못했어요.'));
+      },
+    );
     return () => controller.abort();
   }, [id, reload]);
 
@@ -129,7 +145,7 @@ function Conversation({ partner, brief, interests, wordbook, profileReady, onCal
       await memoryLoad.current;
       const instruction = buildChatInstruction(partner, brief, memory.current, interests ?? [], wordbook ?? null);
       const res = await sendChat(id, instruction, text);
-      setMessages((prev) => [...(prev ?? []), ...res.messages]);
+      setMessages((prev) => [...(prev ?? []), ...(res.messages as ChatItem[])]);
       if (alive.current) {
         dirty.current = true;
         armIdle();
@@ -142,6 +158,91 @@ function Conversation({ partner, brief, interests, wordbook, profileReady, onCal
     } finally {
       setPending(null);
       textarea.current?.focus({ preventScroll: true });
+    }
+  }
+
+  function openMenu(m: ChatItem) {
+    setMenu(m);
+    setConfirmDelete(false);
+    setMenuError(null);
+  }
+
+  function cancelPress() {
+    if (press.current) window.clearTimeout(press.current.timer);
+    press.current = null;
+  }
+
+  function pressHandlers(m: ChatItem) {
+    return {
+      onPointerDown: (e: React.PointerEvent) => {
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+        cancelPress();
+        pressed.current = false;
+        const timer = window.setTimeout(() => {
+          pressed.current = true;
+          press.current = null;
+          navigator.vibrate?.(10);
+          openMenu(m);
+        }, LONG_PRESS_MS);
+        press.current = { timer, x: e.clientX, y: e.clientY };
+      },
+      onPointerMove: (e: React.PointerEvent) => {
+        const p = press.current;
+        if (p && Math.hypot(e.clientX - p.x, e.clientY - p.y) > MOVE_CANCEL_PX) cancelPress();
+      },
+      onPointerUp: cancelPress,
+      onPointerCancel: cancelPress,
+      onPointerLeave: cancelPress,
+      onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
+      // 길게 눌러 메뉴를 연 손가락이 떼어질 때 단어 탭으로 번지지 않게 한다.
+      onClickCapture: (e: React.MouseEvent) => {
+        if (pressed.current) {
+          pressed.current = false;
+          e.stopPropagation();
+          e.preventDefault();
+        }
+      },
+    };
+  }
+
+  async function togglePin(m: ChatItem) {
+    setMenuBusy(true);
+    setMenuError(null);
+    try {
+      const next = !m.pinned;
+      await pinChat(id, m.id, next);
+      const updated = { ...m, pinned: next };
+      setMessages((prev) => (prev ?? []).map((x) => (x.id === m.id ? updated : x)));
+      setPinned((prev) => (next ? [...prev.filter((x) => x.id !== m.id), updated] : prev.filter((x) => x.id !== m.id)));
+      setMenu(null);
+    } catch (e) {
+      setMenuError(friendlyError(e, m.pinned ? '고정을 풀지 못했어요.' : '고정하지 못했어요.'));
+    } finally {
+      setMenuBusy(false);
+    }
+  }
+
+  async function removeMessage(m: ChatItem) {
+    setMenuBusy(true);
+    setMenuError(null);
+    try {
+      await deleteChat(id, m.id);
+      setMessages((prev) => (prev ?? []).filter((x) => x.id !== m.id));
+      setPinned((prev) => prev.filter((x) => x.id !== m.id));
+      setMenu(null);
+    } catch (e) {
+      setMenuError(friendlyError(e, '지우지 못했어요.'));
+    } finally {
+      setMenuBusy(false);
+    }
+  }
+
+  function jumpTo(m: ChatItem) {
+    const el = document.getElementById(`msg-${m.id}`);
+    if (el) {
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    } else {
+      openMenu(m);
     }
   }
 
@@ -184,6 +285,35 @@ function Conversation({ partner, brief, interests, wordbook, profileReady, onCal
         </button>
       </header>
 
+      {pinned.length > 0 && (
+        <section aria-label="고정한 메시지" className="sticky top-[calc(61px+env(safe-area-inset-top))] z-[9] -mx-5 max-h-36 overflow-y-auto border-b border-line bg-surface/95 px-5 py-1.5 backdrop-blur lg:mx-0 lg:px-0">
+          <ul>
+            {pinned.map((m) => (
+              <li key={m.id} className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => jumpTo(m)}
+                  className="flex min-h-11 min-w-0 flex-1 items-center gap-2 text-left"
+                >
+                  <Pin size={14} aria-hidden className="shrink-0 text-ink-soft" />
+                  <span lang={m.role === 'me' ? undefined : 'en'} className="truncate text-sm text-ink">
+                    {m.text}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openMenu(m)}
+                  aria-label="고정한 메시지 메뉴"
+                  className="grid size-11 shrink-0 place-items-center rounded-full text-ink-soft hover:bg-line/60"
+                >
+                  <MoreHorizontal size={18} aria-hidden />
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <div className="flex flex-1 flex-col py-4">
         {loadError ? (
           <div className="my-auto space-y-4 py-10 text-center">
@@ -213,21 +343,48 @@ function Conversation({ partner, brief, interests, wordbook, profileReady, onCal
               const endsRun = !next || next.role !== m.role || gapAfter || (valid && !sameDay(new Date(next.at), at));
               const mine = m.role === 'me';
               return (
-                <li key={`${i}-${m.at}`} className={newDay ? '' : startsRun ? 'mt-3' : 'mt-1'}>
+                <li key={m.id} id={`msg-${m.id}`} className={newDay ? '' : startsRun ? 'mt-3' : 'mt-1'}>
                   {newDay && <p className="my-4 text-center text-xs font-semibold text-ink-soft">{dayLabel(at, now)}</p>}
                   <div className={`flex items-start gap-2 ${mine ? 'justify-end' : ''}`}>
                     {!mine && <span className="size-8 shrink-0">{startsRun && <Avatar partner={partner} size={32} />}</span>}
+                    {mine && (
+                      <button
+                        type="button"
+                        onClick={() => openMenu(m)}
+                        aria-label="메시지 메뉴"
+                        className="grid size-11 shrink-0 place-items-center self-center rounded-full text-ink-soft hover:bg-line/60"
+                      >
+                        <MoreHorizontal size={18} aria-hidden />
+                      </button>
+                    )}
                     <div className={`flex max-w-[80%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
                       <p
                         lang={mine ? undefined : 'en'}
+                        {...pressHandlers(m)}
+                        style={{ WebkitTouchCallout: 'none' }}
                         className={`rounded-2xl px-4 py-2.5 leading-normal break-words whitespace-pre-wrap ${
                           mine ? `bg-ink text-white ${startsRun ? 'rounded-tr-md' : ''}` : `border border-line bg-surface ${startsRun ? 'rounded-tl-md' : ''}`
                         }`}
                       >
                         <WordText text={m.text} />
                       </p>
-                      {endsRun && valid && <span className="mt-1 text-xs text-ink-soft">{clock(at)}</span>}
+                      {(endsRun && valid) || m.pinned ? (
+                        <span className="mt-1 flex items-center gap-1 text-xs text-ink-soft">
+                          {m.pinned && <Pin size={12} aria-label="고정됨" />}
+                          {endsRun && valid && clock(at)}
+                        </span>
+                      ) : null}
                     </div>
+                    {!mine && (
+                      <button
+                        type="button"
+                        onClick={() => openMenu(m)}
+                        aria-label="메시지 메뉴"
+                        className="grid size-11 shrink-0 place-items-center self-center rounded-full text-ink-soft hover:bg-line/60"
+                      >
+                        <MoreHorizontal size={18} aria-hidden />
+                      </button>
+                    )}
                   </div>
                 </li>
               );
@@ -301,6 +458,78 @@ function Conversation({ partner, brief, interests, wordbook, profileReady, onCal
           </p>
         )}
       </form>
+      {menu && (
+        <div className="fixed inset-0 z-30 flex items-end justify-center bg-ink/40" onClick={() => !menuBusy && setMenu(null)}>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="메시지 메뉴"
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-[480px] rounded-t-3xl bg-surface px-5 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-lg"
+          >
+            <p lang={menu.role === 'me' ? undefined : 'en'} className="mb-3 line-clamp-2 border-b border-line pb-3 text-sm text-ink-soft">
+              {menu.text}
+            </p>
+            {menuError && (
+              <p role="alert" className="mb-2 rounded-xl border border-end/40 bg-end/10 px-4 py-2.5 text-sm text-ink">
+                {menuError}
+              </p>
+            )}
+            {confirmDelete ? (
+              <div className="space-y-3">
+                <p className="font-semibold">이 메시지를 지울까요?</p>
+                <p className="text-sm text-ink-soft">지우면 되돌릴 수 없어요. 친구도 이 메시지를 이어서 보지 않아요.</p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={menuBusy}
+                    onClick={() => setConfirmDelete(false)}
+                    className="min-h-12 flex-1 rounded-full border border-line font-semibold text-ink hover:bg-paper"
+                  >
+                    취소
+                  </button>
+                  <button
+                    type="button"
+                    disabled={menuBusy}
+                    onClick={() => void removeMessage(menu)}
+                    className="min-h-12 flex-1 rounded-full bg-end font-semibold text-white hover:bg-end-press disabled:opacity-60"
+                  >
+                    지우기
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col">
+                <button
+                  type="button"
+                  disabled={menuBusy}
+                  onClick={() => void togglePin(menu)}
+                  className="flex min-h-12 items-center gap-3 rounded-xl px-2 text-left font-semibold text-ink hover:bg-paper"
+                >
+                  {menu.pinned ? <PinOff size={20} aria-hidden /> : <Pin size={20} aria-hidden />}
+                  {menu.pinned ? '고정 풀기' : '맨 위에 고정'}
+                </button>
+                <button
+                  type="button"
+                  disabled={menuBusy}
+                  onClick={() => setConfirmDelete(true)}
+                  className="flex min-h-12 items-center gap-3 rounded-xl px-2 text-left font-semibold text-end hover:bg-paper"
+                >
+                  <Trash2 size={20} aria-hidden />
+                  지우기
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMenu(null)}
+                  className="mt-1 min-h-12 rounded-full border border-line font-semibold text-ink hover:bg-paper"
+                >
+                  닫기
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </main>
   );
 }
