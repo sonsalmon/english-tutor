@@ -64,8 +64,8 @@ Rules:
 - Exactly {count} questions: 2 of type "blank", 2 of type "choice", 1 of type "rephrase". Cover as many different weak points as you can; each question targets one of them (copy its pattern text into "focus").
 - Natural American English, one short sentence per question (at most 18 words). Do not reuse the learner's example sentences verbatim.
 - "blank": "prompt" is a sentence with exactly one blank written as ____ . "answer" is the 1-3 words that fill it. "accept" lists other fully correct fillers (may be empty).
-- "choice": "prompt" is a sentence with exactly one ____ . "options" has 3 options, only one is correct, and "answer" is that option written exactly as in "options".
-- "rephrase": "prompt" is a sentence that contains the learner's kind of mistake. The learner rewrites it correctly. "answer" is the best rewrite and "accept" lists 1-3 other correct rewrites.
+- "choice": "prompt" is a sentence with exactly one ____ . "options" has 3 options, only one is correct, and "answer" is that option written exactly as in "options". Wrong options must be clearly wrong in this sentence, never just less common (avoid pairs like at/in the office where both sound natural).
+- "rephrase": "prompt" is a sentence that contains the learner's kind of mistake. The learner rewrites it correctly. "answer" is the best rewrite and "accept" lists 1-3 other correct rewrites that keep exactly the same meaning and fix only the mistake.
 - "explanation_ko": at most 2 short sentences in plain Korean saying why the answer is right and what the mistake is. No jargon.
 - Questions must have exactly one defensible answer (plus the "accept" list).
 
