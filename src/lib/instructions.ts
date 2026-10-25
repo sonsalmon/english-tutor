@@ -716,7 +716,7 @@ export function friendCoachBlock(strength: CorrectionStrength): string {
   const triggers =
     strength === 'off'
       ? 'ONLY when the learner asks about their English, like "Was that right?", "Is that correct?" or "How do I say ...?". A repeated mistake alone is never a reason, because the learner turned corrections off.'
-      : 'ONLY when (a) the learner asks about their English, like "Was that right?", "Is that correct?" or "How do I say ...?", or (b) the learner repeats the same clear mistake after you have already heard it twice.';
+      : 'ONLY when (a) the learner asks about their English, like "Was that right?", "Is that correct?" or "How do I say ...?", or (b) the learner makes the same kind of clear mistake a second time in this call (for example a wrong verb form or word order that they already got wrong earlier in the call). When (a) or (b) happens, do NOT stay silent: give the tip in that very turn, before anything else you say.';
   const level =
     strength === 'off'
       ? 'OFF. Never offer a tip on your own. When they ask, answer in one short, easy sentence.'

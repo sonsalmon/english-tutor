@@ -584,7 +584,8 @@ describe('friend coach mode', () => {
         expect(text).toContain('COACH MOMENT');
         expect(text).toContain('"Was that right?"');
         expect(text).toContain('"How do I say ...?"');
-        expect(text).toContain('repeats the same clear mistake');
+        expect(text).toContain('the same kind of clear mistake a second time in this call');
+        expect(text).toContain('do NOT stay silent');
         expect(text).toContain('ONE short tip');
         expect(text).toContain('straight back to being a friend in the SAME turn');
         expect(text).toContain('Outside a COACH MOMENT do not correct anything');
@@ -600,7 +601,7 @@ describe('friend coach mode', () => {
     const off = friendCoachBlock('off');
     expect(off).toContain('TIP STRENGTH: OFF');
     expect(off).toContain('A repeated mistake alone is never a reason');
-    expect(off).not.toContain('repeats the same clear mistake');
+    expect(off).not.toContain('a second time in this call');
   });
 
   test('every friend stays within PARTNER_PROMPT_LIMIT with coach mode on', () => {
