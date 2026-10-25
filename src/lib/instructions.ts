@@ -42,6 +42,13 @@ The example sentences in these notes are from EARLIER calls, not this one. Never
   return `WHAT YOU REMEMBER ABOUT THE LEARNER: nothing yet. You have no notes about this learner.`;
 }
 
+// 서버가 학습자 카드의 brief 맨 앞에 "Pronunciation check ..." 정답지 메모를 넣어 줄 때만 붙는 규칙이다. 모든 통화(Ms. Park, 친구, 가르치기)가 같이 쓴다.
+export const ACCENT_KEY_RULE = `ACCENT KEY: the learner is a Korean speaker, and the speech you hear can be wrong in the ways the pronunciation notes above list (a sound heard as another word, in either direction). Read everything you hear through that key. When a word does not fit the sentence but the word it is listed as an accent swap for does, silently take the intended word and answer the intended meaning, as if they had said it correctly. Do not ask them to repeat or confirm it, do not repeat the wrong word back, and do not comment on their pronunciation. Only when BOTH readings make sense in this sentence, ask one short question, for example "Did you mean A or B?", then carry on. For the sounds in this key, this rule replaces any other rule about asking what they said.`;
+
+export function accentBlock(brief: string): string {
+  return /Pronunciation check/.test(brief || '') ? `\n\n${ACCENT_KEY_RULE}` : '';
+}
+
 export type PracticeWord = { lemma: string; gloss: string; source?: string };
 const PRACTICE_MAX = 5;
 
@@ -130,7 +137,7 @@ TOOLS: during this call you have three abilities, like a friend with a phone.
 export function personaPrefix(brief: string, words: PracticeWord[] = [], withTool = true): string {
   return `${PERSONA}
 
-${memoryBlock(brief, withTool)}${practiceBlock(words)}${CALL_TOOLS}`;
+${memoryBlock(brief, withTool)}${accentBlock(brief)}${practiceBlock(words)}${CALL_TOOLS}`;
 }
 
 function openingStep(hasMemory: boolean, goalText: string, chip = ''): string {
@@ -334,7 +341,7 @@ function partnerMemoryBlock(brief: string, withTool: boolean, textChat = false):
   const common = `${base}\nUse these notes only to get a feel for the learner. You may use the Expressions to recycle yourself, naturally, so the learner hears them; never point them out. Never bring up their weak points or mistakes.`;
   // 글자 채팅에서는 "can이야 can't야?" 같은 발음 확인이 사실상 교정이 되므로 예외를 두지 않는다.
   if (textChat) return `${common} In text chat, ignore any pronunciation check in the notes.`;
-  return `${common} One exception: if the notes include a pronunciation check and you are not sure which word of a listed pair the learner said, ask once, briefly, for example "Did you mean can or can't?", then carry on. That is checking what you heard, not correcting them.`;
+  return `${common}${accentBlock(brief)}`;
 }
 
 function partnerInterestsBlock(partner: Partner, interests: string[]): string {
@@ -875,7 +882,7 @@ Rules for the students:
 - When the teacher wraps up, Sam asks: "So what's the one main thing we should remember?"
 - Start the class with Maya saying: "Hi! So what are we learning today?"
 
-${seniorBlock(seniorMode, brief)}
+${seniorBlock(seniorMode, brief)}${accentBlock(brief)}
 
 Hidden notes (the teacher's own study notes; for you only):
 <<<
