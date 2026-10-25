@@ -1,6 +1,9 @@
 import { Captions, CaptionsOff, Link2, Mic, MicOff, MoonStar, Pause, Phone, PhoneOff, Play, Volume2, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { BlackScreen } from '../components/BlackScreen';
+import { CallMicNotice } from '../components/CallMicNotice';
+import { CallReplayButton } from '../components/CallReplayButton';
+import { CallThinking } from '../components/CallThinking';
 import type { MemoryState } from '../components/FriendMemory';
 import { ShareRow } from '../components/ShareRow';
 import { SharedClipCard } from '../components/SharedClipCard';
@@ -267,6 +270,8 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, wordbo
     call.resume();
     setNow(Date.now());
   };
+  const showThinking = live && call.thinking && !call.paused && !call.botSpeaking && !call.reconnecting;
+  const thinkingSubject = setup.kind === 'teachback' ? '학생이' : isPark(partner) ? 'Ms. Park이' : `${partner.name}님이`;
   const speakingLabel = setup.kind === 'teachback' ? '학생이 말하는 중' : isPark(partner) ? 'Ms. Park이 말하는 중' : `${partner.name}님이 말하는 중`;
   const status =
     call.status === 'ready'
@@ -313,8 +318,10 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, wordbo
         />
         <h1 className="mt-4 text-2xl font-bold">{partner.name}</h1>
         <p className={`mt-1 min-h-6 ${call.status === 'error' ? 'text-end-press' : 'text-ink-soft'}`} role="status">
-          {status}
+          {showThinking ? <CallThinking name={thinkingSubject} /> : status}
         </p>
+        {live && !call.paused && call.micNotice !== 'ok' && <CallMicNotice state={call.micNotice} />}
+        {live && call.canReplay && <CallReplayButton ready={call.replayReady} replaying={call.replaying} onClick={() => void call.replayLast()} />}
         {live && notice && (
           <p role="status" className="mt-3 rounded-full bg-paper px-4 py-2 text-sm text-ink-soft">
             {notice}
