@@ -86,9 +86,9 @@ function HabitCard({ habit, onRemove }: { habit: AccentHabit; onRemove: () => Pr
         </ul>
       )}
       {habit.tip && habit.action === 'practice' && (
-        <details className="mt-3 rounded-xl border border-line px-3 py-2">
-          <summary className="min-h-8 cursor-pointer text-sm font-semibold">고치는 방법</summary>
-          <p className="mt-1 text-[15px] leading-relaxed">{habit.tip}</p>
+        <details className="mt-3 rounded-xl border border-line px-3">
+          <summary className="flex min-h-11 cursor-pointer items-center text-sm font-semibold">고치는 방법</summary>
+          <p className="pb-3 text-[15px] leading-relaxed">{habit.tip}</p>
         </details>
       )}
       <div className="mt-2">
