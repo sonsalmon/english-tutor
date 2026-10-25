@@ -34,7 +34,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCRequestHandler,
 )
 
-from server import call_bot, chat, clip_translate, clipdb, culture_filter, culturedb, feed, native_expr, people, phrase_gloss, pron, review, summary_jobs, tts, wordbook, youtube
+from server import call_bot, chat, clip_translate, clipdb, culture_filter, culturedb, drill, feed, native_expr, people, phrase_gloss, pron, review, summary_jobs, tts, wordbook, youtube
 from server.call_bot import parse_call_config, run_bot, time_limit_for_mode
 from server import partner_memory, resume
 from server.history import list_calls, live_cost_of, load_call, totals as call_totals
@@ -967,6 +967,38 @@ async def pron_finish_endpoint(raw: Request):
 async def pron_latest_endpoint():
     """가장 최근 시험 결과 그대로. 없으면 {"result": null}."""
     return await asyncio.to_thread(pron.latest_result) or {"result": None}
+
+
+DRILL_EMPTY_DETAIL = "아직 연습할 약점이 없어요. 통화를 한 번 하면 문제가 만들어져요."
+DRILL_FAILED_DETAIL = "문제를 만들지 못했어요. 잠시 후 다시 해 주세요."
+
+
+@app.get("/api/drill")
+async def drill_endpoint():
+    """오늘의 미니 드릴(문제만, 정답·해설 없음). 하루 한 벌만 만들어 저장하고 다시 열면 저장본을 준다."""
+    try:
+        today_drill = await asyncio.to_thread(drill.get_drill)
+    except drill.NoWeakPoints:
+        raise HTTPException(status_code=409, detail=DRILL_EMPTY_DETAIL)
+    except Exception as e:
+        logger.error(f"Drill generation failed: {e}")
+        raise HTTPException(status_code=502, detail=DRILL_FAILED_DETAIL)
+    return drill.public(today_drill)
+
+
+@app.post("/api/drill/check")
+async def drill_check_endpoint(raw: Request):
+    """{date, id, answer}로 한 문제를 판정하고 정답과 한국어 해설을 돌려준다. 모델은 부르지 않는다."""
+    body = await _json_object(raw)
+    date, question_id = body.get("date"), body.get("id")
+    if not isinstance(date, str) or not isinstance(question_id, str):
+        raise HTTPException(status_code=400, detail="요청 형식이 틀렸어요.")
+    try:
+        return await asyncio.to_thread(drill.check_answer, date, question_id, body.get("answer"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 # 셸(index.html)·서비스 워커·매니페스트는 브라우저 HTTP 캐시가 옛 것을 주지 않게 매번 확인시킨다.
