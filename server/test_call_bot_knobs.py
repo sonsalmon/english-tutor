@@ -41,11 +41,11 @@ class BargeInEnvTest(unittest.TestCase):
 
 class ProactiveAudioEnvTest(unittest.TestCase):
     def test_default_on_off_and_bad_value(self):
-        self.assertTrue(call_bot.proactive_audio_from_env({}))
+        self.assertFalse(call_bot.proactive_audio_from_env({}))
         self.assertTrue(call_bot.proactive_audio_from_env({"LIVE_PROACTIVE_AUDIO": " ON "}))
         self.assertFalse(call_bot.proactive_audio_from_env({"LIVE_PROACTIVE_AUDIO": " Off "}))
         with mock.patch.object(call_bot.logger, "warning") as warn:
-            self.assertTrue(call_bot.proactive_audio_from_env({"LIVE_PROACTIVE_AUDIO": "maybe"}))
+            self.assertFalse(call_bot.proactive_audio_from_env({"LIVE_PROACTIVE_AUDIO": "maybe"}))
         warn.assert_called_once()
 
 

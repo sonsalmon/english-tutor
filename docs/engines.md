@@ -67,7 +67,7 @@ shell 파이프라인: `transport.input → [stt] → user_aggregator → llm �
 | `LIVE_BARGE_IN_MIN_VOICED_MS` / `_CONFIDENCE` / `_MIN_DBFS` | 700 / 0.7 / -40 | | 유성음이 이 길이 이상 이어지면 상대를 멈춘다. 200 ms 이하 끊김은 잇는다 |
 | `LIVE_SILENCE_REENGAGE_SEC` | `10` | `0` | smalltalk·freetalk에서 상대 말이 끝난 뒤 학습자가 이 초 동안 말하지 않으면 서버가 `[Silence note: ...]`를 보내 상대가 내용 있는 말을 먼저 꺼내게 한다 |
 | `LIVE_SILENCE_REENGAGE_MAX` | `2` | | 학습자가 말하기 전 연속 재참여 최대 횟수 |
-| `LIVE_PROACTIVE_AUDIO` | `on` | `off` | A/B 시험 전용. 모든 Gemini 엔진의 선제 오디오(`ProactivityConfig(proactive_audio=True)`)를 끈다(`proactivity`를 주지 않음). 시작 로그 `Proactive audio: on\|off` |
+| `LIVE_PROACTIVE_AUDIO` | `off` | `on` | 기본은 끔: 모든 Gemini 엔진에 `proactivity`를 주지 않는다. 2.5에서 선제 오디오를 켜면 모델이 대답하지 않기로 해 재참여가 필요한 무응답이 났다(P3 A/B). `on` = 옛 동작(`ProactivityConfig(proactive_audio=True)`). 이 스위치만은 "끄는 값" 칸이 옛 동작 값이다. 시작 로그 `Proactive audio: on\|off` |
 
 - `vad` 모드는 Gemini에 `NO_INTERRUPTION`을 주고 끊기는 서버가 한다. `LIVE_BARGE_IN_WORDS=0`이면 모드가 무엇이든 Gemini 기본 끊기(`native`)다. `TURN_MODE=smart`(Gemini VAD 끈 상태)에서는 게이트를 쓰지 않는다.
 - 침묵 재참여는 `turn_complete=True`로 보내 Gemini가 바로 이어 말한다. 전문에는 `**system:** silence re-engage #N at <초>s`로 남고 `[Silence note:` 로 시작하는 받아쓰기는 학습자 발화에서 버린다. 일시정지 중에는 지나지 않는다.

@@ -102,7 +102,7 @@ SILENCE_REENGAGE_SEC_ENV = "LIVE_SILENCE_REENGAGE_SEC"
 SILENCE_REENGAGE_MAX_ENV = "LIVE_SILENCE_REENGAGE_MAX"
 DEFAULT_SILENCE_REENGAGE_SEC = 10
 DEFAULT_SILENCE_REENGAGE_MAX = 2
-# 묶음 4 P3 A/B 전용: 선제 오디오(proactive_audio)를 끄면 모델이 대답하지 않을 자유가 사라진다. 기본 on = 옛 동작 그대로.
+# 묶음 4 P3: 선제 오디오(proactive_audio)를 켜면 모델이 대답하지 않기로 할 수 있어 2.5에서 무응답이 났다. 기본 off, on = 옛 동작.
 PROACTIVE_AUDIO_ENV = "LIVE_PROACTIVE_AUDIO"
 SILENCE_NOTE_PREFIX = "[Silence note:"
 LEARNER_VOICE_MS = 300  # 침묵 감시가 학습자 말로 치는 최소 유성음 길이
@@ -304,14 +304,14 @@ def silence_reengage_from_env(env=None) -> Tuple[int, int]:
 
 
 def proactive_audio_from_env(env=None) -> bool:
-    """`LIVE_PROACTIVE_AUDIO`(on|off). 없거나 잘못되면 기본 on(옛 동작). A/B 시험 전용 노브."""
+    """`LIVE_PROACTIVE_AUDIO`(on|off). 없거나 잘못되면 기본 off. on = 옛 동작(선제 오디오 켬)."""
     raw = ((os.environ if env is None else env).get(PROACTIVE_AUDIO_ENV) or "").strip().lower()
-    if not raw or raw == "on":
-        return True
-    if raw == "off":
+    if not raw or raw == "off":
         return False
+    if raw == "on":
+        return True
     logger.warning("%s=%r ignored (on|off)", PROACTIVE_AUDIO_ENV, raw)
-    return True
+    return False
 
 
 def silence_prompt(seconds: int) -> str:
