@@ -36,7 +36,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
 
 from server import accent_key, call_bot, chat, clip_translate, clipdb, culture_filter, culturedb, drill, feed, native_expr, people, phrase_gloss, pron, review, summary_jobs, tts, wordbook, youtube
 from server.call_bot import parse_call_config, run_bot, time_limit_for_mode
-from server import partner_memory, reasoner, resume, turn_rules
+from server import partner_memory, reasoner, resume, turn_rules, voice_style
 from server.history import list_calls, live_cost_of, load_call, totals as call_totals
 from server.pricing import combine_cost
 from server.readgloss import (
@@ -420,6 +420,7 @@ async def offer(raw: Request, background_tasks: BackgroundTasks):
     if config:
         config = await asyncio.to_thread(resume.with_resume, config)
         config = turn_rules.with_turn_rules(config)
+        config = voice_style.with_voice_style(config, config.mode)
         if os.getenv(LOG_CALL_PROMPT_ENV):
             logger.info("Call prompt (%s, %s):\n%s", config.mode, config.partner or "park", config.system_instruction)
 
