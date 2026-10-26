@@ -102,6 +102,8 @@ SILENCE_REENGAGE_SEC_ENV = "LIVE_SILENCE_REENGAGE_SEC"
 SILENCE_REENGAGE_MAX_ENV = "LIVE_SILENCE_REENGAGE_MAX"
 DEFAULT_SILENCE_REENGAGE_SEC = 10
 DEFAULT_SILENCE_REENGAGE_MAX = 2
+# 묶음 4 P3 A/B 전용: 선제 오디오(proactive_audio)를 끄면 모델이 대답하지 않을 자유가 사라진다. 기본 on = 옛 동작 그대로.
+PROACTIVE_AUDIO_ENV = "LIVE_PROACTIVE_AUDIO"
 SILENCE_NOTE_PREFIX = "[Silence note:"
 LEARNER_VOICE_MS = 300  # 침묵 감시가 학습자 말로 치는 최소 유성음 길이
 BARGE_IN_WORD_RE = re.compile(r"[^\W\d_]+(?:['’-][^\W\d_]+)*")
@@ -299,6 +301,17 @@ def silence_reengage_from_env(env=None) -> Tuple[int, int]:
         _number_env(env, SILENCE_REENGAGE_SEC_ENV, DEFAULT_SILENCE_REENGAGE_SEC, 0, 300, int),
         _number_env(env, SILENCE_REENGAGE_MAX_ENV, DEFAULT_SILENCE_REENGAGE_MAX, 0, 10, int),
     )
+
+
+def proactive_audio_from_env(env=None) -> bool:
+    """`LIVE_PROACTIVE_AUDIO`(on|off). 없거나 잘못되면 기본 on(옛 동작). A/B 시험 전용 노브."""
+    raw = ((os.environ if env is None else env).get(PROACTIVE_AUDIO_ENV) or "").strip().lower()
+    if not raw or raw == "on":
+        return True
+    if raw == "off":
+        return False
+    logger.warning("%s=%r ignored (on|off)", PROACTIVE_AUDIO_ENV, raw)
+    return True
 
 
 def silence_prompt(seconds: int) -> str:
@@ -1247,6 +1260,8 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
     if listener is not None and listener.instruction_suffix.strip():
         instruction = f"{instruction}\n\n{listener.instruction_suffix.strip()}"
 
+    proactive_audio = proactive_audio_from_env()
+    logger.info("Proactive audio: %s", "on" if proactive_audio else "off")
     live_service = live_service_class()
     llm = live_service(
         project_id=get_project_id(),
@@ -1262,7 +1277,7 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
             vad=vad,
             context_window_compression={"enabled": True},
             enable_affective_dialog=affective_dialog_from_env(engine=config.engine),
-            proactivity=ProactivityConfig(proactive_audio=True),
+            **({"proactivity": ProactivityConfig(proactive_audio=True)} if proactive_audio else {}),
         ),
     )
 
