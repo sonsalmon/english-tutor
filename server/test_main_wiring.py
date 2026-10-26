@@ -1245,7 +1245,7 @@ class OfferTurnRulesWiringTest(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(len(config.system_instruction), len("BASE"))
 
     async def test_switch_off_and_non_chat_modes_keep_the_instruction(self):
-        off = await self.offer_config("smalltalk", {"LIVE_TURN_RULES": "off"})
+        off = await self.offer_config("smalltalk", {"LIVE_TURN_RULES": "off", "LIVE_VOICE_STYLE": "off"})
         mission = await self.offer_config("mission", {"LIVE_TURN_RULES": "hesitation,backchannel"})
         teachback = await self.offer_config("teachback", {"LIVE_TURN_RULES": "hesitation,backchannel"})
 
