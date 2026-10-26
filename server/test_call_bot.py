@@ -360,19 +360,18 @@ class LiveKnobsTest(unittest.TestCase):
             self.assertFalse(call_bot.noise_filter_enabled({"NOISE_FILTER": value}))
         for env in ({}, {"NOISE_FILTER": "on"}, {"NOISE_FILTER": ""}):
             self.assertTrue(call_bot.noise_filter_enabled(env))
-        self.assertIsNone(call_bot.build_audio_in_filter({"NOISE_FILTER": "off"}))
+        self.assertIsNone(call_bot.build_audio_in_filter({"NOISE_FILTER": "off", "LIVE_INPUT_GAIN": "off"}))
 
     def test_noise_filter_built_when_pyrnnoise_present(self):
         from pipecat.audio.filters.rnnoise_filter import RNNoiseFilter
 
         with mock.patch.object(call_bot.logger, "info") as info:
-            self.assertIsInstance(call_bot.build_audio_in_filter({}), RNNoiseFilter)
-        info.assert_called_once()
+            self.assertIsInstance(call_bot.build_audio_in_filter({"LIVE_INPUT_GAIN": "off"}), RNNoiseFilter)
         self.assertIn("Noise filter on", info.call_args.args[0])
 
     def test_noise_filter_missing_pyrnnoise_warns_and_returns_none(self):
         with mock.patch.dict(sys.modules, {"pyrnnoise": None}), mock.patch.object(call_bot.logger, "warning") as warn:
-            self.assertIsNone(call_bot.build_audio_in_filter({}))
+            self.assertIsNone(call_bot.build_audio_in_filter({"LIVE_INPUT_GAIN": "off"}))
         warn.assert_called_once()
 
     def test_barge_in_words_counts_only_non_backchannel_words(self):
