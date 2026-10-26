@@ -34,9 +34,9 @@ class Clock:
         return self.now
 
 
-def planner(clock=None, n_clips=3, spoken=20.0):
+def planner(clock=None, n_clips=3, spoken=20.0, credit=0.5, seed=1):
     clips = [np.full(int(0.3 * SR), 30.0 * (i + 1)) for i in range(n_clips)]
-    p = bi.BreathPlanner(clips, rng=random.Random(1), clock=clock or Clock())
+    p = bi.BreathPlanner(clips, rng=random.Random(seed), clock=clock or Clock(), credit=credit)
     p.total_speech = spoken
     return p
 
@@ -133,8 +133,35 @@ class PlacementTest(unittest.TestCase):
             p.turn_ended()
         minutes = p.total_speech / 60
         self.assertGreater(minutes, 0.9)
-        self.assertLessEqual(p.inserted, bi.TARGET_PER_MIN * minutes + bi.BUDGET_SLACK)
+        self.assertLessEqual(p.inserted, bi.TARGET_PER_MIN * (minutes + bi.TURN_LOOKAHEAD_SEC / 60) + p.credit)
         self.assertGreaterEqual(p.inserted, 1)
+
+    def test_short_call_reply_start_depends_on_the_call_credit(self):
+        for credit, expected in ((0.7, 1), (0.4, 0)):
+            clock = Clock()
+            p = planner(clock, spoken=8.0, credit=credit)
+            learner_spoke(p)
+            p.turn_started()
+            run(p, [quiet(0.3), speech(3.0)], clock)
+            self.assertEqual(p.inserted, expected, credit)
+
+    def test_short_calls_average_near_two_per_partner_minute(self):
+        inserted, speech_sec = 0, 0.0
+        for seed in range(400):
+            clock = Clock()
+            p = bi.BreathPlanner([np.full(int(0.3 * SR), 30.0)], rng=random.Random(seed), clock=clock)
+            p.turn_started()
+            run(p, [quiet(0.3), speech(8.0)], clock)
+            p.turn_ended()
+            learner_spoke(p)
+            p.turn_started()
+            run(p, [quiet(0.3), speech(2.5), quiet(0.5), speech(1.5)], clock)
+            p.turn_ended()
+            inserted += p.inserted
+            speech_sec += p.total_speech
+        per_minute = inserted / (speech_sec / 60)
+        self.assertGreater(per_minute, 1.6)
+        self.assertLess(per_minute, 2.8)
 
     def test_off_or_no_clips_leave_frames_unchanged(self):
         self.assertFalse(bi.breaths_enabled({}))
