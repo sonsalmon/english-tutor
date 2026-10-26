@@ -215,7 +215,10 @@ class ProcessorTest(unittest.TestCase):
                 w.setsampwidth(2)
                 w.setframerate(SR)
                 w.writeframes(np.full(int(0.2 * SR), 40, dtype=np.int16).tobytes())
-            proc = bi.make_breath_processor("Kore", Path(tmp))
+            # 통화별 무작위 시작 값(credit) 때문에 삽입 여부가 실행마다 달라지지 않게 고정한다.
+            real_planner = bi.BreathPlanner
+            with mock.patch.object(bi, "BreathPlanner", lambda clips: real_planner(clips, rng=random.Random(1), credit=0.5)):
+                proc = bi.make_breath_processor("Kore", Path(tmp))
         pushed = []
 
         async def push(frame, direction=None):
