@@ -30,7 +30,8 @@ from server.engines.base import (
     engine_unavailable_reason,
 )
 from server.lesson import session_time_limit_from_env
-from server import call_tools, partner_memory
+from server import barge_in, call_tools, partner_memory
+from server.audio_gain import ChainAudioFilter, InputGainFilter, input_gain_settings
 from server.partner_memory import PARTNER_IDS, PARTNER_NAMES
 from server.pricing import UsageTotals, estimate_cost
 from server.readgloss import LEMMA_RE
@@ -89,6 +90,20 @@ NOISY_LOUD_PCT = 90
 MIC_CLEAR_LOUD_PCT = 50
 BARGE_IN_WORDS_ENV = "LIVE_BARGE_IN_WORDS"
 DEFAULT_BARGE_IN_WORDS = 3
+# 끼어들기 방식(묶음 4 P1): vad = 로컬 Silero 게이트 + 낱말 보조(기본), words = 낱말만(옛 동작), native = Gemini 기본 끊기.
+BARGE_IN_MODE_ENV = "LIVE_BARGE_IN_MODE"
+BARGE_IN_MODES = ("vad", "words", "native")
+DEFAULT_BARGE_IN_MODE = "vad"
+BARGE_IN_MIN_VOICED_MS_ENV = "LIVE_BARGE_IN_MIN_VOICED_MS"
+BARGE_IN_CONFIDENCE_ENV = "LIVE_BARGE_IN_CONFIDENCE"
+BARGE_IN_MIN_DBFS_ENV = "LIVE_BARGE_IN_MIN_DBFS"
+# 침묵 재참여(묶음 4 P4): 학습자가 이만큼 조용하면 상대가 먼저 내용 있는 말을 꺼낸다. 0이면 끈다.
+SILENCE_REENGAGE_SEC_ENV = "LIVE_SILENCE_REENGAGE_SEC"
+SILENCE_REENGAGE_MAX_ENV = "LIVE_SILENCE_REENGAGE_MAX"
+DEFAULT_SILENCE_REENGAGE_SEC = 10
+DEFAULT_SILENCE_REENGAGE_MAX = 2
+SILENCE_NOTE_PREFIX = "[Silence note:"
+LEARNER_VOICE_MS = 300  # 침묵 감시가 학습자 말로 치는 최소 유성음 길이
 BARGE_IN_WORD_RE = re.compile(r"[^\W\d_]+(?:['’-][^\W\d_]+)*")
 BACKCHANNEL_WORDS = frozenset({
     "mm", "mmm", "mhm", "mm-hm", "mm-hmm", "hm", "hmm", "uh", "um", "uh-huh", "ah", "oh", "aha",
@@ -242,6 +257,72 @@ def barge_in_words_from_env(env=None) -> int:
     return value
 
 
+def barge_in_mode_from_env(env=None) -> str:
+    """`LIVE_BARGE_IN_MODE`(vad|words|native). 없거나 잘못되면 기본 vad."""
+    raw = ((os.environ if env is None else env).get(BARGE_IN_MODE_ENV) or "").strip().lower()
+    if not raw:
+        return DEFAULT_BARGE_IN_MODE
+    if raw not in BARGE_IN_MODES:
+        logger.warning("%s=%r ignored (%s)", BARGE_IN_MODE_ENV, raw, "|".join(BARGE_IN_MODES))
+        return DEFAULT_BARGE_IN_MODE
+    return raw
+
+
+def _number_env(env, name: str, default, low, high, cast):
+    raw = (env.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = cast(raw)
+    except ValueError:
+        value = None
+    if value is None or not low <= value <= high:
+        logger.warning("%s=%r ignored (%s..%s)", name, raw, low, high)
+        return default
+    return value
+
+
+def barge_in_gate_settings(env=None) -> dict:
+    """BargeInGate 생성자 인자: 최소 유성음 길이(ms), Silero 신뢰도, 최소 레벨(dBFS). 잘못된 값은 그 노브만 무시."""
+    env = os.environ if env is None else env
+    return {
+        "min_voiced_ms": _number_env(env, BARGE_IN_MIN_VOICED_MS_ENV, barge_in.DEFAULT_MIN_VOICED_MS, 200, 3000, int),
+        "confidence": _number_env(env, BARGE_IN_CONFIDENCE_ENV, barge_in.DEFAULT_CONFIDENCE, 0.1, 0.99, float),
+        "min_dbfs": _number_env(env, BARGE_IN_MIN_DBFS_ENV, barge_in.DEFAULT_MIN_DBFS, -80.0, 0.0, float),
+    }
+
+
+def silence_reengage_from_env(env=None) -> Tuple[int, int]:
+    """(침묵 재참여 대기 초, 연속 최대 횟수). 대기 초가 0이면 끈다. 기본 (10, 2)."""
+    env = os.environ if env is None else env
+    return (
+        _number_env(env, SILENCE_REENGAGE_SEC_ENV, DEFAULT_SILENCE_REENGAGE_SEC, 0, 300, int),
+        _number_env(env, SILENCE_REENGAGE_MAX_ENV, DEFAULT_SILENCE_REENGAGE_MAX, 0, 10, int),
+    )
+
+
+def silence_prompt(seconds: int) -> str:
+    return (
+        f"{SILENCE_NOTE_PREFIX} the learner has said nothing for {seconds} seconds. Do not ask whether they are there "
+        "and do not repeat your question. Add one or two sentences of your own on the current topic - a small story "
+        "or your opinion - and end with a statement, not a question. Under 30 words.]"
+    )
+
+
+def call_knobs_summary(mode: str, env=None) -> str:
+    """전문 메타 `- vad:` 줄 끝에 덧붙일, 이번 통화에 켜진 묶음 4 장치. 전부 꺼져 있으면 빈 문자열."""
+    parts = []
+    barge = barge_in_mode_from_env(env)
+    if barge != "words":
+        parts.append(f"barge={barge}")
+    if input_gain_settings(env) is not None:
+        parts.append("gain=auto")
+    sec, _ = silence_reengage_from_env(env)
+    if sec and mode in CHAT_MODES:
+        parts.append(f"reengage={sec}s")
+    return " ".join(parts)
+
+
 def count_barge_in_words(text: str) -> int:
     """끼어들기로 셀 낱말 수. 맞장구(uh-huh, yeah, 음 …)와 잡음 표시 `{}`는 세지 않는다."""
     words = BARGE_IN_WORD_RE.findall(NOISE_MARK_RE.sub(" ", text or "").lower().replace("’", "'"))
@@ -255,7 +336,24 @@ def noise_filter_enabled(env=None) -> bool:
 
 
 def build_audio_in_filter(env=None):
-    """TransportParams(audio_in_filter=...)에 넣을 RNNoiseFilter. 꺼져 있거나 pyrnnoise가 없으면 None(경고만, 통화는 계속)."""
+    """TransportParams(audio_in_filter=...)에 넣을 입력 필터. 입력 이득(LIVE_INPUT_GAIN) → RNNoise 순서로 건다.
+    둘 다 꺼져 있으면 None, 하나만 켜져 있으면 그 필터 그대로(LIVE_INPUT_GAIN=off이면 옛 동작과 같다)."""
+    filters = []
+    gain = input_gain_settings(env)
+    if gain is None:
+        logger.info("Input gain off (%s)", "LIVE_INPUT_GAIN")
+    else:
+        filters.append(InputGainFilter(**gain))
+    noise = build_noise_filter(env)
+    if noise is not None:
+        filters.append(noise)
+    if not filters:
+        return None
+    return filters[0] if len(filters) == 1 else ChainAudioFilter(filters)
+
+
+def build_noise_filter(env=None):
+    """RNNoiseFilter. 꺼져 있거나 pyrnnoise가 없으면 None(경고만, 통화는 계속)."""
     if not noise_filter_enabled(env):
         logger.info("Noise filter off (%s)", NOISE_FILTER_ENV)
         return None
@@ -541,6 +639,8 @@ class CallRecord:
     usage: UsageTotals = field(default_factory=UsageTotals)
 
     def add_user(self, text: str) -> None:
+        if (text or "").lstrip().startswith(SILENCE_NOTE_PREFIX):
+            return  # 3.8이 침묵 재참여 메모를 학습자 말로 받아쓸 수 있다
         clean = clean_learner_text(" ".join(NOISE_MARK_RE.sub(" ", text or "").split()))
         if clean:
             self.chunks.append(("Me", clean))
@@ -806,6 +906,20 @@ def live_service_class():
         _utter_peak = 0
         _quiet_streak = 0
         _mic_state = "ok"
+        # 끼어들기 게이트·침묵 재참여(묶음 4). 기본값은 모두 "끔".
+        call_mode: Optional[str] = None
+        pause_check: Optional[Callable[[], bool]] = None
+        on_reengage: Optional[Callable[[int, float], None]] = None
+        _analyzer = None
+        _gate = None
+        _voice = None
+        _reengage_sec = 0
+        _reengage_max = 0
+        _reengage_count = 0
+        _last_reengage_at = 0.0
+        _last_learner_voice_at = 0.0
+        _partner_first_sound_at: Optional[float] = None
+        _overlap_chunks = 0
 
         def _queue(self, message: dict) -> None:
             self.__dict__.setdefault("_outbox", []).append(message)
@@ -870,6 +984,9 @@ def live_service_class():
                 self._wait_loud += peak > WAIT_LOUD_PEAK
                 self._utter_peak = max(self._utter_peak, peak)
                 self._check_thinking(peak > WAIT_LOUD_PEAK, now)
+            if self._voice is not None and self._voice.feed(frame.audio) >= LEARNER_VOICE_MS:
+                self._last_learner_voice_at = now
+                self._reengage_count = 0
             waited = now - self._waiting_since
             if waited >= WAIT_LOG_START_SEC and now - self._wait_logged_at >= WAIT_LOG_EVERY_SEC and waited <= WAIT_LOG_MAX_SEC:
                 db = 20 * math.log10(max(self._wait_peak, 1) / 32768)
@@ -882,6 +999,70 @@ def live_service_class():
                 elif noisy is False and self._mic_state == "noisy":
                     self._set_mic_state("ok", self._wait_peak)
                 self._wait_logged_at, self._wait_peak, self._wait_frames, self._wait_loud = now, 0, 0, 0
+
+        def _get_analyzer(self):
+            if self._analyzer is None:
+                self._analyzer = barge_in.make_analyzer()
+            return self._analyzer
+
+        def _arm_gate(self, settings: dict) -> None:
+            if self._gate is None:
+                try:
+                    self._gate = barge_in.BargeInGate(self._get_analyzer(), **settings)
+                except Exception as exc:  # noqa: BLE001 - Silero를 못 열어도 통화는 낙말 경로로 계속한다
+                    logger.warning("Barge-in gate unavailable, using words only: %s", exc)
+                    return
+            logger.info("Barge-in gate armed (vad, %d ms)", settings["min_voiced_ms"])
+
+        def _arm_reengage(self, seconds: int, max_count: int) -> None:
+            self._reengage_sec, self._reengage_max = 0, max_count
+            if not seconds or self.call_mode not in CHAT_MODES:
+                return
+            try:
+                if self._voice is None:
+                    self._voice = barge_in.VoiceRun(self._get_analyzer(), min_dbfs=None)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Silence re-engage unavailable: %s", exc)
+                return
+            self._reengage_sec = seconds
+            logger.info("Silence re-engage armed (%d s)", seconds)
+
+        async def _gate_audio(self, frame) -> None:
+            if self._gate is not None and self._partner_speaking and self._gate.feed(frame.audio):
+                await self._interrupt_partner(f"{self._gate.run_ms} ms of voice while the partner speaks")
+
+        async def _interrupt_partner(self, reason: str) -> None:
+            # 생성이 아직 안 끝났으면(turn_complete 전) 같은 차례의 남은 음성이 더 온다. 보류된 turn_complete는
+            # 끊기가 버리므로(_discard_deferred_turn) 그때는 버리기를 켜지 않는다(다음 대답까지 삼키지 않게).
+            self._drop_rest_of_turn = self._bot_is_responding and not self._turn_complete_pending_idle
+            self._partner_speaking = False
+            logger.info("Barge-in: %s -> interrupt (drop rest: %s)", reason, self._drop_rest_of_turn)
+            await self.broadcast_interruption()
+
+        def _reengage_due(self, now: float) -> bool:
+            """상대가 말을 끝낸 뒤 학습자가 마지막으로 말한 때(또는 직전 재참여)부터 설정한 초만큼 조용했는지."""
+            if not self._reengage_sec or self._waiting_since is None:
+                return False
+            if self._partner_speaking or self._bot_is_responding or self._reengage_count >= self._reengage_max:
+                return False
+            if self.pause_check is not None and self.pause_check():
+                return False
+            return now - self._silence_since() >= self._reengage_sec
+
+        def _silence_since(self) -> float:
+            return max(self._waiting_since or 0.0, self._last_learner_voice_at, self._last_reengage_at)
+
+        async def _reengage(self, now: float) -> None:
+            silent = now - max(self._waiting_since or now, self._last_learner_voice_at)
+            self._reengage_count += 1
+            self._last_reengage_at = now
+            logger.info("Silence re-engage #%d after %.1fs of silence", self._reengage_count, silent)
+            if self.on_reengage is not None:
+                try:
+                    self.on_reengage(self._reengage_count, silent)
+                except Exception as exc:  # noqa: BLE001 - 기록 실패가 통화를 막지 않는다
+                    logger.error("Re-engage note failed: %s", exc)
+            await self._push_prompt(silence_prompt(self._reengage_sec))
 
         async def send_learner_text(self, text: str) -> None:
             """학습자가 보낸 글을 Gemini 세션에 바로 넣는다. InputTextRawFrame으로 넣으면 그 프레임이 파이프라인 뒤로 흘러
@@ -897,19 +1078,37 @@ def live_service_class():
             ric = config.realtime_input_config
             vad_on = ric is not None and not getattr(ric.automatic_activity_detection, "disabled", False)
             words = barge_in_words_from_env()
-            if vad_on and words:
+            mode = barge_in_mode_from_env()
+            gate_settings = barge_in_gate_settings()
+            if vad_on and mode == "vad" and words:
+                self._arm_gate(gate_settings)
+            else:
+                self._gate = None
+            if not (vad_on and mode in ("vad", "words")):
+                words = 0
+            if words or self._gate is not None:
                 ric.activity_handling = ActivityHandling.NO_INTERRUPTION
+            if words:
                 self._barge_in_words = words
                 logger.info("Barge-in by words: %d (Gemini NO_INTERRUPTION)", words)
+            self._arm_reengage(*silence_reengage_from_env())
             await super()._connection_task_handler(config)
 
         async def process_frame(self, frame, direction):
             if isinstance(frame, InputAudioRawFrame):
                 self._note_waiting_audio(frame)
+                await self._gate_audio(frame)
+                now = time.monotonic()
+                if self._reengage_due(now):
+                    await self._reengage(now)
             elif isinstance(frame, BotStartedSpeakingFrame):
                 self._partner_speaking = True
                 self._heard_words = 0
                 self._waiting_since = None
+                self._partner_first_sound_at = time.monotonic()
+                self._overlap_chunks = 0
+                if self._gate is not None:
+                    self._gate.reset()
                 self._set_thinking(False)
                 if self._mic_state == "noisy":
                     self._set_mic_state("ok")
@@ -918,6 +1117,10 @@ def live_service_class():
                 self._waiting_since = time.monotonic()
                 self._wait_logged_at, self._wait_peak, self._wait_frames, self._wait_loud = self._waiting_since, 0, 0, 0
                 self._reset_notices()
+                if self._gate is not None:
+                    self._gate.reset()
+                if self._voice is not None:
+                    self._voice.reset()
             await super().process_frame(frame, direction)
             await self._flush_outbox()
 
@@ -928,6 +1131,10 @@ def live_service_class():
             if self._last_voice_at:
                 logger.info("Input chunk %r: %.1fs after the last loud mic frame (%d voice frames this turn)",
                             text, time.monotonic() - self._last_voice_at, self._voice_frames)
+            if self._partner_speaking:
+                self._overlap_chunks += 1
+            if self._reengage_sec and not text.lstrip().startswith(SILENCE_NOTE_PREFIX) and BARGE_IN_WORD_RE.search(NOISE_MARK_RE.sub(" ", text)):
+                self._reengage_count = 0
             self._check_quiet(text)
             await self._flush_outbox()
             if not (self._barge_in_words and self._partner_speaking):
@@ -936,13 +1143,7 @@ def live_service_class():
             if self._heard_words < self._barge_in_words:
                 logger.info("Barge-in held: %r (%d/%d words)", text, self._heard_words, self._barge_in_words)
                 return
-            # 생성이 아직 안 끝났으면(turn_complete 전) 같은 차례의 남은 음성이 더 온다. 보류된 turn_complete는
-            # 끊기가 버리므로(_discard_deferred_turn) 그때는 버리기를 켜지 않는다(다음 대답까지 삼키지 않게).
-            self._drop_rest_of_turn = self._bot_is_responding and not self._turn_complete_pending_idle
-            self._partner_speaking = False
-            logger.info("Barge-in: %d words while the partner speaks -> interrupt (drop rest: %s)",
-                        self._heard_words, self._drop_rest_of_turn)
-            await self.broadcast_interruption()
+            await self._interrupt_partner(f"{self._heard_words} words while the partner speaks")
 
         async def _handle_msg_model_turn(self, msg):
             if not self._drop_rest_of_turn:
@@ -972,7 +1173,21 @@ def live_service_class():
             except Exception as e:  # noqa: BLE001 - pipecat의 다른 전송 경로와 같은 오류 처리
                 await self._handle_send_error(e)
 
+        async def _push_prompt(self, text: str) -> None:
+            """_push_note와 달리 turn_complete=True라 Gemini가 바로 이어 말한다. 침묵 재참여에만 쓴다."""
+            if self._disconnecting or not self._session:
+                return
+            try:
+                await self._session.send_client_content(
+                    turns=[{"role": "user", "parts": [{"text": text}]}], turn_complete=True)
+            except Exception as e:  # noqa: BLE001
+                await self._handle_send_error(e)
+
         async def _handle_msg_turn_complete(self, message):
+            if self._partner_first_sound_at is not None:
+                logger.info("Turn complete: %.1fs after the partner's first sound; %d input transcript chunk(s) arrived while the partner spoke",
+                            time.monotonic() - self._partner_first_sound_at, self._overlap_chunks)
+                self._partner_first_sound_at = None
             self._drop_rest_of_turn = False
             await super()._handle_msg_turn_complete(message)
             pending = self.__dict__.pop("_pending_notes", None)
@@ -1131,6 +1346,9 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
         record.add_mic(user_audio)
 
     clock = CallClock()
+    llm.call_mode = config.mode
+    llm.pause_check = lambda: clock.paused
+    llm.on_reengage = lambda count, silent: record.add_note("system", f"silence re-engage #{count} at {clock.elapsed():.1f}s")
     pause_limit = pause_limit_from_env()
     clock_changed = asyncio.Event()
 
@@ -1238,7 +1456,8 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
             task.cancel()
         await stop_recording()
         record.paused_sec = clock.paused_total()
-        saved = await asyncio.to_thread(finish_call, record, config, model, None, vad_meta)
+        meta_line = " ".join(part for part in (vad_meta, call_knobs_summary(config.mode)) if part) or None
+        saved = await asyncio.to_thread(finish_call, record, config, model, None, meta_line)
         logger.info("Call finished; transcript saved: %s", saved)
         schedule_partner_memory_update(saved, config, record)
         notify_call_saved(saved, config, record)

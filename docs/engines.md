@@ -55,6 +55,24 @@ shell 파이프라인: `transport.input → [stt] → user_aggregator → llm �
 `TurnListener`는 `instruction_suffix: str`(지시문 끝에 붙는다), `attach(note_sink)`(LLM 서비스를 만든 직후), `async on_user_turn(text)`(학습자 차례가 전문에 남을 때)을 가진다. 리스너 실패는 통화를 막지 않는다.
 `send_note(text)`는 세션에 `send_client_content(turn_complete=False)`로 메모를 넣는다(자막·전문에 섞이지 않는다). 파트너가 말하는 중이면 그 차례의 `turn_complete` 뒤로 미룬다.
 
+## 입력 이득·끼어들기 게이트·침묵 재참여 (묶음 4, Gemini 엔진 전용)
+
+`call_bot.run_bot`을 타는 Gemini 엔진(`gemini_live`, `gemini_live_notes`, `gemini_live_38`)에만 적용한다. 새 기본값은 운영 동작을 바꾼다. 세 스위치를 모두 꺼면 이번 묶음 이전 통화 경로와 같다.
+
+| 환경 변수 | 기본 | 끄는 값 | 뜻 |
+|---|---|---|---|
+| `LIVE_INPUT_GAIN` | `auto` | `off` | 전송 계층 입력 이득(`server/audio_gain.py`). 말소리만 목표 레벨까지 끌어올리고 잡음·디지털 무음은 키우지 않는다. 이득 → RNNoise 순서 |
+| `LIVE_INPUT_GAIN_TARGET_DBFS` / `_MAX_DB` / `LIVE_INPUT_GATE_DBFS` | -20 / 18 / -50 | | 목표 레벨, 최대 이득(dB), 말소리로 보는 최소 레벨 |
+| `LIVE_BARGE_IN_MODE` | `vad` | `words` | `vad` = 로컬 Silero 게이트(`server/barge_in.py`) + 낱말 보조, `words` = 낱말만(묶음 3 동작), `native` = Gemini 기본 끊기(`LIVE_BARGE_IN_WORDS=0`과 같다) |
+| `LIVE_BARGE_IN_MIN_VOICED_MS` / `_CONFIDENCE` / `_MIN_DBFS` | 700 / 0.7 / -40 | | 유성음이 이 길이 이상 이어지면 상대를 멈춘다. 200 ms 이하 끊김은 잇는다 |
+| `LIVE_SILENCE_REENGAGE_SEC` | `10` | `0` | smalltalk·freetalk에서 상대 말이 끝난 뒤 학습자가 이 초 동안 말하지 않으면 서버가 `[Silence note: ...]`를 보내 상대가 내용 있는 말을 먼저 꺼내게 한다 |
+| `LIVE_SILENCE_REENGAGE_MAX` | `2` | | 학습자가 말하기 전 연속 재참여 최대 횟수 |
+
+- `vad` 모드는 Gemini에 `NO_INTERRUPTION`을 주고 끊기는 서버가 한다. `LIVE_BARGE_IN_WORDS=0`이면 모드가 무엇이든 Gemini 기본 끊기(`native`)다. `TURN_MODE=smart`(Gemini VAD 끈 상태)에서는 게이트를 쓰지 않는다.
+- 침묵 재참여는 `turn_complete=True`로 보내 Gemini가 바로 이어 말한다. 전문에는 `**system:** silence re-engage #N at <초>s`로 남고 `[Silence note:` 로 시작하는 받아쓰기는 학습자 발화에서 버린다. 일시정지 중에는 지나지 않는다.
+- 전문 메타 `- vad:` 줄 끝에 켜진 장치가 `barge=vad gain=auto reengage=10s`처럼 붙는다(전부 꺼져 있으면 붙지 않는다).
+- 서버 로그: 시작 시 `Input gain auto (...)`, `Barge-in gate armed (vad, 700 ms)`, `Silence re-engage armed (10 s)`; 발동 시 `Barge-in: ... -> interrupt`, `Silence re-engage #N ...`; 상대 차례마다 `Turn complete: <초> after the partner's first sound; <N> input transcript chunk(s) arrived while the partner spoke`(3.8이 겹친 음성을 버리는지 가리는 진단).
+
 ## 모든 엔진이 지키는 것
 
 1. 전사 조각: 학습자 `("Me", text)`, 파트너 `("Partner", text)`가 `CallRecord.chunks`에 쌓인다. 마이크 원음은 `record.mic_pcm`.
