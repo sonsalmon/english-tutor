@@ -30,7 +30,7 @@ from server.engines.base import (
     engine_unavailable_reason,
 )
 from server.lesson import session_time_limit_from_env
-from server import call_tools, partner_memory
+from server import breath_insert, call_tools, partner_memory
 from server.partner_memory import PARTNER_IDS, PARTNER_NAMES
 from server.pricing import UsageTotals, estimate_cost
 from server.readgloss import LEMMA_RE
@@ -1061,11 +1061,13 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context, **pair_kwargs)
     audiobuffer = AudioBufferProcessor(sample_rate=MIC_SAMPLE_RATE, num_channels=1)
 
+    breaths = breath_insert.make_breath_processor(config.voice) if breath_insert.breaths_enabled() else None
     pipeline = Pipeline([
         transport.input(),
         user_aggregator,
         llm,
         make_usage_collector(record.usage),
+        *([breaths] if breaths else []),
         transport.output(),
         audiobuffer,
         assistant_aggregator,
