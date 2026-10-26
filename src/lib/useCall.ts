@@ -3,6 +3,7 @@ import { SmallWebRTCTransport } from '@pipecat-ai/small-webrtc-transport';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { EMPTY_STATS, readStats, telemetryPayload, type StatsSample } from './callStats';
 import { EMPTY_TAKE_MS, MIN_SEGMENT_MS, REPLAY_RATE, TAIL_MS, TurnTape, parseCallNotice, recorderMime, type MicState } from './callux';
+import { engineRequestField } from './engineSettings';
 import { friendlyError } from './errors';
 import { LatencyMeter, clearPendingLatency, stashLatency } from './latency';
 import {
@@ -400,6 +401,7 @@ export function useCall() {
               system_instruction: params.systemInstruction,
               mode: params.mode,
               voice: params.voice,
+              ...engineRequestField(params.mode),
               ...(params.partner ? { partner: params.partner } : {}),
               ...(params.summaryInput?.lesson_date ? { lesson_date: params.summaryInput.lesson_date } : {}),
               ...(params.summaryInput?.practice_words?.length ? { practice_words: params.summaryInput.practice_words } : {}),
