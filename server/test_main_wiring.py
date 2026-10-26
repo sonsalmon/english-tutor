@@ -1213,5 +1213,46 @@ class ClipSegmentsEndpointTest(unittest.TestCase):
             self.assertEqual(self.get(video_id="vid-seg1", at=0).status_code, 404)
 
 
+class OfferTurnRulesWiringTest(unittest.IsolatedAsyncioTestCase):
+    async def offer_config(self, mode, env):
+        from fastapi import BackgroundTasks
+
+        from server.call_bot import CallConfig
+
+        base = CallConfig(system_instruction="BASE", mode=mode, partner="jake" if mode in ("smalltalk", "freetalk") else None)
+        raw = mock.Mock()
+        raw.headers = {"content-type": "application/json"}
+        raw.json = mock.AsyncMock(return_value={})
+        tasks = BackgroundTasks()
+
+        async def fake_web_request(request, webrtc_connection_callback):
+            await webrtc_connection_callback(mock.Mock())
+            return {"sdp": "x", "type": "answer"}
+
+        fake_request = mock.Mock(request_data={}, pc_id=None)
+        with mock.patch.dict(os.environ, env), \
+                mock.patch.object(main.SmallWebRTCRequest, "from_dict", return_value=fake_request), \
+                mock.patch.object(main, "parse_call_config", return_value=base), \
+                mock.patch.object(main.resume, "with_resume", side_effect=lambda c: c), \
+                mock.patch.object(main._webrtc, "handle_web_request", side_effect=fake_web_request):
+            await main.offer(raw, tasks)
+        return tasks.tasks[0].args[1]
+
+    async def test_chat_call_gets_turn_rules_suffix(self):
+        config = await self.offer_config("smalltalk", {"LIVE_TURN_RULES": "hesitation,backchannel"})
+
+        self.assertTrue(config.system_instruction.startswith("BASE"))
+        self.assertGreater(len(config.system_instruction), len("BASE"))
+
+    async def test_switch_off_and_non_chat_modes_keep_the_instruction(self):
+        off = await self.offer_config("smalltalk", {"LIVE_TURN_RULES": "off"})
+        mission = await self.offer_config("mission", {"LIVE_TURN_RULES": "hesitation,backchannel"})
+        teachback = await self.offer_config("teachback", {"LIVE_TURN_RULES": "hesitation,backchannel"})
+
+        self.assertEqual(off.system_instruction, "BASE")
+        self.assertEqual(mission.system_instruction, "BASE")
+        self.assertEqual(teachback.system_instruction, "BASE")
+
+
 if __name__ == "__main__":
     unittest.main()

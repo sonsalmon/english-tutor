@@ -156,5 +156,110 @@ class TextMetricsTest(unittest.TestCase):
         self.assertIsNone(M.partner_turn_stats([("Me", "hi")])["words_median"])
 
 
+class PauseIntrusionsTest(unittest.TestCase):
+    P0, P1 = 10.0, 12.0
+
+    def judge(self, segs, texts, rest_words=(), rest_text=""):
+        return M.pause_intrusions(self.P0, self.P1, segs, texts, rest_words, rest_text)
+
+    def test_no_onset_in_pause_is_waited(self):
+        out = self.judge([(5.0, 9.0), (12.5, 14.0)], [])
+
+        self.assertEqual((out["verdict"], out["kind"]), ("PASS", "waited"))
+
+    def test_take_your_time_passes(self):
+        out = self.judge([(10.5, 11.4)], [(10.6, "Take your time.")])
+
+        self.assertEqual((out["verdict"], out["kind"]), ("PASS", "wait_signal"))
+
+    def test_mm_hm_take_your_time_passes_at_five_words(self):
+        out = self.judge([(10.5, 11.6)], [(10.6, "Mm-hm, take your time.")])
+
+        self.assertEqual((out["verdict"], out["kind"]), ("PASS", "wait_signal"))
+
+    def test_question_fails(self):
+        for text in ("No rush, dude. You good?", "Oh, no way! Your internship?"):
+            out = self.judge([(10.5, 12.1)], [(10.6, text)])
+
+            self.assertEqual((out["verdict"], out["kind"]), ("FAIL", "question"), text)
+
+    def test_two_signals_fail_as_multiple(self):
+        out = self.judge([(10.4, 10.9), (11.2, 11.8)], [(10.5, "Mm-hm."), (11.3, "Take your time.")])
+
+        self.assertEqual((out["verdict"], out["kind"]), ("FAIL", "multiple"))
+
+    def test_silent_short_sound_passes_and_long_one_cannot_be_verified(self):
+        short = self.judge([(10.5, 11.3)], [])
+        long = self.judge([(10.5, 11.9)], [])
+
+        self.assertEqual((short["verdict"], short["kind"]), ("PASS", "wait_signal"))
+        self.assertEqual((long["verdict"], long["kind"]), ("FAIL", "unverifiable"))
+
+    def test_finishing_the_learners_sentence_fails(self):
+        out = self.judge(
+            [(10.5, 11.5)], [(10.6, "Cloud subscription.")], rest_words=M.content_words("Uh cloud sub uh subscription"),
+        )
+
+        self.assertEqual((out["verdict"], out["kind"]), ("FAIL", "finished_sentence"))
+
+    def test_six_words_and_off_topic_fail(self):
+        long = self.judge([(10.5, 11.5)], [(10.6, "Mm-hm take your time, I'm listening.")])
+        off = self.judge([(10.5, 11.5)], [(10.6, "Pizza tonight.")])
+
+        self.assertEqual(long["kind"], "long")
+        self.assertEqual((off["verdict"], off["kind"]), ("FAIL", "off_topic"))
+
+    def test_sound_running_on_after_the_learner_resumes_fails(self):
+        out = self.judge([(11.5, 12.6)], [(11.6, "Take your time.")])
+
+        self.assertEqual((out["verdict"], out["kind"]), ("FAIL", "long"))
+
+
+class YeahFollowupTest(unittest.TestCase):
+    def test_counter_question_to_the_mac_mishearing_is_question_only(self):
+        out = M.yeah_followup("Wait, were you thinking of a Mac or maybe something else?")
+
+        self.assertEqual((out["kind"], out["statement_words"]), ("question_only", 0))
+
+    def test_story_then_question_and_question_first(self):
+        story_q = "Yeah, I had the same thing last week at work. Did you sleep well?"
+        q_first = "Did you sleep well? I had the same thing last week at work, and it was rough."
+
+        self.assertEqual(M.yeah_followup(story_q)["kind"], "story_then_question")
+        self.assertEqual(M.yeah_followup(q_first)["kind"], "question_first")
+
+    def test_story_and_missing_replies(self):
+        self.assertEqual(M.yeah_followup("I had the same thing last week at work. It took me three days to recover.")["kind"], "story")
+        self.assertEqual(M.yeah_followup("", partner_spoke=False)["kind"], "no_reply")
+        self.assertEqual(M.yeah_followup("", partner_spoke=True)["kind"], "unverifiable")
+
+
+class ReengageKindTest(unittest.TestCase):
+    def test_presence_check(self):
+        for text in ("You still there?", "Are you there?", "Hello? Can you hear me?"):
+            self.assertEqual(M.reengage_kind(text), "presence_check", text)
+
+    def test_question_content_and_none(self):
+        self.assertEqual(M.reengage_kind("What about you?"), "question")
+        self.assertEqual(M.reengage_kind("So anyway, I was thinking about that trip we talked about."), "content")
+        self.assertEqual(M.reengage_kind(""), "none")
+
+    def test_threshold_is_nine_to_fourteen_seconds(self):
+        self.assertTrue(M.in_range(10.9, "reengage_s"))
+        self.assertFalse(M.in_range(8.0, "reengage_s"))
+        self.assertFalse(M.in_range(15.0, "reengage_s"))
+
+
+class BargeHeardTest(unittest.TestCase):
+    def test_pass_when_the_partner_answers_a_sentence_with_the_content_words(self):
+        turns = [("Partner", "Long story..."), ("Me", "I have a time limit for this conversation."), ("Partner", "Oh, got it.")]
+
+        self.assertEqual(M.barge_heard(turns)["verdict"], "PASS")
+
+    def test_fail_when_missing_or_unanswered(self):
+        self.assertEqual(M.barge_heard([("Me", "Hello."), ("Partner", "Hi.")])["verdict"], "FAIL")
+        self.assertEqual(M.barge_heard([("Me", "I have a time limit.")])["verdict"], "FAIL")
+
+
 if __name__ == "__main__":
     unittest.main()

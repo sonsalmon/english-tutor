@@ -36,13 +36,21 @@ GREETING_TIMEOUT_S = 40.0
 REPLY_TIMEOUT_S = 25.0
 TURN_END_QUIET_S = 1.6
 ALL_SCENARIOS = ["N01", "N02", "N03", "N04", "N05", "N06", "N07", "N08"]
+YEAH_MIN_S, YEAH_MAX_S = 0.5, 1.2
+N06B_ANSWER_CLIP = "n01_answer"
+# P2 "문장 대신 끝내기" 판정에 쓰는 나머지 문장(쉘 뒤에 학습자가 이어 말하는 낱말). 클립 전사(clips.json)에서 뽑았다.
+REST_TEXT = {
+    "N02": "how do you describe your personality",
+    "N03": "Thank you. You, you give me really a practical advice.",
+}
 
 CLIPS = {
     "n01_answer": "full_033_877.5s.wav",
     "n02_thinking": "full_015_344.9s.wav",
     "n03_um": "hesitant_040_101.6s.wav",
-    "n03_rest": "hesitant_041_104.4s.wav",
+    "n03_rest": "full_032_860.4s.wav",
     "bc_mm": "backchannel_084_688.8s.wav",
+    "bc_alt": "backchannel_060_383.7s.wav",
     "barge": "hesitant_092_878.5s.wav",
     "yeah_source": "hesitant_054_330.9s.wav",
     "rapid_1": "hesitant_039_87.8s.wav",
@@ -117,13 +125,25 @@ def joined(parts, label: str, source: str) -> Utterance:
     return Utterance(np.concatenate(parts), label, source)
 
 
-def yeah_utterance(clips_dir: Path) -> Utterance:
-    """사용자 클립의 첫 낱말 'Yeah'만 잘라 쓴다. 길이가 맞지 않으면 macOS say로 합성하고 표시한다."""
-    src = clip_utterance(clips_dir, CLIPS["yeah_source"])
-    lead = M.leading_speech(M.frame_db(src.pcm, SR), gap_s=0.02, drop_db=25.0)
-    if lead and 0.15 <= lead[1] - lead[0] <= 0.7:
-        a, b = max(0, int(round((lead[0] - 0.05) * SR))), int(round((lead[1] + 0.03) * SR))
-        return Utterance(src.pcm[a:b], f"{src.label}의 첫 낱말 {lead[0]:.2f}~{lead[1]:.2f}s", "학습자 실제 목소리 클립(첫 낱말만)")
+def yeah_utterance(clips_dir: Path, yeah_clip=None, yeah_mode: str = "cut") -> Utterance:
+    """N07 맞장구 클립(설계 H1). 해당 순서로 고른다: --yeah-clip(사용자가 새로 녹음) > 사용자 클립의 첫 낱말 조각(0.5~1.2 s)
+    > 대체 클립 'That's good.' > macOS say 합성. yeah_mode가 alt면 조각을 건너뛰고, say면 합성으로 바로 간다."""
+    if yeah_clip:
+        path = Path(yeah_clip)
+        return Utterance(read_wav(path), f"{path.name} (사용자가 새로 녹음한 Yeah)", "학습자 실제 목소리(--yeah-clip)")
+    if yeah_mode == "cut":
+        src = clip_utterance(clips_dir, CLIPS["yeah_source"])
+        db = M.frame_db(src.pcm, SR)
+        for gap_s in (0.25, 0.18, 0.12):
+            lead = M.leading_speech(db, gap_s=gap_s, drop_db=25.0)
+            if not lead:
+                continue
+            a, b = max(0, int(round((lead[0] - 0.05) * SR))), int(round((lead[1] + 0.03) * SR))
+            if YEAH_MIN_S <= (b - a) / SR <= YEAH_MAX_S:
+                return Utterance(src.pcm[a:b], f"{src.label}의 앞부분 {lead[0]:.2f}~{lead[1]:.2f}s (gap {gap_s})", "학습자 실제 목소리 클립(첫 낱말 조각)")
+    if yeah_mode in ("cut", "alt"):
+        alt = clip_utterance(clips_dir, CLIPS["bc_alt"])
+        return Utterance(alt.pcm, f"{alt.label} [대체 클립: That's good.]", "학습자 실제 목소리 클립(대체 맞장구)")
     with tempfile.TemporaryDirectory() as tmp:
         aiff, wav = Path(tmp) / "y.aiff", Path(tmp) / "y.wav"
         subprocess.run(["say", "-v", "Samantha", "-o", str(aiff), "Yeah."], check=True)
@@ -313,7 +333,7 @@ class Call:
         return n / SR
 
 
-def metric(key, label, value, unit, threshold, ok, note="", info=False):
+def metric(key, label, value, unit, threshold, ok, note="", info=False, extra=None):
     """value가 None이면 잴 수 없었던 것이라 note의 이유와 함께 FAIL로 둔다."""
     if value is None:
         verdict = "FAIL"
@@ -321,7 +341,18 @@ def metric(key, label, value, unit, threshold, ok, note="", info=False):
         verdict = "INFO"
     else:
         verdict = "PASS" if ok else "FAIL"
-    return {"key": key, "label": label, "value": value, "unit": unit, "threshold": threshold, "verdict": verdict, "note": note}
+    out = {"key": key, "label": label, "value": value, "unit": unit, "threshold": threshold, "verdict": verdict, "note": note}
+    if extra:
+        out["extra"] = extra
+    return out
+
+
+def pause_metric(sid, window, segs, texts):
+    """P2 판정(설계 H4): 쉼 구간 안의 파트너 발화가 짧은 기다림 신호면 PASS, 그 외는 FAIL. 점수표에 kind·글·길이·시각을 남긴다."""
+    rest = REST_TEXT[sid]
+    out = M.pause_intrusions(window[0], window[1], segs, texts, M.content_words(rest), rest)
+    note = f"kind={out['kind']}; 시각 {out['onset']}; 길이 {out['dur']} s; 글 {out['text']!r}"
+    return metric("pause_intrusions", "쉼 구간 파트너 끼어듦 판정(기다림 신호 1회까지 PASS)", out["kind"], "", "waited 또는 wait_signal", out["verdict"] == "PASS", note, extra=out)
 
 
 def gap_metric(key, label, gap_ms, threshold_key="gap_ms", note=""):
@@ -397,8 +428,9 @@ async def run_n02(call, ctx):
 def analyze_n02(ev, segs, turns, texts):
     starts = M.pause_false_starts(ev["pause"][0], ev["pause"][1], segs)
     return [
+        pause_metric("N02", ev["pause"], segs, texts),
         metric("false_starts", "침묵 구간(2.0 s) 안에서 파트너가 새로 말을 시작한 횟수", len(starts), "회", "0회", len(starts) == 0,
-               f"시작 시각 {starts}" if starts else "끼어들지 않고 기다림"),
+               f"시작 시각 {starts}" if starts else "끼어들지 않고 기다림", info=True),
         gap_metric("gap_ms", "문장 끝 → 파트너 첫 소리", M.response_gap_ms(ev["learner"]["speech_end"], segs)),
     ]
 
@@ -415,13 +447,14 @@ async def run_n03(call, ctx):
 def analyze_n03(ev, segs, turns, texts):
     starts = M.pause_false_starts(ev["hesitation"][0], ev["hesitation"][1], segs)
     return [
+        pause_metric("N03", ev["hesitation"], segs, texts),
         metric("false_starts", "'um...' 뒤 망설임(1.5 s) 안에서 파트너가 말을 시작한 횟수", len(starts), "회", "0회", len(starts) == 0,
-               f"시작 시각 {starts}" if starts else "끼어들지 않고 기다림"),
+               f"시작 시각 {starts}" if starts else "끼어들지 않고 기다림", info=True),
         gap_metric("gap_ms", "나머지 문장 끝 → 파트너 첫 소리", M.response_gap_ms(ev["learner"]["speech_end"], segs)),
     ]
 
 
-async def run_prompted(call, ctx, delay_s: float, key: str):
+async def run_prompted(call, ctx, delay_s: float, key: str, clip=None):
     """파트너에게 긴 대답을 시키는 질문을 하고, 파트너 말이 시작된 지 delay_s 뒤에 두 번째 클립을 재생한다."""
     ev = await preface(call)
     ev["prompter"] = call.play(ctx["prompter"])
@@ -430,13 +463,17 @@ async def run_prompted(call, ctx, delay_s: float, key: str):
         raise RuntimeError("프롬프트 질문에 파트너가 답하지 않음")
     ev["partner_onset"] = round(onset, 3)
     await call.sleep_until(onset + delay_s)
-    ev[key] = call.play(ctx["utt"]["bc" if key == "backchannel" else "barge"])
+    ev[key] = call.play(ctx["utt"][clip or ("bc" if key == "backchannel" else "barge")])
     await call.wait_partner_quiet(ev[key]["end"] - 0.5, TURN_END_QUIET_S, REPLY_TIMEOUT_S + 15)
     return ev
 
 
 async def run_n04(call, ctx):
     return await run_prompted(call, ctx, BACKCHANNEL_AT_S, "backchannel")
+
+
+async def run_n04b(call, ctx):
+    return await run_prompted(call, ctx, BACKCHANNEL_AT_S, "backchannel", clip="bc_alt")
 
 
 def analyze_n04(ev, segs, turns, texts):
@@ -463,13 +500,20 @@ async def run_n05(call, ctx):
     return await run_prompted(call, ctx, BARGE_AT_S, "barge_in")
 
 
+def barge_heard_metric(turns):
+    """P1 보조(설계 H6): 끼어든 문장의 내용 낱말이 전문의 Me 턴에 남고 그 뒤 파트너 턴이 있으면 PASS."""
+    out = M.barge_heard(turns)
+    note = f"전문 Me 턴에서 찾은 낱말 {out['words']}" if out["words"] else "전문에 끼어든 문장(limit·time·conversation·have 중 2개 이상)이 없거나 그 뒤 파트너 턴이 없음"
+    return metric("barge_heard", "끼어든 말을 파트너가 들었는지(전문)", out["verdict"], "", "PASS", note, out["verdict"] == "PASS", extra=out)
+
+
 def analyze_n05(ev, segs, turns, texts):
     b = ev["barge_in"]
     res = M.stop_latency(segs, b["speech_start"])
     if res["status"] == "not_speaking":
         return [metric("stop_latency_ms", "끼어든 뒤 파트너가 멈추기까지", None, "ms", "≤ 1000 ms", False, "무효: 끼어든 시각에 파트너가 말하지 않음")]
     if res["status"] == "no_stop":
-        return [metric("stop_latency_ms", "끼어든 뒤 파트너가 멈추기까지", None, "ms", "≤ 1000 ms", False, "6 s 안에 멈추지 않음")]
+        return [metric("stop_latency_ms", "끼어든 뒤 파트너가 멈추기까지", None, "ms", "≤ 1000 ms", False, "6 s 안에 멈추지 않음"), barge_heard_metric(turns)]
     ms = int(round(res["latency_s"] * 1000))
     said_before = spoken_between(texts, ev["partner_onset"] - 0.3, res["segment"][1] + 0.3)
     detail = f"끼어듦 {b['speech_start']} s, 파트너 말 {res['segment'][0]}~{res['segment'][1]} s; 멈추기 전 말: {said_before[-120:]!r}"
@@ -478,6 +522,7 @@ def analyze_n05(ev, segs, turns, texts):
     return [
         metric("stop_latency_ms", "끼어든 뒤 파트너가 멈추기까지", ms, "ms", "≤ 1000 ms", M.in_range(ms, "stop_latency_ms"), detail),
         gap_metric("reply_gap_ms", "끼어든 문장 끝 → 파트너 다음 발화", M.response_gap_ms(b["speech_end"], [s for s in segs if s[0] > res["segment"][1]])),
+        barge_heard_metric(turns),
     ]
 
 
@@ -488,17 +533,44 @@ async def run_n06(call, ctx):
     return ev
 
 
+async def run_n06b(call, ctx):
+    """N06b 대화 중 침묵(선택): N01 흐름(학습자 답 → 파트너 답) 뒤 학습자가 18 s 침묵한다. 지표는 N06과 같다."""
+    ev = await preface(call)
+    ev["learner"] = call.play(ctx["utt"][N06B_ANSWER_CLIP])
+    end = await call.wait_partner_quiet(ev["learner"]["end"] - 1.0, TURN_END_QUIET_S, REPLY_TIMEOUT_S)
+    if end is None:
+        raise RuntimeError("학습자 답 뒤에 파트너가 답하지 않아 침묵 구간을 시작하지 못함")
+    ev["greeting_end"] = round(end, 3)
+    ev["silence_from"] = ev["greeting_end"]
+    ev["skip_turns"] = 2
+    await call.sleep_until(end + SILENCE_WATCH_S)
+    return ev
+
+
+def reengage_said(ev, turns, texts):
+    """침묵 뒤 파트너가 꺼낸 말: E+0.3 s 이후 bot-output 글을 이어 붙이고, 비면 저장 전문의 그 뒤 파트너 턴을 쓴다."""
+    said = " ".join(t for ts, t in texts if ts > ev["greeting_end"] + 0.3).strip()
+    if said:
+        return said, "RTVI bot-output"
+    later = [t for who, t in turns if who == "Partner"][ev.get("skip_turns", 1):]
+    return " ".join(later).strip(), "저장 전문"
+
+
 def analyze_n06(ev, segs, turns, texts):
     seconds = M.reengage_seconds(segs, ev["greeting_end"], SILENCE_WATCH_S)
     greeting = next((t for who, t in turns if who == "Partner"), "")
     spoken = [t for ts, t in texts if ts > ev["greeting_end"] + 0.3]
     said = " ".join(spoken).strip()
+    kind_text, kind_source = reengage_said(ev, turns, texts)
     lo, hi = M.THRESHOLDS["reengage_s"]
     if seconds is None:
         reason = f"학습자 침묵 {SILENCE_WATCH_S:.0f} s 동안 파트너가 다시 말하지 않음"
         return [metric("reengage_s", "침묵 뒤 파트너가 다시 말을 꺼내기까지", None, "s", f"{lo}~{hi} s", False, reason),
-                metric("reengage_text", "다시 꺼낸 말", None, "", "내용 있는 말", False, "재참여 없음")]
+                metric("reengage_text", "다시 꺼낸 말", None, "", "내용 있는 말", False, "재참여 없음"),
+                metric("reengage_kind", "다시 꺼낸 말의 종류", "none", "", "content", False, "재참여 없음(파트너가 다시 말하지 않음)")]
+    kind = M.reengage_kind(kind_text)
     return [
+        metric("reengage_kind", "다시 꺼낸 말의 종류", kind, "", "content", kind == "content", f"{kind_source}: {kind_text[:160]!r}"),
         metric("reengage_s", "침묵 뒤 파트너가 다시 말을 꺼내기까지", seconds, "s", f"{lo}~{hi} s", M.in_range(seconds, "reengage_s"),
                f"인사 끝 {ev['greeting_end']} s; 인사 질문 여부: {'예' if M.ends_with_question(greeting) else '아니오'}"),
         metric("reengage_text", "다시 꺼낸 말", said or None, "", "내용 있는 말(3단어 이상)", M.count_words(said) >= 3, "RTVI bot-output 글 기준" if said else "글을 받지 못함"),
@@ -518,7 +590,11 @@ def analyze_n07(ev, segs, turns, texts):
     words = M.statement_words(reply) if reply else None
     lo = M.THRESHOLDS["statement_words"][0]
     stats = M.partner_turn_stats(turns)
+    spoke = any(s > ev["learner"]["speech_start"] for s, _ in segs)
+    follow = M.yeah_followup(reply, spoke)
     return [
+        metric("yeah_followup", "'Yeah' 뒤 파트너 답의 종류(story만 PASS, story_then_question은 3회 중 1회까지 허용)", follow["kind"], "", "story", follow["kind"] == "story",
+               f"종류 {follow['kind']}; 질문 아닌 문장 단어 {follow['statement_words']}; 답: {reply[:160]!r}", extra=follow),
         metric("statement_words", "'Yeah'만 들은 뒤 파트너가 질문 아닌 문장으로 말한 단어", words, "단어", f"≥ {lo}", M.in_range(words, "statement_words"),
                f"답: {reply[:160]!r}; 질문으로 끝남: {'예' if M.ends_with_question(reply) else '아니오'}" if reply else "파트너 답 글을 받지 못함"),
         gap_metric("gap_ms", "'Yeah' 끝 → 파트너 첫 소리", gap, "gap_after_backchannel_ms"),
@@ -565,18 +641,27 @@ SCENARIOS = {
     "N06": ("긴 침묵(질문 뒤 10 s)", run_n06, analyze_n06),
     "N07": ("짧은 대답('Yeah'만)", run_n07, analyze_n07),
     "N08": ("빠른 주고받기(3번)", run_n08, analyze_n08),
+    "N04b": ("맞장구 두 번째 클립('That's good.', 선택)", run_n04b, analyze_n04),
+    "N06b": ("대화 중 침묵(파트너 답 뒤 18 s, 선택)", run_n06b, analyze_n06),
 }
+SCENARIO_BY_UPPER = {key.upper(): key for key in SCENARIOS}
 
 
-def build_utterances(clips_dir: Path) -> dict:
+def build_utterances(clips_dir: Path, yeah_clip=None, yeah_mode: str = "cut") -> dict:
     utt = {name: clip_utterance(clips_dir, clip) for name, clip in CLIPS.items() if name != "yeah_source"}
     utt["n02_base"] = utt["n02_thinking"]
     utt["n02_thinking"] = with_inserted_silence(utt["n02_base"], N02_INSERT_AT_S, N02_SILENCE_S)
     um, rest = utt["n03_um"], utt["n03_rest"]
     utt["n03"] = joined([um.pcm, silence(N03_GAP_S), rest.pcm], f"{um.label} + {N03_GAP_S:.1f}s 침묵 + {rest.label}", um.source)
     utt["bc"] = utt.pop("bc_mm")
-    utt["yeah"] = yeah_utterance(clips_dir)
+    utt["yeah"] = yeah_utterance(clips_dir, yeah_clip, yeah_mode)
     return utt
+
+
+def clip_rms_dbfs(utt: dict):
+    """쓴 학습자 클립 전체를 이어 붙인 RMS(dBFS). 작은 목소리(quiet)와 보통(normal) 레벨이 실제로 다른지 점수표에서 확인한다."""
+    pcm = np.concatenate([u.pcm for u in utt.values()]).astype(np.float64) / 32768.0
+    return round(float(20.0 * np.log10(np.sqrt(np.mean(pcm ** 2)) + 1e-9)), 1)
 
 
 def build_instruction(partner: str, instruction_file):
@@ -648,6 +733,7 @@ def render_markdown(results, args, utt_sources) -> str:
     lines += [
         f"- 엔진 표시: {args.engine or '(없음: 서버 기본 = Gemini Live)'}",
         f"- 파트너: {args.partner}",
+        f"- 레벨: {args.level_label or '(표시 없음)'} (클립 폴더 {args.clips_dir})",
         f"- 서버: {args.url}",
         f"- 실행 시각: {time.strftime('%Y-%m-%d %H:%M:%S')}",
         "- 시각 기준: 학습자 마이크 첫 프레임 = 0 s. 간격은 클라이언트 수신 기준이라 로컬 연결에서도 수신 버퍼가 들어 있다(스모크에서 RTVI bot-started-speaking보다 약 0.1 s 늦게 잡혔다).",
@@ -683,12 +769,18 @@ def render_markdown(results, args, utt_sources) -> str:
 
 async def main_async(args) -> int:
     clips_dir = Path(args.clips_dir)
-    utt = build_utterances(clips_dir)
+    if args.n03_rest_clip:
+        CLIPS["n03_rest"] = args.n03_rest_clip
+        listing = clips_dir / "clips.json"
+        text = next((c["text"] for c in json.loads(listing.read_text(encoding="utf-8")) if c["file"] == args.n03_rest_clip), None) if listing.exists() else None
+        if text:
+            REST_TEXT["N03"] = text
+    utt = build_utterances(clips_dir, args.yeah_clip, args.yeah_mode)
     instruction, voice = build_instruction(args.partner, args.instruction)
     voice = args.voice or voice
     out_dir = Path(args.out_dir)
     wav_dir = out_dir / "wavs"
-    wanted = [s.strip().upper() for s in args.scenarios.split(",") if s.strip()]
+    wanted = [SCENARIO_BY_UPPER[s.strip().upper()] for s in args.scenarios.split(",") if s.strip()]
     results = []
     for sid in wanted:
         earlier = []
@@ -697,7 +789,7 @@ async def main_async(args) -> int:
             result = await run_scenario(sid, attempt, args, instruction, voice, utt, wav_dir)
             verdicts = ", ".join(f"{m['key']}={m['verdict']}" for m in result["metrics"])
             print(f"[{sid}] {'유효' if result['valid'] else '무효'} {verdicts}  wav {result['wav_seconds']} s", flush=True)
-            if result["valid"] or sid not in ("N04", "N05"):
+            if result["valid"] or sid not in ("N04", "N04b", "N05"):
                 break
             earlier.append({"attempt": attempt + 1, "error": result.get("error"), "metrics": result["metrics"], "wav": result["wav"]})
         result["earlier_attempts"] = earlier
@@ -708,6 +800,9 @@ async def main_async(args) -> int:
         "name": args.name,
         "engine": args.engine,
         "partner": args.partner,
+        "level": args.level_label,
+        "clips_dir": str(clips_dir),
+        "clip_rms_dbfs": clip_rms_dbfs(utt),
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
         "thresholds": {k: list(v) for k, v in M.THRESHOLDS.items()},
         "utterances": {k: {"label": a, "source": b} for k, (a, b) in utt_sources.items()},
@@ -731,7 +826,11 @@ def main() -> None:
     parser.add_argument("--instruction", default=None, help="파트너 지시문 파일. 없으면 bun으로 smallTalkInstruction을 만든다")
     parser.add_argument("--voice", default=None)
     parser.add_argument("--clips-dir", default=DEFAULT_CLIPS_DIR)
-    parser.add_argument("--scenarios", default=",".join(ALL_SCENARIOS))
+    parser.add_argument("--scenarios", default=",".join(ALL_SCENARIOS), help="쉼표 구분. N04b·N06b는 선택 시나리오라 기본에 없다")
+    parser.add_argument("--level-label", choices=["quiet", "normal"], default=None, help="클립 폴더의 입력 레벨 표시(결과 JSON의 level)")
+    parser.add_argument("--n03-rest-clip", default=None, help="N03 나머지 문장 클립 이름(후보 시험용). 기본은 CLIPS의 n03_rest")
+    parser.add_argument("--yeah-clip", default=None, help="사용자가 새로 녹음한 'Yeah.' wav(16 kHz 모노 16비트). 있으면 최우선")
+    parser.add_argument("--yeah-mode", choices=["cut", "alt", "say"], default="say", help="say=macOS say 합성 'Yeah.'(기본: 2.5 입력 전사가 사용자 목소리 조각 'Yeah, yeah'를 'meckon'·'나 큰 6'으로, 'That's good.'를 'Oscar'로 받아 적어 내려옴), cut=첫 낱말 조각(실패 시 대체 클립), alt=대체 클립")
     parser.add_argument("--retries", type=int, default=2, help="N04·N05가 무효(파트너가 그 시각에 말 안 함)일 때 다시 거는 횟수")
     args = parser.parse_args()
     sys.exit(asyncio.run(main_async(args)))
