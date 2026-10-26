@@ -44,7 +44,7 @@ class ParseEngineTest(unittest.TestCase):
                 call_bot.parse_call_config(request(engine=value))
 
     def test_experimental_engines_need_smalltalk(self):
-        for engine in ("gemini_live_notes", "openai_live", "cascade_flux"):
+        for engine in ("gemini_live_notes", "gemini_live_38", "openai_live", "cascade_flux"):
             for mode in ("mission", "freetalk", "teachback"):
                 with self.subTest(engine=engine, mode=mode), self.assertRaises(ValueError) as caught:
                     call_bot.parse_call_config(request(mode=mode, engine=engine))
@@ -54,6 +54,16 @@ class ParseEngineTest(unittest.TestCase):
         config = call_bot.parse_call_config(request(engine="gemini_live_notes"))
 
         self.assertEqual(config.engine, "gemini_live_notes")
+
+    def test_gemini_38_engine_is_smalltalk_only_and_needs_no_module(self):
+        config = call_bot.parse_call_config(request(engine="gemini_live_38"))
+
+        self.assertEqual(config.engine, "gemini_live_38")
+        self.assertIn("gemini_live_38", base.GEMINI_ENGINES)
+        for mode in call_bot.MODES:
+            if mode != "smalltalk":
+                with self.subTest(mode=mode), self.assertRaises(ValueError):
+                    call_bot.parse_call_config(request(mode=mode, engine="gemini_live_38"))
 
     def test_engine_without_module_is_not_ready(self):
         with mock.patch.dict(base.ENGINE_MODULES, {"openai_live": MISSING}):
@@ -132,6 +142,29 @@ def note_service(partner_speaking=False, responding=False):
     service._disconnecting, service._session = False, mock.Mock(send_client_content=mock.AsyncMock())
     service._drop_rest_of_turn = False
     return service
+
+
+class Gemini38ChoiceTest(unittest.TestCase):
+    def test_38_engine_uses_the_38_model_whatever_the_env_says(self):
+        env = {"MODEL": "m-base", "LIVE_MODEL_CHAT": "chat-m", "LIVE_MODEL": "other-m"}
+
+        self.assertEqual(call_bot.live_model_for("smalltalk", env, "gemini_live_38"), "gemini-3.8-live")
+        self.assertEqual(call_bot.live_config_for("smalltalk", env, "gemini_live_38")[0], "gemini-3.8-live")
+
+    def test_other_gemini_engines_keep_following_the_env_knobs(self):
+        env = {"LIVE_MODEL_CHAT": "chat-m"}
+
+        for engine in ("gemini_live", "gemini_live_notes"):
+            with self.subTest(engine=engine):
+                self.assertEqual(call_bot.live_model_for("smalltalk", env, engine), "chat-m")
+        self.assertEqual(call_bot.live_model_for("smalltalk", {}), call_bot.DEFAULT_LIVE_MODEL)
+
+    def test_38_engine_turns_affective_dialog_off_only_for_itself(self):
+        self.assertFalse(call_bot.affective_dialog_from_env({}, "gemini_live_38"))
+        self.assertFalse(call_bot.affective_dialog_from_env({"LIVE_AFFECTIVE_DIALOG": "1"}, "gemini_live_38"))
+        self.assertTrue(call_bot.affective_dialog_from_env({}, "gemini_live"))
+        self.assertTrue(call_bot.affective_dialog_from_env({}))
+        self.assertFalse(call_bot.affective_dialog_from_env({"LIVE_AFFECTIVE_DIALOG": "off"}, "gemini_live"))
 
 
 class SendNoteTest(unittest.TestCase):

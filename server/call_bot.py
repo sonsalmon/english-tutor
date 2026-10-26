@@ -20,7 +20,15 @@ from typing import Any, Callable, List, Optional, Tuple
 from google.genai.types import AudioTranscriptionConfig, EndSensitivity, StartSensitivity
 
 from server.config_utils import get_project_id
-from server.engines.base import ALLOWED_ENGINES, DEFAULT_ENGINE, GEMINI_ENGINES, TurnListener, engine_unavailable_reason
+from server.engines.base import (
+    ALLOWED_ENGINES,
+    DEFAULT_ENGINE,
+    GEMINI_38_ENGINE,
+    GEMINI_ENGINES,
+    LIVE_38_MODEL,
+    TurnListener,
+    engine_unavailable_reason,
+)
 from server.lesson import session_time_limit_from_env
 from server import call_tools, partner_memory
 from server.partner_memory import PARTNER_IDS, PARTNER_NAMES
@@ -128,17 +136,22 @@ COMPLETE_MISSION_PROPERTIES = {
 }
 
 
-def live_model_for(mode: str, env=None) -> str:
+def live_model_for(mode: str, env=None, engine: str = DEFAULT_ENGINE) -> str:
     """통화 모드에 쓸 Live 모델. smalltalk·freetalk은 `LIVE_MODEL_CHAT`, 나머지는 `LIVE_MODEL`,
-    둘 다 없으면 `MODEL`(없으면 기본 모델)."""
+    둘 다 없으면 `MODEL`(없으면 기본 모델). 엔진 `gemini_live_38`은 환경 변수와 상관없이 그 통화만 3.8 모델이다."""
+    if engine == GEMINI_38_ENGINE:
+        return LIVE_38_MODEL
     env = os.environ if env is None else env
     base = env.get("MODEL") or DEFAULT_LIVE_MODEL
     key = LIVE_MODEL_CHAT_ENV if mode in CHAT_MODES else LIVE_MODEL_ENV
     return (env.get(key) or "").strip() or base
 
 
-def affective_dialog_from_env(env=None) -> bool:
-    """감정 대화(enable_affective_dialog). 기본 켬, `LIVE_AFFECTIVE_DIALOG=0|false|off|no`면 끈다."""
+def affective_dialog_from_env(env=None, engine: str = DEFAULT_ENGINE) -> bool:
+    """감정 대화(enable_affective_dialog). 기본 켬, `LIVE_AFFECTIVE_DIALOG=0|false|off|no`면 끈다.
+    엔진 `gemini_live_38`은 3.8이 거부(1007)하므로 항상 끈다."""
+    if engine == GEMINI_38_ENGINE:
+        return False
     env = os.environ if env is None else env
     return (env.get(AFFECTIVE_DIALOG_ENV) or "").strip().lower() not in ("0", "false", "off", "no")
 
@@ -700,10 +713,10 @@ def live_tools(config: CallConfig):
     return ToolsSchema(standard_tools=[*(mission.standard_tools if mission else []), *call_tools.tool_schemas()])
 
 
-def live_config_for(mode: str, env=None):
+def live_config_for(mode: str, env=None, engine: str = DEFAULT_ENGINE):
     """run_bot이 쓰는 (Live 모델, Gemini VAD 설정, 로컬 사용자 설정, 전문 `- vad:` 요약)을 한 번에 돌려준다."""
     vad, user_params = turn_settings(mode, env)
-    return live_model_for(mode, env), vad, user_params, vad_summary(chat_vad_overrides(mode, env))
+    return live_model_for(mode, env, engine), vad, user_params, vad_summary(chat_vad_overrides(mode, env))
 
 
 def turn_settings(mode: Optional[str] = None, env=None):
@@ -987,7 +1000,7 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
     from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
     from pipecat.workers.runner import WorkerRunner
 
-    model, vad, user_params, vad_meta = live_config_for(config.mode)
+    model, vad, user_params, vad_meta = live_config_for(config.mode, engine=config.engine)
     record = CallRecord()
     if vad_meta:
         logger.info("Chat VAD knobs applied (%s): %s", config.mode, vad_meta)
@@ -1033,7 +1046,7 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
             language="en-US",
             vad=vad,
             context_window_compression={"enabled": True},
-            enable_affective_dialog=affective_dialog_from_env(),
+            enable_affective_dialog=affective_dialog_from_env(engine=config.engine),
             proactivity=ProactivityConfig(proactive_audio=True),
         ),
     )

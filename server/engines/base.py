@@ -10,8 +10,11 @@ from typing import Any, Optional, Protocol, runtime_checkable
 
 DEFAULT_ENGINE = "gemini_live"
 # call_bot.run_bot의 기본 경로가 처리하는 엔진. 나머지는 engines.run_engine으로 간다.
-GEMINI_ENGINES = ("gemini_live", "gemini_live_notes")
-ALLOWED_ENGINES = ("gemini_live", "gemini_live_notes", "openai_live", "cascade_flux")
+GEMINI_ENGINES = ("gemini_live", "gemini_live_notes", "gemini_live_38")
+ALLOWED_ENGINES = ("gemini_live", "gemini_live_notes", "gemini_live_38", "openai_live", "cascade_flux")
+# gemini_live_38: 기본 Gemini 경로에 이 통화만 3.8 모델을 쓴다. 3.8은 감정 대화(enable_affective_dialog)를 1007로 거부해 그 통화만 끈다.
+GEMINI_38_ENGINE = "gemini_live_38"
+LIVE_38_MODEL = "gemini-3.8-live"
 # 실험 엔진 이름 -> 모듈 경로(지연 import). 모듈이 아직 없으면 요청을 400으로 막는다.
 ENGINE_MODULES = {
     "openai_live": "server.engines.openai_live",

@@ -11,6 +11,7 @@
 | (없음 또는 빈 문자열) | `gemini_live`. 오늘 아침 동작과 바이트 단위로 같다 | 모든 모드 |
 | `gemini_live` | 기본 경로(`call_bot.run_bot`) | 모든 모드 |
 | `gemini_live_notes` | 기본 경로 + 턴 리스너(조언자)가 보내는 감독 메모 | `smalltalk`만 |
+| `gemini_live_38` | 기본 경로(`GEMINI_ENGINES`). 이 통화만 모델 `gemini-3.8-live`, 감정 대화(`enable_affective_dialog`) 끔 | `smalltalk`만 |
 | `openai_live` | `server/engines/openai_live.py`(L5) | `smalltalk`만 |
 | `cascade_flux` | `server/engines/cascade_flux.py`(L6) | `smalltalk`만 |
 
@@ -21,6 +22,19 @@
 - 모듈이 아직 없거나 쓸 수 없는 실험 엔진: `이 엔진은 아직 준비되지 않았습니다.` 또는 모듈이 `unavailable_reason()`으로 돌려준 문장(예: API 키 없음).
 
 화면은 기본 엔진이면 `engine` 필드를 보내지 않는다.
+
+### `gemini_live_38`
+
+- 모델: `call_bot.live_model_for(mode, env, engine)`이 엔진이 `gemini_live_38`이면 환경 변수와 상관없이 `gemini-3.8-live`(`base.LIVE_38_MODEL`)를 돌려준다. 다른 엔진은 지금처럼 `LIVE_MODEL_CHAT`·`LIVE_MODEL`·`MODEL`을 따른다.
+- 감정 대화: 3.8은 `enable_affective_dialog`를 1007로 거부하므로 `affective_dialog_from_env(env, engine)`이 이 엔진에서는 늘 끈다. 다른 엔진은 `LIVE_AFFECTIVE_DIALOG`를 따른다(기본 켬).
+- 전문 메타 `model`에는 실제로 쓴 모델(`gemini-3.8-live`)이 적힌다.
+
+## 화면에 보이는 엔진
+
+설정 화면(`src/screens/Settings.tsx`)은 `src/lib/engineSettings.ts`의 `VISIBLE_CALL_ENGINES` 한 곳에 든 엔진만 보인다: `gemini_live`(기본)와 `gemini_live_38`("새 모델: Gemini 3.8 Live"). `gemini_live_notes`, `cascade_flux`, `openai_live`는 서버·클라이언트 코드에 남기고 화면에서만 숨긴다(night-3 replica-diff: 조언자는 메모가 늦고 조립식은 응답이 느려 탈락).
+
+- 저장된 값이 보이는 목록에 없으면 `loadCallEngine`이 기본 엔진으로 본다. 그래서 `engine` 필드를 보내지 않는다.
+- 숨긴 엔진을 다시 보이려면 `VISIBLE_CALL_ENGINES`에 이름을 넣고 `Settings.tsx`의 `ENGINE_TEXT` 문구를 확인한다.
 
 ## 서버 구조
 
