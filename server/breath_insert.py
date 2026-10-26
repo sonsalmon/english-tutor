@@ -5,7 +5,9 @@
 
 - 학습자 말에 답하는 파트너 차례의 첫 말소리 직전, 또는 긴 차례 안에서 문장 끝으로 보이는 쉼(0.35초 이상) 뒤 말소리 직전.
 - 학습자가 말하는 중에는 넣지 않는다. 마지막 삽입 뒤 15초 안에는 넣지 않는다.
-- 파트너 말 1분당 약 2회가 되도록 예산을 둔다(삽입 수 + 1 <= 2 x 말한 분 + 0.5, 첫 삽입은 파트너 말이 15초 쌓인 뒤). 한 번에 늘어나는 시간은 0.35초 이하다.
+- 파트너 말 1분당 약 2회가 되도록 예산을 둔다(삽입 수 + 1 <= 2 x (말한 분 + 앞으로 말할 차례 6초) + 통화마다 뽑는 0~1 무작위 값).
+  통화는 짧아서(파트너 말 5~18초) 고정 문턱이면 첫 삽입이 영영 안 나온다. 무작위 값이 문턱을 통화마다 흩어 평균을 분당 2회에 맞춘다.
+  한 번에 늘어나는 시간은 0.35초 이하다.
 """
 import logging
 import os
@@ -32,7 +34,7 @@ MIN_PHRASE_SEC = 1.2
 MIN_TURN_SPEECH_SEC = 4.0
 MIN_GAP_SEC = 15.0
 TARGET_PER_MIN = 2.0
-BUDGET_SLACK = 0.5
+TURN_LOOKAHEAD_SEC = 6.0  # 지금 시작하는 차례에서 곧 말할 분량의 선불(학습자 말에 답하는 차례의 중앙값 길이)
 MAX_ADD_SEC = 0.35
 LEARNER_LOUD_PEAK = 600
 LEARNER_HOLD_SEC = 0.6
@@ -62,10 +64,11 @@ class BreathPlanner:
     """오디오 조각을 받아 (끼운 뒤의) 오디오 조각 목록을 돌려준다. pipecat에 의존하지 않아 단독으로 시험한다."""
 
     def __init__(self, clips: List[np.ndarray], rng: Optional[random.Random] = None,
-                 clock: Callable[[], float] = time.monotonic):
+                 clock: Callable[[], float] = time.monotonic, credit: Optional[float] = None):
         self.clips = clips
         self.rng = rng or random.Random()
         self.clock = clock
+        self.credit = self.rng.random() if credit is None else credit
         self.events: List[dict] = []
         self.inserted = 0
         self.total_speech = 0.0
@@ -103,6 +106,10 @@ class BreathPlanner:
     def learner_stopped(self) -> None:
         self._learner_flag = False
 
+    def learner_idle(self, now: float) -> float:
+        """마지막 학습자 큰 소리 뒤 경과 초. 큰 소리가 한 번도 없었으면 -1."""
+        return -1.0 if self._learner_last_loud is None else now - self._learner_last_loud
+
     def learner_speaking(self) -> bool:
         if self._learner_flag:
             return True
@@ -130,7 +137,7 @@ class BreathPlanner:
             return False
         if self.last_insert_at is not None and now - self.last_insert_at < MIN_GAP_SEC:
             return False
-        if self.inserted + 1 > TARGET_PER_MIN * self.total_speech / 60 + BUDGET_SLACK:
+        if self.inserted + 1 > TARGET_PER_MIN * (self.total_speech + TURN_LOOKAHEAD_SEC) / 60 + self.credit:
             return False
         if kind == "start":
             return self._answers
@@ -175,7 +182,7 @@ class BreathPlanner:
                     self.inserted += 1
                     self.last_insert_at = now
                     self.events.append(dict(kind=kind, clip=self.last_clip, pause=self.silent, turn_speech=self.turn_speech,
-                                            total_speech=self.total_speech, gain_db=self.last_gain_db))
+                                            total_speech=self.total_speech, gain_db=self.last_gain_db, learner_idle=self.learner_idle(now)))
             self.silent = 0.0
             self.phrase += SUB_SEC
             self.turn_speech += SUB_SEC
@@ -230,8 +237,8 @@ def make_breath_processor(voice: str, root: Path = ASSET_DIR):
                 chunks = planner.process_audio(frame.audio, frame.sample_rate)
                 if len(chunks) > 1:
                     for event in planner.events[seen:]:
-                        logger.info("Breath inserted (%s): clip %d, %.2fs pause, %.1fs into the turn, %.1fs partner speech so far, gain %+.1f dB",
-                                    event["kind"], event["clip"], event["pause"], event["turn_speech"], event["total_speech"], event["gain_db"])
+                        logger.info("Breath inserted (%s): clip %d, %.2fs pause, %.1fs into the turn, %.1fs partner speech so far, gain %+.1f dB, %.1fs since learner sound",
+                                    event["kind"], event["clip"], event["pause"], event["turn_speech"], event["total_speech"], event["gain_db"], event["learner_idle"])
                     for chunk in chunks:
                         await self.push_frame(replace(frame, audio=chunk), direction)
                     return
