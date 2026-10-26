@@ -23,7 +23,7 @@ THRESHOLDS: Dict[str, Tuple[Optional[float], Optional[float]]] = {
     "max_gap_ms": (None, 3000),
     "false_starts": (0, 0),  # Sesame: 사용자 휴지 26회(최대 3.27 s) 모두 기다림
     "stop_latency_ms": (None, 1000),  # Sesame: 끼어들면 중앙 630 ms 안에 멈춤
-    "reengage_s": (3.0, 10.0),  # Sesame에 긴 침묵 표본이 없다 [미확인]: 3 s 미만은 재촉, 10 s 초과는 방치로 본다.
+    "reengage_s": (9.0, 14.0),  # Sesame에 긴 침묵 표본이 없다 [미확인]. 사용자 P4 사양 10 s: 서버 타이머 10 s + 모델 첫 소리 1~2 s + 측정 여유.
     "words_per_turn_median": (10, 45),  # Sesame: 턴 길이 중앙 17.5 단어, p90 65.5
     "question_rate": (None, 0.5),  # Sesame: 48턴 중 9턴(19%)이 질문으로 끝남
     "statement_words": (8, None),  # 짧은 대답 뒤 평서문으로 자기 이야기를 얹은 단어 수
@@ -202,3 +202,137 @@ def partner_turn_stats(turns: Sequence[Tuple[str, str]]) -> Dict[str, object]:
 
 def median_or_none(values: Sequence[float]) -> Optional[float]:
     return statistics.median(values) if values else None
+
+
+# ---- 묶음 4 판정 (P2 pause_intrusions, P4 reengage_kind, P5 yeah_followup, P1 barge_heard) ----
+
+WAIT_SIGNAL_MAX_WORDS = 5  # 사용자 P2: 짧은 기다림 신호 "대략 5단어 이하". 완화하려면 이 상수 하나.
+WAIT_SIGNAL_MAX_DUR_S = 2.0
+WAIT_SIGNAL_SILENT_MAX_DUR_S = 1.0  # 글 없이 소리만 있을 때 mm-hm류로 인정하는 최대 길이
+
+BACKCHANNEL_WORDS = frozenset({"yeah", "yep", "mm", "hm", "mmhm", "mhm", "huh", "uh", "right", "oh", "okay", "ok", "sure"})
+WAIT_LEXICON = frozenset(
+    "take your time no rush worries hurry i'm im i am listening here go on ahead okay ok sure yeah yep mm mmhm mm-hm hmm "
+    "hm huh uh-huh uh right whenever you're youre you ready all good fine got it alright cool totally still with think "
+    "thinking about that's thats slowly easy sorry".split()
+) | BACKCHANNEL_WORDS
+STOPWORDS = frozenset(
+    "a an the and or but so to of in on at for with from by as is are was were be been it its this that these those i you he "
+    "she we they me my your our their him her them do does did have has had not no yes can could would should will just "
+    "like then than too very really if when what which who how why".split()
+)
+
+_PRESENCE_RE = re.compile(
+    r"are you (still )?there|you there\b|still there|can you hear|hello\?|you still with me|did i lose you|"
+    r"everything (ok|okay|alright)|you (ok|okay|alright)\?",
+    re.IGNORECASE,
+)
+
+
+def word_tokens(text: str) -> List[str]:
+    """소문자 낱말 목록(곡선 따옴표는 곧은 따옴표로 바꾼다)."""
+    return [w.lower() for w in _WORD_RE.findall((text or "").replace("\u2019", "'"))]
+
+
+def content_words(text: str) -> frozenset:
+    """불용어와 기다림 어휘를 뺀 내용 낱말 집합."""
+    return frozenset(w for w in word_tokens(text) if w not in STOPWORDS and w not in WAIT_LEXICON)
+
+
+def _shares_two_word_chain(rest_text: str, text: str) -> bool:
+    rest, said = word_tokens(rest_text), word_tokens(text)
+    said_pairs = {(a, b) for a, b in zip(said, said[1:])}
+    return any((a, b) in said_pairs and not (a in STOPWORDS and b in STOPWORDS) for a, b in zip(rest, rest[1:]))
+
+
+def pause_intrusions(
+    p0: float,
+    p1: float,
+    partner_segs: Sequence[Segment],
+    bot_texts: Sequence[Tuple[float, str]],
+    rest_words: Iterable[str] = (),
+    rest_text: str = "",
+) -> Dict[str, object]:
+    """학습자가 문장 중간에서 쉬는 구간 [p0, p1] 안의 파트너 끼어듦 판정(설계 H4).
+
+    짧은 기다림 신호(WAIT_SIGNAL_MAX_WORDS 낱말 이하, 같은 화제, 질문 아님, 한 번)는 PASS, 나머지는 FAIL.
+    결과 kind: waited | wait_signal | multiple | question | finished_sentence | long | unverifiable | off_topic."""
+    onsets = [(s, e) for s, e in partner_segs if p0 < s < p1]
+    if not onsets:
+        return {"verdict": "PASS", "kind": "waited", "text": "", "dur": 0.0, "onset": None}
+    if len(onsets) >= 2:
+        return {"verdict": "FAIL", "kind": "multiple", "text": "", "dur": 0.0, "onset": onsets[0][0]}
+    s, e = onsets[0]
+    dur = round(e - s, 3)
+    next_on = next((ns for ns, _ in partner_segs if ns > s), float("inf"))
+    upper = min(e + 1.0, next_on - 0.1)
+    text = " ".join(" ".join(t for ts, t in bot_texts if s - 0.5 <= ts <= upper).split())
+    words = count_words(text)
+
+    def result(verdict: str, kind: str) -> Dict[str, object]:
+        return {"verdict": verdict, "kind": kind, "text": text, "dur": dur, "onset": s}
+
+    if "?" in text:
+        return result("FAIL", "question")
+    if len(content_words(text) & frozenset(rest_words)) >= 2 or (rest_text and _shares_two_word_chain(rest_text, text)):
+        return result("FAIL", "finished_sentence")
+    if words > WAIT_SIGNAL_MAX_WORDS or dur > WAIT_SIGNAL_MAX_DUR_S:
+        return result("FAIL", "long")
+    if e > p1 + 0.3:
+        return result("FAIL", "long")
+    if not text:
+        return result("PASS", "wait_signal") if dur <= WAIT_SIGNAL_SILENT_MAX_DUR_S else result("FAIL", "unverifiable")
+    if all(w in WAIT_LEXICON for w in word_tokens(text)):
+        return result("PASS", "wait_signal")
+    return result("FAIL", "off_topic")
+
+
+STORY_MIN_WORDS = 8
+BARGE_CONTENT_WORDS = ("limit", "time", "conversation", "have")
+
+
+def yeah_followup(reply: str, partner_spoke: bool = True) -> Dict[str, object]:
+    """"Yeah"만 들은 파트너 답의 분류(설계 H5). PASS는 story뿐이다.
+
+    no_reply(글도 소리도 없음) | unverifiable(소리는 있으나 글 없음) | question_only(질문 아닌 문장 단어 < 8)
+    | question_first(길어도 첫 문장이 질문) | story_then_question(길고 마지막 문장이 질문) | story."""
+    reply = (reply or "").strip()
+    if not reply:
+        return {"kind": "unverifiable" if partner_spoke else "no_reply", "statement_words": None}
+    words = statement_words(reply)
+    sentences = [s for s in _SENTENCE_SPLIT_RE.split(reply) if s.strip()]
+    if words < STORY_MIN_WORDS:
+        kind = "question_only"
+    elif ends_with_question(sentences[0]):
+        kind = "question_first"
+    elif ends_with_question(sentences[-1]):
+        kind = "story_then_question"
+    else:
+        kind = "story"
+    return {"kind": kind, "statement_words": words}
+
+
+def reengage_kind(text: str) -> str:
+    """침묵 뒤 파트너가 꺼낸 말의 종류(설계 H3): content | presence_check | question | none.
+
+    none은 말이 없거나 질문도 아니고 내용(질문 아닌 문장 6단어 이상)도 못 되는 짧은 말이다."""
+    text = (text or "").strip()
+    if not text:
+        return "none"
+    if _PRESENCE_RE.search(text):
+        return "presence_check"
+    words = statement_words(text)
+    if words < 6 and ends_with_question(text):
+        return "question"
+    return "content" if words >= 6 else "none"
+
+
+def barge_heard(turns: Sequence[Tuple[str, str]], words: Sequence[str] = BARGE_CONTENT_WORDS) -> Dict[str, object]:
+    """끼어든 문장을 파트너가 들었는지(설계 H6). 전문의 Me 턴에 내용 낱말이 2개 이상 있고 그 뒤에 파트너 턴이 있으면 PASS."""
+    for i, (who, text) in enumerate(turns):
+        if who != "Me":
+            continue
+        found = sorted({w for w in word_tokens(text) if w in words})
+        if len(found) >= 2 and any(w == "Partner" for w, _ in turns[i + 1:]):
+            return {"verdict": "PASS", "words": found}
+    return {"verdict": "FAIL", "words": []}
