@@ -94,6 +94,9 @@ DEFAULT_BARGE_IN_WORDS = 3
 BARGE_IN_MODE_ENV = "LIVE_BARGE_IN_MODE"
 BARGE_IN_MODES = ("vad", "words", "native")
 DEFAULT_BARGE_IN_MODE = "vad"
+# 3.8 엔진(gemini_live_38)만 따로 읽는 노브. 로컬 게이트는 3.8에서 끼어든 낱말을 놓쳐(barge_heard 1/5) 기본을 native로 한다.
+BARGE_IN_MODE_38_ENV = "LIVE_BARGE_IN_MODE_38"
+DEFAULT_BARGE_IN_MODE_38 = "native"
 BARGE_IN_MIN_VOICED_MS_ENV = "LIVE_BARGE_IN_MIN_VOICED_MS"
 BARGE_IN_CONFIDENCE_ENV = "LIVE_BARGE_IN_CONFIDENCE"
 BARGE_IN_MIN_DBFS_ENV = "LIVE_BARGE_IN_MIN_DBFS"
@@ -259,14 +262,19 @@ def barge_in_words_from_env(env=None) -> int:
     return value
 
 
-def barge_in_mode_from_env(env=None) -> str:
-    """`LIVE_BARGE_IN_MODE`(vad|words|native). 없거나 잘못되면 기본 vad."""
-    raw = ((os.environ if env is None else env).get(BARGE_IN_MODE_ENV) or "").strip().lower()
+def barge_in_mode_from_env(env=None, engine: str = DEFAULT_ENGINE) -> str:
+    """`LIVE_BARGE_IN_MODE`(vad|words|native). 없거나 잘못되면 기본 vad.
+    엔진 `gemini_live_38`은 `LIVE_BARGE_IN_MODE_38`만 읽고, 없거나 잘못되면 native다(LIVE_BARGE_IN_MODE는 보지 않는다)."""
+    if engine == GEMINI_38_ENGINE:
+        name, default = BARGE_IN_MODE_38_ENV, DEFAULT_BARGE_IN_MODE_38
+    else:
+        name, default = BARGE_IN_MODE_ENV, DEFAULT_BARGE_IN_MODE
+    raw = ((os.environ if env is None else env).get(name) or "").strip().lower()
     if not raw:
-        return DEFAULT_BARGE_IN_MODE
+        return default
     if raw not in BARGE_IN_MODES:
-        logger.warning("%s=%r ignored (%s)", BARGE_IN_MODE_ENV, raw, "|".join(BARGE_IN_MODES))
-        return DEFAULT_BARGE_IN_MODE
+        logger.warning("%s=%r ignored (%s)", name, raw, "|".join(BARGE_IN_MODES))
+        return default
     return raw
 
 
@@ -323,10 +331,10 @@ def silence_prompt(seconds: int) -> str:
     )
 
 
-def call_knobs_summary(mode: str, env=None) -> str:
+def call_knobs_summary(mode: str, env=None, engine: str = DEFAULT_ENGINE) -> str:
     """전문 메타 `- vad:` 줄 끝에 덧붙일, 이번 통화에 켜진 묶음 4 장치. 전부 꺼져 있으면 빈 문자열."""
     parts = []
-    barge = barge_in_mode_from_env(env)
+    barge = barge_in_mode_from_env(env, engine)
     if barge != "words":
         parts.append(f"barge={barge}")
     if input_gain_settings(env) is not None:
@@ -922,6 +930,7 @@ def live_service_class():
         _mic_state = "ok"
         # 끼어들기 게이트·침묵 재참여(묶음 4). 기본값은 모두 "끔".
         call_mode: Optional[str] = None
+        call_engine: str = DEFAULT_ENGINE
         pause_check: Optional[Callable[[], bool]] = None
         on_reengage: Optional[Callable[[int, float], None]] = None
         _analyzer = None
@@ -1092,7 +1101,7 @@ def live_service_class():
             ric = config.realtime_input_config
             vad_on = ric is not None and not getattr(ric.automatic_activity_detection, "disabled", False)
             words = barge_in_words_from_env()
-            mode = barge_in_mode_from_env()
+            mode = barge_in_mode_from_env(engine=self.call_engine)
             gate_settings = barge_in_gate_settings()
             if vad_on and mode == "vad" and words:
                 self._arm_gate(gate_settings)
@@ -1263,6 +1272,7 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
 
     proactive_audio = proactive_audio_from_env()
     logger.info("Proactive audio: %s", "on" if proactive_audio else "off")
+    logger.info("Barge-in mode: %s (engine=%s)", barge_in_mode_from_env(engine=config.engine), config.engine)
     live_service = live_service_class()
     llm = live_service(
         project_id=get_project_id(),
@@ -1365,6 +1375,7 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
 
     clock = CallClock()
     llm.call_mode = config.mode
+    llm.call_engine = config.engine
     llm.pause_check = lambda: clock.paused
     llm.on_reengage = lambda count, silent: record.add_note("system", f"silence re-engage #{count} at {clock.elapsed():.1f}s")
     pause_limit = pause_limit_from_env()
@@ -1474,7 +1485,7 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
             task.cancel()
         await stop_recording()
         record.paused_sec = clock.paused_total()
-        meta_line = " ".join(part for part in (vad_meta, call_knobs_summary(config.mode)) if part) or None
+        meta_line = " ".join(part for part in (vad_meta, call_knobs_summary(config.mode, engine=config.engine)) if part) or None
         saved = await asyncio.to_thread(finish_call, record, config, model, None, meta_line)
         logger.info("Call finished; transcript saved: %s", saved)
         schedule_partner_memory_update(saved, config, record)

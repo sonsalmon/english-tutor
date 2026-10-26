@@ -39,8 +39,8 @@ def stub_config(vad_on=True):
 
 
 class ConnectionSwitchTest(unittest.IsolatedAsyncioTestCase):
-    async def arm(self, env, mode="smalltalk", vad_on=True):
-        svc = make_service(call_mode=mode)
+    async def arm(self, env, mode="smalltalk", vad_on=True, engine="gemini_live"):
+        svc = make_service(call_mode=mode, call_engine=engine)
         config = stub_config(vad_on)
         parent = call_bot.live_service_class().__mro__[1]
         with mock.patch.dict(os.environ, env, clear=True), \
@@ -54,6 +54,18 @@ class ConnectionSwitchTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(svc._gate, barge_in.BargeInGate)
         self.assertEqual((handling, svc._barge_in_words, svc._reengage_sec, svc._reengage_max), (ActivityHandling.NO_INTERRUPTION, 3, 10, 2))
         self.assertIsNotNone(svc._voice)
+
+    async def test_engine_38_defaults_to_native_and_ignores_the_25_knob(self):
+        for env in ({}, {"LIVE_BARGE_IN_MODE": "words"}):
+            svc, handling = await self.arm(env, engine="gemini_live_38")
+            self.assertEqual((svc._gate, handling, svc._barge_in_words), (None, None, 0))
+
+    async def test_engine_38_vad_and_words_keep_the_old_paths(self):
+        svc, handling = await self.arm({"LIVE_BARGE_IN_MODE_38": "vad"}, engine="gemini_live_38")
+        self.assertIsInstance(svc._gate, barge_in.BargeInGate)
+        self.assertEqual((handling, svc._barge_in_words), (ActivityHandling.NO_INTERRUPTION, 3))
+        svc, handling = await self.arm({"LIVE_BARGE_IN_MODE_38": "words"}, engine="gemini_live_38")
+        self.assertEqual((svc._gate, handling, svc._barge_in_words), (None, ActivityHandling.NO_INTERRUPTION, 3))
 
     async def test_reengage_is_chat_only(self):
         for mode in ("mission", "teachback"):

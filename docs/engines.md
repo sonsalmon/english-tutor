@@ -64,6 +64,7 @@ shell 파이프라인: `transport.input → [stt] → user_aggregator → llm �
 | `LIVE_INPUT_GAIN` | `auto` | `off` | 전송 계층 입력 이득(`server/audio_gain.py`). 말소리만 목표 레벨까지 끌어올리고 잡음·디지털 무음은 키우지 않는다. 이득 → RNNoise 순서 |
 | `LIVE_INPUT_GAIN_TARGET_DBFS` / `_MAX_DB` / `LIVE_INPUT_GATE_DBFS` | -20 / 18 / -50 | | 목표 레벨, 최대 이득(dB), 말소리로 보는 최소 레벨 |
 | `LIVE_BARGE_IN_MODE` | `vad` | `words` | `vad` = 로컬 Silero 게이트(`server/barge_in.py`) + 낱말 보조, `words` = 낱말만(묶음 3 동작), `native` = Gemini 기본 끊기(`LIVE_BARGE_IN_WORDS=0`과 같다) |
+| `LIVE_BARGE_IN_MODE_38` | `native` | `vad` 또는 `words` | 엔진 `gemini_live_38`만 읽는다(이 엔진은 `LIVE_BARGE_IN_MODE`를 보지 않는다). 값 뜻은 위와 같고 없거나 잘못되면 `native`다. 로컬 게이트가 3.8에서 끼어든 낱말을 놓쳐(`barge_heard` 1/5) 기본을 Gemini 기본 끊기로 했다. 옛 동작 = `LIVE_BARGE_IN_MODE=words LIVE_BARGE_IN_MODE_38=words`. `gemini_live`(2.5)는 `LIVE_BARGE_IN_MODE` 기본 `vad` 그대로 |
 | `LIVE_BARGE_IN_MIN_VOICED_MS` / `_CONFIDENCE` / `_MIN_DBFS` | 700 / 0.7 / -40 | | 유성음이 이 길이 이상 이어지면 상대를 멈춘다. 200 ms 이하 끊김은 잇는다 |
 | `LIVE_SILENCE_REENGAGE_SEC` | `10` | `0` | smalltalk·freetalk에서 상대 말이 끝난 뒤 학습자가 이 초 동안 말하지 않으면 서버가 `[Silence note: ...]`를 보내 상대가 내용 있는 말을 먼저 꺼내게 한다 |
 | `LIVE_SILENCE_REENGAGE_MAX` | `2` | | 학습자가 말하기 전 연속 재참여 최대 횟수 |
@@ -72,7 +73,7 @@ shell 파이프라인: `transport.input → [stt] → user_aggregator → llm �
 - `vad` 모드는 Gemini에 `NO_INTERRUPTION`을 주고 끊기는 서버가 한다. `LIVE_BARGE_IN_WORDS=0`이면 모드가 무엇이든 Gemini 기본 끊기(`native`)다. `TURN_MODE=smart`(Gemini VAD 끈 상태)에서는 게이트를 쓰지 않는다.
 - 침묵 재참여는 `turn_complete=True`로 보내 Gemini가 바로 이어 말한다. 전문에는 `**system:** silence re-engage #N at <초>s`로 남고 `[Silence note:` 로 시작하는 받아쓰기는 학습자 발화에서 버린다. 일시정지 중에는 지나지 않는다.
 - 전문 메타 `- vad:` 줄 끝에 켜진 장치가 `barge=vad gain=auto reengage=10s`처럼 붙는다(전부 꺼져 있으면 붙지 않는다).
-- 서버 로그: 시작 시 `Input gain auto (...)`, `Barge-in gate armed (vad, 700 ms)`, `Silence re-engage armed (10 s)`; 발동 시 `Barge-in: ... -> interrupt`, `Silence re-engage #N ...`; 상대 차례마다 `Turn complete: <초> after the partner's first sound; <N> input transcript chunk(s) arrived while the partner spoke`(3.8이 겹친 음성을 버리는지 가리는 진단).
+- 서버 로그: 통화마다 한 줄 `Barge-in mode: <모드> (engine=<엔진>)`, 시작 시 `Input gain auto (...)`, `Barge-in gate armed (vad, 700 ms)`, `Silence re-engage armed (10 s)`; 발동 시 `Barge-in: ... -> interrupt`, `Silence re-engage #N ...`; 상대 차례마다 `Turn complete: <초> after the partner's first sound; <N> input transcript chunk(s) arrived while the partner spoke`(3.8이 겹친 음성을 버리는지 가리는 진단).
 
 ## 모든 엔진이 지키는 것
 

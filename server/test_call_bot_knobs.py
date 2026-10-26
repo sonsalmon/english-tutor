@@ -23,6 +23,20 @@ class BargeInEnvTest(unittest.TestCase):
             self.assertEqual(call_bot.barge_in_mode_from_env({"LIVE_BARGE_IN_MODE": "loud"}), "vad")
         warn.assert_called_once()
 
+    def test_engine_38_defaults_to_native_and_reads_its_own_knob(self):
+        engine = "gemini_live_38"
+        self.assertEqual(call_bot.barge_in_mode_from_env({}, engine), "native")
+        for value in ("vad", "words", "native"):
+            self.assertEqual(call_bot.barge_in_mode_from_env({"LIVE_BARGE_IN_MODE_38": f" {value.upper()} "}, engine), value)
+        self.assertEqual(call_bot.barge_in_mode_from_env({"LIVE_BARGE_IN_MODE": "words"}, engine), "native")
+        self.assertEqual(call_bot.barge_in_mode_from_env({"LIVE_BARGE_IN_MODE_38": "words"}), "vad")
+        self.assertEqual(call_bot.barge_in_mode_from_env({"LIVE_BARGE_IN_MODE_38": "words"}, "gemini_live_notes"), "vad")
+
+    def test_engine_38_bad_mode_warns_and_falls_back_to_native(self):
+        with mock.patch.object(call_bot.logger, "warning") as warn:
+            self.assertEqual(call_bot.barge_in_mode_from_env({"LIVE_BARGE_IN_MODE_38": "loud"}, "gemini_live_38"), "native")
+        warn.assert_called_once()
+
     def test_gate_settings_defaults_and_overrides(self):
         self.assertEqual(
             call_bot.barge_in_gate_settings({}),
@@ -81,6 +95,12 @@ class CallKnobsSummaryTest(unittest.TestCase):
     def test_defaults_list_active_knobs_and_skip_reengage_outside_chat(self):
         self.assertEqual(call_bot.call_knobs_summary("smalltalk", {}), "barge=vad gain=auto reengage=10s")
         self.assertEqual(call_bot.call_knobs_summary("mission", {}), "barge=vad gain=auto")
+
+
+class CallKnobsSummary38Test(unittest.TestCase):
+    def test_summary_names_the_effective_mode_per_engine(self):
+        self.assertEqual(call_bot.call_knobs_summary("smalltalk", {}, "gemini_live_38"), "barge=native gain=auto reengage=10s")
+        self.assertEqual(call_bot.call_knobs_summary("smalltalk", {"LIVE_BARGE_IN_MODE_38": "words"}, "gemini_live_38"), "gain=auto reengage=10s")
 
 
 class AudioInFilterSwitchTest(unittest.TestCase):
