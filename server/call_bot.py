@@ -304,8 +304,9 @@ def silence_reengage_from_env(env=None) -> Tuple[int, int]:
 def silence_prompt(seconds: int) -> str:
     return (
         f"{SILENCE_NOTE_PREFIX} the learner has said nothing for {seconds} seconds. Do not ask whether they are there "
-        "and do not repeat your question. Add one or two sentences of your own on the current topic - a small story "
-        "or your opinion - and end with a statement, not a question. Under 30 words.]"
+        "and do not repeat your question. Say one or two short statements of your own about what you were just talking "
+        "about: a small thing that happened to you or your honest opinion. Every sentence must end with a period, so no "
+        "question and no tag like 'you know?' or 'right?'. Under 30 words.]"
     )
 
 
