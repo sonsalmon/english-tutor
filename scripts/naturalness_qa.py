@@ -504,7 +504,7 @@ def barge_heard_metric(turns):
     """P1 보조(설계 H6): 끼어든 문장의 내용 낱말이 전문의 Me 턴에 남고 그 뒤 파트너 턴이 있으면 PASS."""
     out = M.barge_heard(turns)
     note = f"전문 Me 턴에서 찾은 낱말 {out['words']}" if out["words"] else "전문에 끼어든 문장(limit·time·conversation·have 중 2개 이상)이 없거나 그 뒤 파트너 턴이 없음"
-    return metric("barge_heard", "끼어든 말을 파트너가 들었는지(전문)", out["verdict"], "", "PASS", note, out["verdict"] == "PASS", extra=out)
+    return metric("barge_heard", "끼어든 말을 파트너가 들었는지(전문)", out["verdict"], "", "PASS", out["verdict"] == "PASS", note, extra=out)
 
 
 def analyze_n05(ev, segs, turns, texts):

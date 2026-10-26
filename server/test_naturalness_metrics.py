@@ -260,6 +260,15 @@ class BargeHeardTest(unittest.TestCase):
         self.assertEqual(M.barge_heard([("Me", "Hello."), ("Partner", "Hi.")])["verdict"], "FAIL")
         self.assertEqual(M.barge_heard([("Me", "I have a time limit.")])["verdict"], "FAIL")
 
+    def test_scored_metric_keeps_verdict_and_reason_in_their_fields(self):
+        from scripts import naturalness_qa as Q
+
+        heard = Q.barge_heard_metric([("Partner", "Long story..."), ("Me", "I have a time limit for this conversation."), ("Partner", "Oh, got it.")])
+        missed = Q.barge_heard_metric([("Me", "Hello."), ("Partner", "Hi.")])
+
+        self.assertEqual((heard["verdict"], type(heard["note"])), ("PASS", str))
+        self.assertEqual((missed["verdict"], type(missed["note"])), ("FAIL", str))
+
 
 if __name__ == "__main__":
     unittest.main()
