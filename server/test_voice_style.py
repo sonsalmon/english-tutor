@@ -22,6 +22,7 @@ class VoiceStyleTest(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         os.environ.pop(voice_style.VOICE_STYLE_ENV, None)
+        os.environ.pop(voice_style.PROSODY_STYLE_ENV, None)
 
     def test_word_cap(self):
         self.assertLessEqual(len(voice_style.VOICE_STYLE.split()), voice_style.MAX_WORDS)
@@ -57,6 +58,50 @@ class VoiceStyleTest(unittest.TestCase):
         text = voice_style.VOICE_STYLE
         for bad in ("<", ">", "[", "]", "*"):
             self.assertNotIn(bad, text)
+
+
+class ProsodyStyleTest(unittest.TestCase):
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop(voice_style.VOICE_STYLE_ENV, None)
+        os.environ.pop(voice_style.PROSODY_STYLE_ENV, None)
+
+    def test_word_cap_and_no_tags(self):
+        self.assertLessEqual(len(voice_style.PROSODY_STYLE.split()), voice_style.PROSODY_MAX_WORDS)
+        for bad in ("<", ">", "[", "]", "*"):
+            self.assertNotIn(bad, voice_style.PROSODY_STYLE)
+
+    def test_default_off_and_off_values_leave_prompt_identical(self):
+        expected = f"{BASE}\n\n{voice_style.VOICE_STYLE}".encode()
+        for value in (None, "off", "OFF", "0", "false", "no"):
+            if value is not None:
+                os.environ[voice_style.PROSODY_STYLE_ENV] = value
+            out = voice_style.with_voice_style(make("smalltalk"))
+            self.assertEqual(out.system_instruction.encode(), expected)
+            self.assertNotIn(voice_style.PROSODY_STYLE, out.system_instruction)
+
+    def test_on_appends_after_voice_style(self):
+        os.environ[voice_style.PROSODY_STYLE_ENV] = "on"
+        for mode in CHAT_MODES:
+            out = voice_style.with_voice_style(make(mode))
+            self.assertEqual(out.system_instruction, f"{BASE}\n\n{voice_style.VOICE_STYLE}\n\n{voice_style.PROSODY_STYLE}")
+
+    def test_on_without_voice_style(self):
+        os.environ[voice_style.PROSODY_STYLE_ENV] = "on"
+        os.environ[voice_style.VOICE_STYLE_ENV] = "off"
+        out = voice_style.with_voice_style(make("smalltalk"))
+        self.assertEqual(out.system_instruction, f"{BASE}\n\n{voice_style.PROSODY_STYLE}")
+
+    def test_on_other_modes_unchanged_and_not_applied_twice(self):
+        os.environ[voice_style.PROSODY_STYLE_ENV] = "on"
+        for mode in set(MODES) - set(CHAT_MODES):
+            config = make(mode)
+            self.assertIs(voice_style.with_voice_style(config), config)
+        once = voice_style.with_voice_style(make("smalltalk", partner="jake", engine="gemini_live_38"))
+        self.assertIs(voice_style.with_voice_style(once), once)
+        self.assertEqual((once.partner, once.engine), ("jake", "gemini_live_38"))
 
 
 if __name__ == "__main__":
