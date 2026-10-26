@@ -24,9 +24,9 @@ HESITATION = (
     "Never finish their sentence, never guess what they mean, never change the topic, and never ask a question until they have finished."
 )
 BACKCHANNEL = (
-    "If the learner only gives a short reaction ('yeah', 'mm-hm', 'right', 'oh') with no new content, read it as 'go on': "
+    "If the learner only gives a short reaction ('yeah', 'mm-hm', 'right', 'oh'), read it as 'go on': "
     "tell one or two sentences of your own story, ending with a period. "
-    "No question in that turn, not even 'you know?' or 'right?'."
+    "Not one question mark in that turn: no 'you know?', no 'right?', no 'X, though?'."
 )
 _TEXTS = {"hesitation": HESITATION, "backchannel": BACKCHANNEL}
 HEADER = "TURN-TAKING RULES (these apply to every turn of this call):"
