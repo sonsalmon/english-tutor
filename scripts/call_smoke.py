@@ -50,7 +50,7 @@ async def consume_audio(track, stats):
             stats.setdefault("first_loud_at", time.time())
 
 
-async def run(url: str, seconds: float, wav: Path) -> dict:
+async def run(url: str, seconds: float, wav: Path, mode: str = "mission", engine: str = "") -> dict:
     stats = {"frames": 0, "loud_frames": 0, "messages": [], "t0": time.time()}
     pc = RTCPeerConnection()
     player = MediaPlayer(str(wav))
@@ -80,7 +80,7 @@ async def run(url: str, seconds: float, wav: Path) -> dict:
 
     await pc.setLocalDescription(await pc.createOffer())
     body = {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type,
-            "request_data": {"system_instruction": INSTRUCTION, "mode": "mission"}}
+            "request_data": {"system_instruction": INSTRUCTION, "mode": mode, **({"engine": engine} if engine else {})}}
     started = time.time()
     async with aiohttp.ClientSession() as session:
         async with session.post(f"{url}/api/offer", json=body) as resp:
@@ -111,13 +111,15 @@ def main() -> None:
     parser.add_argument("--seconds", type=float, default=30.0)
     parser.add_argument("--transcript-dir", default=os.getenv("TRANSCRIPT_DIR"), required=os.getenv("TRANSCRIPT_DIR") is None)
     parser.add_argument("--audio-dir", default=os.getenv("AUDIO_DIR"))
+    parser.add_argument("--mode", default="mission", choices=["mission", "freetalk", "teachback", "smalltalk"])
+    parser.add_argument("--engine", default="", help="request_data.engine (비우면 필드를 보내지 않아 기본 엔진)")
     args = parser.parse_args()
 
     work = Path(tempfile.mkdtemp(prefix="call-smoke-"))
     wav = work / "speech.wav"
     make_speech_wav(wav)
     since = time.time()
-    stats = asyncio.run(run(args.url, args.seconds, wav))
+    stats = asyncio.run(run(args.url, args.seconds, wav, args.mode, args.engine))
     transcript = wait_for_transcript(Path(args.transcript_dir).expanduser(), since)
     audio = sorted(Path(args.audio_dir).expanduser().glob("*.wav")) if args.audio_dir else []
 
@@ -130,7 +132,8 @@ def main() -> None:
     if transcript:
         print(transcript.read_text(encoding="utf-8")[:800])
     print(f"원음 WAV: {[p.name for p in audio]}")
-    ok = loud_sec > 1.0 and transcript is not None and "Smoke Test" in transcript.read_text(encoding="utf-8")
+    text = transcript.read_text(encoding="utf-8") if transcript else ""
+    ok = loud_sec > 1.0 and transcript is not None and "Smoke Test" in text and (not args.engine or "**Partner:**" in text)
     print("SMOKE OK" if ok else "SMOKE FAIL")
     sys.exit(0 if ok else 1)
 

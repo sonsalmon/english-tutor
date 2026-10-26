@@ -322,7 +322,7 @@ describe('prompt length limit holds with full memory and a full wordbook', () =>
     const bank = p.storyBank!;
     const total = storyCount(bank, bank);
     const fullBlock = wordbookBlock(FULL_WORDBOOK);
-    const lightMemory: PartnerMemory = { ...FULL_MEMORY, facts: [...FULL_MEMORY.facts, ...keyFacts(8)], self_story: [], episodes: [], jokes: [] };
+    const lightMemory: PartnerMemory = { ...FULL_MEMORY, facts: [...FULL_MEMORY.facts.slice(0, 6), ...keyFacts(2)], self_story: [], episodes: [], jokes: [] };
     let wordbookOnly = false;
     for (let len = 0; len <= 2000 && !wordbookOnly; len += 25) {
       const brief = 'x'.repeat(len);

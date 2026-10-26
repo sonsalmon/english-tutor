@@ -36,7 +36,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
 
 from server import accent_key, call_bot, chat, clip_translate, clipdb, culture_filter, culturedb, drill, feed, native_expr, people, phrase_gloss, pron, review, summary_jobs, tts, wordbook, youtube
 from server.call_bot import parse_call_config, run_bot, time_limit_for_mode
-from server import partner_memory, resume
+from server import partner_memory, reasoner, resume
 from server.history import list_calls, live_cost_of, load_call, totals as call_totals
 from server.pricing import combine_cost
 from server.readgloss import (
@@ -309,6 +309,8 @@ def _on_call_saved(saved: Path, config: call_bot.CallConfig) -> None:
 
 
 call_bot.configure_call_saved(_on_call_saved)
+# 조용한 조언자: engine=gemini_live_notes 통화에만 붙는다(다른 엔진은 factory가 None을 돌려준다).
+call_bot.configure_turn_listener(reasoner.listener_factory)
 
 
 def _verbatim_text(path: Path) -> str:

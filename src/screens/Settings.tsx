@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { ScreenSettings } from '../components/ScreenSettings';
 import { List, RowLink, Screen } from '../components/ui';
 import { loadCorrection, loadFriendCoach, saveCorrection, saveFriendCoach, type CorrectionStrength } from '../lib/coachSettings';
+import { loadCallEngine, saveCallEngine, VISIBLE_CALL_ENGINES, type CallEngine } from '../lib/engineSettings';
 import { loadKoSettings, saveKoSettings } from '../lib/koLines';
 import { go } from '../lib/router';
 import { loadShareWordbook, saveShareWordbook } from '../lib/shareWordbook';
@@ -59,6 +60,41 @@ function CorrectionSettings() {
   );
 }
 
+// 모든 엔진의 문구를 두되, 화면에는 VISIBLE_CALL_ENGINES에 든 것만 보인다.
+const ENGINE_TEXT: Record<CallEngine, { label: string; desc: string }> = {
+  gemini_live: { label: '기본', desc: '지금 쓰는 Gemini Live로 이야기해요.' },
+  gemini_live_38: { label: '새 모델: Gemini 3.8 Live', desc: "더 빨리 대답하고 'Yeah'에도 반응해요. 대신 말을 끊으면 늦게 멈춰요." },
+  gemini_live_notes: { label: '조용한 조언자', desc: '말하는 동안 곁에서 조용히 메모하며 대화를 거들어요.' },
+  cascade_flux: { label: '조립식', desc: 'Deepgram이 듣고, Gemini가 생각하고, Cartesia가 말해요.' },
+  openai_live: { label: 'OpenAI 실시간', desc: '아직 만들고 있어요.' },
+};
+const ENGINE_OPTIONS = VISIBLE_CALL_ENGINES.map((value) => ({ value, ...ENGINE_TEXT[value] }));
+
+function EngineSettings() {
+  const [engine, setEngine] = useState<CallEngine>(() => loadCallEngine());
+  const choose = (value: CallEngine) => {
+    setEngine(value);
+    saveCallEngine(value);
+  };
+  return (
+    <fieldset className="min-w-0">
+      <legend className="mb-2 font-bold">실험실: 통화 엔진</legend>
+      <div className="space-y-2">
+        {ENGINE_OPTIONS.map((o) => (
+          <label key={o.value} className="relative block">
+            <input type="radio" name="call-engine" value={o.value} checked={engine === o.value} onChange={() => choose(o.value)} className="peer sr-only" />
+            <span className="block min-h-14 cursor-pointer rounded-2xl border border-line bg-surface px-4 py-3 peer-checked:border-ink peer-checked:ring-1 peer-checked:ring-ink peer-focus-visible:outline-3 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-ink/45">
+              <span className="block font-semibold">{o.label}</span>
+              <span className="mt-0.5 block text-sm text-ink-soft">{o.desc}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+      <p className="mt-3 text-sm text-ink-soft">친구 수다 통화에만 적용. 다음 통화부터 바뀌어요.</p>
+    </fieldset>
+  );
+}
+
 export function Settings() {
   const [showAll, setShowAll] = useState(() => loadShowAllFriends());
   const changeShowAll = (value: boolean) => {
@@ -94,6 +130,7 @@ export function Settings() {
           checked={friendCoach}
           onChange={changeFriendCoach}
         />
+        <EngineSettings />
         <section>
           <h2 className="mb-2 font-bold">그 밖의 설정</h2>
           <List>

@@ -118,6 +118,17 @@ describe('American friends', () => {
   });
 });
 
+describe('visible friends smalltalk instruction length', () => {
+  test('Jake, Priya and Brian stay under the server limit of 30,000 chars, with and without a full memory', () => {
+    for (const id of ['jake', 'priya', 'brian']) {
+      const p = partnerById(id);
+      for (const memory of [null, FULL_MEMORY]) {
+        expect(smallTalkInstruction('', [], p, [], memory, '').length).toBeLessThan(30_000);
+      }
+    }
+  });
+});
+
 describe('friend coach mode across all friends', () => {
   test('call prompts with the coach switch on keep the never-correct rule and add the coach block', () => {
     for (const p of PARTNERS.filter((x) => x.id !== 'park')) {
