@@ -26,6 +26,13 @@
 
 글자 수 상한은 120단어(`MAX_WORDS`)이고 시험이 지킨다. 문구 자체는 시험으로 고정하지 않는다.
 
+## 운율 블록 (PROSODY, 실험 스위치)
+
+- 환경변수 `LIVE_PROSODY_STYLE`. 기본 꺼짐. `on`처럼 꺼짐 값(`off`, `0`, `false`, `no`) 밖이면 켜진다. 꺼지면 지시문은 위 VOICE STYLE까지만 붙은 상태와 바이트까지 같다.
+- 켜지면 같은 함수가 VOICE STYLE 뒤에 영어 블록 `PROSODY_STYLE`(80단어 이하, `PROSODY_MAX_WORDS`)을 붙이고 `Prosody style applied: …` 로그를 한 줄 남긴다. VOICE STYLE을 꺼도 단독으로 붙는다.
+- 형용사 대신 행동을 적는다: 한 턴 1~2문장과 and/so/but 잇기, 생각 중간 쉼에서 마지막 단어 높이 유지, 평서문은 중간 높이에서 끝내고 턴 마지막 문장만 끝까지 내리기, 새 문장은 앞 문장이 끝난 높이 근처에서 시작, 강조는 높이 대신 길이.
+- 겨냥하는 지표(`.omo/dag/n5-human-voice/replica/prosody-metrics.md`): 이어 가는 구 끝 움직임, 문장 끝 움직임과 하강 비율, 재설정 폭, 강조 돌출. 설계와 측정은 `lanes/prosody-impl-design.md`, `lanes/prosody-impl-report.md`.
+
 ## 한계
 
 - 효과는 지시문 준수에 달려 있다. 문헌상 지시문이 길면 준수가 떨어진다고 하여 짧게 유지했다.
