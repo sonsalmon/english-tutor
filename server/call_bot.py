@@ -20,6 +20,7 @@ from typing import Any, Callable, List, Optional, Tuple
 from google.genai.types import AudioTranscriptionConfig, EndSensitivity, StartSensitivity
 
 from server.config_utils import get_project_id
+from server.engines.base import ALLOWED_ENGINES, DEFAULT_ENGINE, GEMINI_ENGINES, TurnListener, engine_unavailable_reason
 from server.lesson import session_time_limit_from_env
 from server import call_tools, partner_memory
 from server.partner_memory import PARTNER_IDS, PARTNER_NAMES
@@ -387,6 +388,8 @@ class CallConfig:
     practice_words: Tuple[str, ...] = ()
     # 자동으로 다시 건 통화면 화면이 들고 있던 직전 대화(화자 "Me"/"Partner", 글). 직전 전문이 아직 저장되지 않았어도 이어 갈 수 있게 한다.
     resume_turns: Tuple[Tuple[str, str], ...] = ()
+    # 통화 엔진(docs/engines.md). 기본 gemini_live는 오늘 아침 동작과 같다.
+    engine: str = DEFAULT_ENGINE
 
     @property
     def mission(self) -> Optional[str]:
@@ -472,6 +475,15 @@ def parse_call_config(data: Any) -> CallConfig:
     voice = data.get("voice") or DEFAULT_VOICE
     if not isinstance(voice, str) or not voice.isalpha():
         raise ValueError("voice 이름이 올바르지 않습니다.")
+    engine = data.get("engine") or DEFAULT_ENGINE
+    if engine not in ALLOWED_ENGINES:
+        raise ValueError(f"engine은 {ALLOWED_ENGINES} 중 하나여야 합니다.")
+    if engine != DEFAULT_ENGINE:
+        if mode != "smalltalk":
+            raise ValueError("실험 엔진은 친구 수다 통화에만 쓸 수 있습니다.")
+        reason = engine_unavailable_reason(engine)
+        if reason:
+            raise ValueError(reason)
     partner = data.get("partner")
     # 기억은 수다·자유 대화만 쓴다: 미션 역할극 발화는 학습자의 실제 사실이 아니다.
     if partner not in PARTNER_IDS or mode not in PARTNER_MEMORY_MODES:
@@ -502,6 +514,7 @@ def parse_call_config(data: Any) -> CallConfig:
         lesson_date=lesson_date,
         practice_words=practice_words,
         resume_turns=resume_turns,
+        engine=engine,
     )
 
 
@@ -618,6 +631,34 @@ _call_saved_hook: Optional[Callable[[Any, "CallConfig"], None]] = None
 def configure_call_saved(hook: Optional[Callable[[Any, "CallConfig"], None]]) -> None:
     global _call_saved_hook
     _call_saved_hook = hook
+
+
+# 학습자 차례마다 곁가지(조언자)를 붙이는 훅. main이 시작할 때 등록한다(configure_call_saved와 같은 방식).
+# factory는 (config, record) -> TurnListener | None. None이면 그 통화는 지금과 똑같이 돈다.
+_turn_listener_factory: Optional[Callable[["CallConfig", "CallRecord"], Optional[TurnListener]]] = None
+
+
+def configure_turn_listener(factory: Optional[Callable[["CallConfig", "CallRecord"], Optional[TurnListener]]]) -> None:
+    global _turn_listener_factory
+    _turn_listener_factory = factory
+
+
+def make_turn_listener(config: "CallConfig", record: "CallRecord") -> Optional[TurnListener]:
+    """등록된 factory로 이 통화의 턴 리스너를 만든다. 없거나 실패하면 None(통화는 계속)."""
+    if _turn_listener_factory is None:
+        return None
+    try:
+        return _turn_listener_factory(config, record)
+    except Exception as e:  # noqa: BLE001
+        logger.error("Turn listener could not start: %s", e)
+        return None
+
+
+async def notify_turn_listener(listener: TurnListener, text: str) -> None:
+    try:
+        await listener.on_user_turn(text)
+    except Exception as e:  # noqa: BLE001 - 조언자 실패가 통화를 막지 않는다
+        logger.error("Turn listener failed: %s", e)
 
 
 def notify_call_saved(saved: Any, config: "CallConfig", record: "CallRecord") -> bool:
@@ -898,14 +939,41 @@ def live_service_class():
             if not self._drop_rest_of_turn:
                 await super()._handle_msg_output_transcription(message)
 
+        async def send_note(self, text: str) -> None:
+            """감독 메모를 세션에 넣는다(turn_complete=False라 Gemini는 답하지 않고 다음 차례에 참고만 한다).
+            프레임을 거치지 않아 자막·전문에 섞이지 않는다. 파트너가 말하는 중이면 그 차례가 끝난 뒤(_handle_msg_turn_complete)로 미룬다."""
+            text = (text or "").strip()
+            if not text:
+                return
+            if self._partner_speaking or self._bot_is_responding:
+                self.__dict__.setdefault("_pending_notes", []).append(text)
+                return
+            await self._push_note(text)
+
+        async def _push_note(self, text: str) -> None:
+            if self._disconnecting or not self._session:
+                return
+            try:
+                await self._session.send_client_content(
+                    turns=[{"role": "user", "parts": [{"text": text}]}], turn_complete=False)
+            except Exception as e:  # noqa: BLE001 - pipecat의 다른 전송 경로와 같은 오류 처리
+                await self._handle_send_error(e)
+
         async def _handle_msg_turn_complete(self, message):
             self._drop_rest_of_turn = False
             await super()._handle_msg_turn_complete(message)
+            pending = self.__dict__.pop("_pending_notes", None)
+            for note in pending or ():
+                await self._push_note(note)
 
     return TranscriptHintedLiveService
 
 
 async def run_bot(webrtc_connection, config: CallConfig) -> None:
+    if config.engine not in GEMINI_ENGINES:
+        from server import engines
+
+        return await engines.run_engine(webrtc_connection, config)
     from pipecat.frames.frames import EndFrame, LLMRunFrame
     from pipecat.pipeline.pipeline import Pipeline
     from pipecat.pipeline.worker import PipelineParams, PipelineWorker
@@ -946,6 +1014,10 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
     )
 
     tools = live_tools(config)
+    listener = make_turn_listener(config, record)
+    instruction = config.system_instruction
+    if listener is not None and listener.instruction_suffix.strip():
+        instruction = f"{instruction}\n\n{listener.instruction_suffix.strip()}"
 
     live_service = live_service_class()
     llm = live_service(
@@ -956,7 +1028,7 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
         settings=live_service.Settings(
             model=model,
             voice=config.voice,
-            system_instruction=config.system_instruction,
+            system_instruction=instruction,
             temperature=1.0,
             language="en-US",
             vad=vad,
@@ -965,6 +1037,9 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
             proactivity=ProactivityConfig(proactive_audio=True),
         ),
     )
+
+    if listener is not None:
+        listener.attach(llm)
 
     context = LLMContext()
     pair_kwargs = {"realtime_service_mode": True}
@@ -1029,7 +1104,10 @@ async def run_bot(webrtc_connection, config: CallConfig) -> None:
     @user_aggregator.event_handler("on_user_turn_message_added")
     async def on_user_message(aggregator, message):
         if message.content not in (OPENER_TEXT, opener_text(config.partner)):
+            turns_before = len(record.chunks)
             record.add_user(message.content)
+            if listener is not None and len(record.chunks) > turns_before:
+                await notify_turn_listener(listener, record.chunks[-1][1])
 
     @assistant_aggregator.event_handler("on_assistant_turn_stopped")
     async def on_assistant_turn(aggregator, message):
