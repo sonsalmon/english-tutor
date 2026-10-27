@@ -31,7 +31,7 @@
 
 ## 화면에 보이는 엔진
 
-설정 화면(`src/screens/Settings.tsx`)은 `src/lib/engineSettings.ts`의 `VISIBLE_CALL_ENGINES` 한 곳에 든 엔진만 보인다: `gemini_live`(기본)와 `gemini_live_38`("새 모델: Gemini 3.8 Live"). `gemini_live_notes`, `cascade_flux`, `openai_live`는 서버·클라이언트 코드에 남기고 화면에서만 숨긴다(night-3 replica-diff: 조언자는 메모가 늦고 조립식은 응답이 느려 탈락).
+설정 화면(`src/screens/Settings.tsx`)은 `src/lib/engineSettings.ts`의 `VISIBLE_CALL_ENGINES` 한 곳에 든 엔진만 보인다: `gemini_live_38`("기본: Gemini 3.8 Live", 2026-10-27부터 친구 수다 통화 기본)와 `gemini_live`("Gemini 2.5 Live", 엔진 필드 없이 서버 기본 경로를 탄다). `gemini_live_notes`, `cascade_flux`, `openai_live`는 서버·클라이언트 코드에 남기고 화면에서만 숨긴다(night-3 replica-diff: 조언자는 메모가 늦고 조립식은 응답이 느려 탈락).
 
 - 저장된 값이 보이는 목록에 없으면 `loadCallEngine`이 기본 엔진으로 본다. 그래서 `engine` 필드를 보내지 않는다.
 - 숨긴 엔진을 다시 보이려면 `VISIBLE_CALL_ENGINES`에 이름을 넣고 `Settings.tsx`의 `ENGINE_TEXT` 문구를 확인한다.

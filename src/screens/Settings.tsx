@@ -62,8 +62,8 @@ function CorrectionSettings() {
 
 // 모든 엔진의 문구를 두되, 화면에는 VISIBLE_CALL_ENGINES에 든 것만 보인다.
 const ENGINE_TEXT: Record<CallEngine, { label: string; desc: string }> = {
-  gemini_live: { label: '기본', desc: '지금 쓰는 Gemini Live로 이야기해요.' },
-  gemini_live_38: { label: '새 모델: Gemini 3.8 Live', desc: "더 빨리 대답하고 'Yeah'에도 반응해요. 대신 말을 끊으면 늦게 멈춰요." },
+  gemini_live: { label: 'Gemini 2.5 Live', desc: '예전 기본 모델이에요.' },
+  gemini_live_38: { label: '기본: Gemini 3.8 Live', desc: "말을 끊으면 바로 멈추고, 'Yeah'에도 자기 이야기를 이어가요." },
   gemini_live_notes: { label: '조용한 조언자', desc: '말하는 동안 곁에서 조용히 메모하며 대화를 거들어요.' },
   cascade_flux: { label: '조립식', desc: 'Deepgram이 듣고, Gemini가 생각하고, Cartesia가 말해요.' },
   openai_live: { label: 'OpenAI 실시간', desc: '아직 만들고 있어요.' },
