@@ -15,6 +15,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+try:
+    from server import memory_settings
+except ImportError:  # server/ 안에서 바로 도는 단위 시험
+    import memory_settings
+
 logger = logging.getLogger(__name__)
 
 PROFILE_PATH_ENV = "LEARNER_PROFILE_PATH"
@@ -428,6 +433,8 @@ def update_profile(
             candidate["level"] = old_card["level"]
             candidate["updated"] = _stamp(now)
             candidate["thinking_gaps"] = gaps
+            if not memory_settings.load_settings()["remember"]["interests"]:  # 관심사 기억을 끈 동안에는 새 관심사를 더하지 않는다
+                candidate["interests"] = list(old_card.get("interests") or [])
             new_card = enforce_rules(validate_profile(candidate))
         except Exception as e:  # noqa: BLE001 - 모델 쪽 실패여도 생각 방식 기록은 남긴다
             logger.error("학습자 카드 모델 갱신 실패, thinking_gaps만 합쳐 저장: %s", e)

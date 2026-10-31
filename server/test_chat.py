@@ -14,7 +14,7 @@ class ChatTestCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        env = {"CHAT_DIR": str(Path(self.tmp.name) / "chats"), "PARTNER_MEMORY_DIR": str(Path(self.tmp.name) / "memory")}
+        env = {"CHAT_DIR": str(Path(self.tmp.name) / "chats"), "PARTNER_MEMORY_DIR": str(Path(self.tmp.name) / "memory"), "MEMORY_SETTINGS_PATH": str(Path(self.tmp.name) / "memory-settings.json")}
         patcher = mock.patch.dict("os.environ", env)
         patcher.start()
         self.addCleanup(patcher.stop)

@@ -23,6 +23,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+try:
+    from server import memory_settings
+except ImportError:  # server/ 안에서 바로 도는 단위 시험
+    import memory_settings
+
 logger = logging.getLogger(__name__)
 
 MEMORY_DIR_ENV = "PARTNER_MEMORY_DIR"
@@ -605,6 +610,8 @@ def update(
 
     모델은 사실 연산(ADD/UPDATE/PAST/NOOP)과 threads·self_story·jokes 목록, 에피소드 한 줄을 돌려준다.
     오늘 아직 reflection 문단이 없으면 그것도 함께 쓰게 한다(친구마다 하루 한 번).
+    기억 설정(memory_settings)을 갱신할 때마다 다시 읽는다: facts가 꺼져 있으면 사실 연산을 적용하지 않고 성찰 문단·대화 요약도 더하지 않으며(저장된 것은 그대로),
+    threads가 꺼져 있으면 이어 갈 화제를 빈 목록으로 저장한다.
     어떤 단계가 실패해도 파일은 그대로 두고 로그만 남기고 False. 기존 파일이 깨졌으면 로그를 남기고 빈 기억에서
     시작한다(깨진 파일은 쓰기 직전에 history/ 로 백업된다). load -> 모델 호출 -> write를 락 하나로 묶어
     같은 친구의 두 갱신이 서로 덮어쓰지 못하게 한다. source는 이 대화의 출처(통화 전문 stem 등)로 새 사실에 적는다.
@@ -627,11 +634,14 @@ def update(
             except MemoryError_ as e:
                 logger.error("친구 기억 파일이 깨져 빈 기억에서 다시 시작(%s, 원본은 history/ 로 백업): %s", partner_id, e)
                 old = None
-            reflect = needs_reflection(old, today)
+            remember = memory_settings.load_settings()["remember"]
+            reflect = remember["facts"] and needs_reflection(old, today)
             raw = generate_text(build_prompt(partner_id, old, transcript_turns, today, mode, reflect))
             data = parse_model_json(raw)
-            facts, counts = apply_fact_ops((old or {}).get("facts") or [], data.get("fact_ops"), today, source or f"{mode}-{today}")
-            logger.info("친구 기억 사실 연산(%s): %s", partner_id, counts)
+            facts = (old or {}).get("facts") or []
+            if remember["facts"]:
+                facts, counts = apply_fact_ops(facts, data.get("fact_ops"), today, source or f"{mode}-{today}")
+                logger.info("친구 기억 사실 연산(%s): %s", partner_id, counts)
             # 에피소드는 모델이 옛 것을 다시 쓰지 않는다: 옛 목록 앞에 이번 대화 하나만 붙인다.
             episodes = list((old or {}).get("episodes") or [])
             # 모델이 길게 쓰면 버리지 말고 문장 끝에서(없으면 단어 경계에서 …) 자른다
@@ -640,7 +650,9 @@ def update(
             for key in ("threads", "self_story", "jokes"):
                 if not isinstance(data.get(key), list):
                     data[key] = list((old or {}).get(key) or [])
-            if summary:
+            if not remember["threads"]:
+                data["threads"] = []
+            if summary and remember["facts"]:
                 episodes.insert(0, {"date": today, "mode": mode, "summary": summary})
             reflection = (old or {}).get("reflection")
             if reflect:  # 모델이 문단을 못 쓰면 옛 문단을 두고 다음 갱신 때 다시 시도한다

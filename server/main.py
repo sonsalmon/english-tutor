@@ -36,7 +36,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
 
 from server import accent_key, call_bot, chat, clip_translate, clipdb, culture_filter, culturedb, drill, feed, native_expr, people, phrase_gloss, pron, review, summary_jobs, tts, wordbook, youtube
 from server.call_bot import parse_call_config, run_bot, time_limit_for_mode
-from server import partner_memory, reasoner, resume, turn_rules, voice_style, warmup
+from server import memory_settings, partner_memory, reasoner, resume, turn_rules, voice_style, warmup
 from server.history import list_calls, live_cost_of, load_call, totals as call_totals
 from server.pricing import combine_cost
 from server.readgloss import (
@@ -537,6 +537,25 @@ async def partner_memory_forget(partner_id: str, kind: str, index: int, text: Op
         logger.error(f"Partner memory unreadable: {e}")
         raise HTTPException(status_code=500, detail="친구 기억을 읽지 못했습니다.")
     return {"status": "ok", "memory": memory}
+
+
+@app.get("/api/memory-settings")
+async def memory_settings_get():
+    """"나에 대한 기억" 설정(내 소개글과 기억 스위치). 파일이 없거나 깨졌으면 기본값."""
+    return await asyncio.to_thread(memory_settings.load_settings)
+
+
+@app.put("/api/memory-settings")
+async def memory_settings_put(raw: Request):
+    """기억 설정을 저장하고 저장한 값을 돌려준다. JSON이 아니면 415, 값이 틀리면 400."""
+    body = await _json_object(raw)
+    try:
+        return await asyncio.to_thread(memory_settings.save_settings, body)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except OSError as e:
+        logger.error(f"Memory settings not saved: {e}")
+        raise HTTPException(status_code=500, detail="설정을 저장하지 못했습니다.")
 
 
 @app.get("/api/chat/{partner_id}")

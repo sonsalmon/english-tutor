@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import tempfile
 import unittest
@@ -36,6 +37,9 @@ class ProfileFileTest(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.path = Path(self._tmp.name) / "learner-profile.json"
         self.history = Path(self._tmp.name) / lp.HISTORY_DIR_NAME
+        patcher = mock.patch.dict(os.environ, {"MEMORY_SETTINGS_PATH": str(Path(self._tmp.name) / "memory-settings.json")})
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def tearDown(self):
         self._tmp.cleanup()
@@ -114,6 +118,25 @@ class ProfileFileTest(unittest.TestCase):
         self.assertEqual([p["pattern"] for p in saved["fixed_points"]], ["past tense"])
         self.assertNotIn("misses", saved["fixed_points"][0])
 
+    def test_interests_switch_off_keeps_stored_interests(self):
+        self.write_card(card(interests=["security"]))
+        Path(os.environ["MEMORY_SETTINGS_PATH"]).write_text(
+            json.dumps({"version": 1, "about_me": "", "remember": {"facts": True, "threads": True, "interests": False}}), encoding="utf-8"
+        )
+
+        self.assertTrue(self.update(json.dumps(card(interests=["security", "jazz"], next_goal="Ask with did."))))
+
+        saved = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["interests"], ["security"])
+        self.assertEqual(saved["next_goal"], "Ask with did.")  # 관심사 밖의 갱신은 그대로 반영된다
+
+    def test_interests_switch_on_adds_new_interests(self):
+        self.write_card(card(interests=["security"]))
+
+        self.assertTrue(self.update(json.dumps(card(interests=["security", "jazz"]))))
+
+        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["interests"], ["security", "jazz"])
+
 
 class BriefTest(unittest.TestCase):
     def test_empty_card_gives_empty_brief(self):
@@ -149,6 +172,9 @@ class ThinkingGapsTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.path = Path(self._tmp.name) / "learner-profile.json"
+        patcher = mock.patch.dict(os.environ, {"MEMORY_SETTINGS_PATH": str(Path(self._tmp.name) / "memory-settings.json")})
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def tearDown(self):
         self._tmp.cleanup()

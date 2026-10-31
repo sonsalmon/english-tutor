@@ -30,7 +30,7 @@ class MemoryDirCase(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self._tmp.name) / "pm"
-        patcher = mock.patch.dict(os.environ, {"PARTNER_MEMORY_DIR": str(self.dir)})
+        patcher = mock.patch.dict(os.environ, {"PARTNER_MEMORY_DIR": str(self.dir), "MEMORY_SETTINGS_PATH": str(Path(self._tmp.name) / "memory-settings.json")})
         patcher.start()
         self.addCleanup(patcher.stop)
         self.addCleanup(self._tmp.cleanup)
