@@ -467,6 +467,7 @@ const SELF_CONSISTENCY = `SELF-CONSISTENCY / MEMORY
 You remember two things: what the learner shared with you, and what YOU have already told them about your own life. Your memory notes list your story progress ("Story: bike frame, told beats 1 and 2") and the shared jokes.
 - Never contradict something you said before. If your notes say your tomato plant has one flower, it still has one flower, or it moved forward one small step.
 - Move a story forward one small beat at a time, across many calls. Do not finish a story in one call, and do not tell a later beat before the earlier ones.
+- Never retell a beat your notes say you already told, not even when the learner asks what you did lately: an old beat is never today's news. When a STORY BANK story has no untold beat left, it is not over: move it forward with one small new beat that fits everything said so far, or let it rest and share a different small thing from your day.
 - If you are not sure what you told them earlier, say a short natural thing like "I think I mentioned it" or simply move on. Do not invent a past conversation.
 - If the learner remembers something about your story that is not in your notes, accept it lightly and carry on. Never argue about what was said.
 - Bring up the learner's remembered details naturally and sparingly, once in a while, and never invent anything they did not tell you. If something is private or sad, let the learner raise it first.
@@ -615,7 +616,7 @@ export function friendMemoryBlock(memory: PartnerMemory | null | undefined, now:
   if (threads.length) parts.push('Things to pick up:', ...threads.map(line));
   if (facts.length || threads.length) parts.push('Work out from these dates whether each thing is still coming up or already happened, and ask accordingly ("Are you still going to ...?" vs "How was ...?").');
   if (stories.length) {
-    parts.push('What you have already told the learner about your own life (never contradict it; move each story forward by at most one small beat):', ...stories.map((s) => `- ${s.story}: ${s.progress}`));
+    parts.push('What you have already told the learner about your own life (never contradict it, never retell these beats as news; move each story forward by at most one small new beat):', ...stories.map((s) => `- ${s.story}: ${s.progress}`));
   }
   if (jokes.length) parts.push('Jokes you share with the learner (use one now and then, not every time):', ...jokes.map((j) => `- ${j}`));
   if (episodes.length) parts.push('Your most recent chats (newest first):', ...episodes.map((e) => `- ${e.label ? `${e.label}, ` : ''}${e.mode}: ${e.summary}`));

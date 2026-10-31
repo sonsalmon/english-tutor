@@ -570,16 +570,34 @@ Rules:
 - PAST (by id) when the learner said a known fact is no longer true (changed job, quit a hobby, the event is over). Then ADD the new fact if there is one. Facts are never deleted, so use PAST, not silence. "until" is the date it stopped being true (default today).
 - NOOP when nothing in this {kind} changes the facts. If a known fact already says it, do not ADD it again.
 - importance: 5 = who the learner is (family, faith, work or study, health, big plans); 4 = things they run or belong to, strong passions, important recurring routines; 3 = ordinary likes, opinions, one-off news worth recalling; 2 = minor preferences; 1 = trivia. Be generous with 4 for communities, clubs and long-term projects.
-- threads = things {name} would naturally pick up next time (e.g. "the jazz concert on Saturday"). Add new ones from this {kind}. Drop threads that were resolved in it. Keep unresolved older threads.
+- threads = open things {name} would naturally ask about NEXT time (e.g. "the jazz concert on Saturday"). Add new ones from this {kind}. A thread that came up in this {kind} (either side mentioned it) is used up: remove it. If that topic is still open and there will be something new to ask later, add it back only as a NEW, differently worded follow-up (e.g. "the jazz concert on Saturday" -> "whether the band played the song they hoped for"). Keep older threads that did not come up.
 - self_story = what {name} (Partner) told the learner about {name}'s OWN life: one entry per story, with a short title and "progress" = only the beats and concrete details {name} has actually told so far (older beats stay, new beats are added in order). Also record {name}'s ongoing bigger storyline when {name} has told one (e.g. a trek {name} is training for, a move, a job search) as its own entry, not only the small topic of the day. Record only what the Partner really said in this transcript or what the current memory already holds; never write a beat that was not told, and never finish a story the Partner only began.
 - jokes = nicknames, running gags and playful bits that BOTH sides used and that could be reused. Keep it empty if there were none.
 - episode = one short English summary of this {kind} (topics, what was decided, mood). Always provide it.
-- threads, self_story and jokes: return the full current list merged with this {kind} (keep older items that are still true, update changed ones, remove duplicates). Set last_seen to {today} for items mentioned or confirmed in this {kind} and keep the old date for the rest.{reflection_rule}
+- threads: return the threads still worth asking next time (older ones that did not come up keep their old date; new ones get {today}).
+- self_story and jokes: return the full current list merged with this {kind} (keep older items that are still true, update changed ones, remove duplicates). Set last_seen to {today} for items mentioned or confirmed in this {kind} and keep the old date for the rest.{reflection_rule}
 - Write text in English. Every thread also needs a short Korean label in "ko" (at most 30 characters).
 - Limits: facts have no count limit but each is at most {FACT_MAX} characters; {MAX_THREADS} threads at most (each at most {THREAD_MAX}), {MAX_SELF_STORY} self_story entries (story at most {STORY_MAX}, progress at most {PROGRESS_MAX}), {MAX_JOKES} jokes (each at most {JOKE_MAX}), episode at most {SUMMARY_MAX} characters.
 - Privacy: never store real person names (including the learner's own), addresses, company or school names, phone numbers, emails or other contact details of the learner or the learner's acquaintances. Write "a coworker" or "the learner's friend" instead. Names of {name}'s own people inside {name}'s stories are fine.
 - Faith: the learner's own faith, beliefs and religious practice are a normal personal topic, like hobbies or family. You may remember what the learner ("Me") said about it as a fact, and remember it respectfully: record it neutrally, never judge it, never argue with it, and never turn it into pressure to believe or to change. {name}'s own faith life inside {name}'s stories is fine.
 - If nothing is worth remembering, return {{"fact_ops": [{{"op": "NOOP"}}], ...}} with the current threads, self_story and jokes unchanged (still with an episode)."""
+
+
+def _thread_key(item: Any) -> str:
+    return _clean(item.get("text") if isinstance(item, dict) else "").lower()
+
+
+def drop_used_threads(old_threads: List[Any], new_threads: List[Any], today: str) -> List[Any]:
+    """이번 대화에서 이미 나온 이어 갈 이야기를 뺍다.
+
+    모델이 옛 이야기를 같은 글 그대로 돌려주면서 날짜를 오늘로 바꾼 것은 '이번에 언급됨' 표시다. 예전에는 이것이 날짜만 갱신되며
+    영원히 남아 매 통화 첫 턴에 같은 질문(10-31 Priya의 바둑 동아리)을 되풀이했다. 새로 더해진 이야기와, 글을 바꾼
+    후속 질문은 남긴다. 날짜를 그대로 둔 옛 이야기는 이번에 나오지 않은 것이라 남긴다."""
+    old_keys = {_thread_key(t) for t in old_threads}
+    return [
+        t for t in new_threads
+        if not (isinstance(t, dict) and _thread_key(t) in old_keys and _clean(t.get("last_seen")) == today)
+    ]
 
 
 def parse_model_json(raw: Any) -> Dict[str, Any]:
@@ -650,7 +668,9 @@ def update(
             for key in ("threads", "self_story", "jokes"):
                 if not isinstance(data.get(key), list):
                     data[key] = list((old or {}).get(key) or [])
-            if not remember["threads"]:
+            if remember["threads"]:
+                data["threads"] = drop_used_threads((old or {}).get("threads") or [], data["threads"], today)
+            else:
                 data["threads"] = list((old or {}).get("threads") or [])
             if summary and remember["facts"]:
                 episodes.insert(0, {"date": today, "mode": mode, "summary": summary})

@@ -112,6 +112,23 @@ class UpdateTest(MemoryDirCase):
         self.assertIn("Partner: Nice!", seen[0])
         self.assertEqual(self.history(), [])
 
+    def test_thread_mentioned_again_is_used_up_but_untouched_and_new_ones_stay(self):
+        old = [
+            {"text": "The jazz concert on Saturday", "ko": "토요일 재즈 공연", "last_seen": "2026-10-20"},
+            {"text": "The new job", "ko": "새 일자리", "last_seen": "2026-10-20"},
+        ]
+        pm.update("priya", TURNS, lambda p: json.dumps(good(threads=old)), NOW)
+        returned = [
+            {"text": "the jazz concert on saturday", "ko": "토요일 재즈 공연", "last_seen": "2026-10-21"},
+            {"text": "The new job", "ko": "새 일자리", "last_seen": "2026-10-20"},
+            {"text": "Whether the band played the song they hoped for", "ko": "바라던 곡", "last_seen": "2026-10-21"},
+        ]
+
+        pm.update("priya", TURNS, lambda p: json.dumps(good(fact_ops=[{"op": "NOOP"}], threads=returned)), NOW + timedelta(days=1))
+
+        texts = [t["text"] for t in pm.load_memory("priya")["threads"]]
+        self.assertEqual(sorted(texts), ["The new job", "Whether the band played the song they hoped for"])
+
     def test_second_update_backs_up_and_sends_old_memory(self):
         pm.update("priya", TURNS, lambda p: json.dumps(good()), NOW)
         seen = []
