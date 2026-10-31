@@ -1,4 +1,5 @@
 import type { PartnerMemory, Wordbook } from './api';
+import { DEFAULT_MEMORY_SETTINGS, type MemorySettings } from './apiMemorySettings';
 import { loadCoachSettings, type CoachSettings } from './coachSettings';
 import type { CallMode, EndReason, MissionResult } from './useCall';
 import {
@@ -58,12 +59,12 @@ export function callTitle(setup: CallSetup): string {
   return setup.topic ? freeTalkTitle(setup.topic) : 'Ms. Park과 자유 대화';
 }
 
-export function buildInstruction(setup: CallSetup, brief: string, words: PracticeWord[] = [], interests: string[] = [], memory: PartnerMemory | null = null, wordbook: Wordbook | null = null, coach: CoachSettings = loadCoachSettings()): string {
+export function buildInstruction(setup: CallSetup, brief: string, words: PracticeWord[] = [], interests: string[] = [], memory: PartnerMemory | null = null, wordbook: Wordbook | null = null, coach: CoachSettings = loadCoachSettings(), memorySettings: MemorySettings = DEFAULT_MEMORY_SETTINGS): string {
   const partner = setupPartner(setup);
-  if (setup.kind === 'mission') return missionInstruction(setup.mission, brief, setup.retry, words, partner, interests, coach);
-  if (setup.kind === 'smalltalk') return smallTalkInstruction(brief, words, partner, interests, memory, setup.chip, wordbook, coach);
+  if (setup.kind === 'mission') return missionInstruction(setup.mission, brief, setup.retry, words, partner, interests, coach, memorySettings);
+  if (setup.kind === 'smalltalk') return smallTalkInstruction(brief, words, partner, interests, memory, setup.chip, wordbook, coach, memorySettings);
   if (setup.kind === 'teachback') return teachbackInstruction(setup.sections, setup.seniorMode, setup.retry, brief);
-  return freeTalkInstruction(setup.topic, brief, setup.retry, words, partner, interests, memory, setup.chip, wordbook, coach);
+  return freeTalkInstruction(setup.topic, brief, setup.retry, words, partner, interests, memory, setup.chip, wordbook, coach, memorySettings);
 }
 
 // Teach-back은 수업 내용에 집중하도록 readgloss 단어를 넣지 않는다.

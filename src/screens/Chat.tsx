@@ -4,6 +4,7 @@ import { Avatar } from '../components/Avatar';
 import { WordText } from '../components/WordText';
 import { QuietButton } from '../components/ui';
 import { closeChat, getPartnerMemory, sendChat, type PartnerMemory, type Wordbook } from '../lib/api';
+import { DEFAULT_MEMORY_SETTINGS, getMemorySettingsOrDefault, type MemorySettings } from '../lib/apiMemorySettings';
 import { deleteChat, getChatView, pinChat, type ChatItem } from '../lib/apiChat';
 import { clock, sameDay, yesterdayOf } from '../lib/callFormat';
 import { friendlyError } from '../lib/errors';
@@ -55,16 +56,21 @@ function Conversation({ partner, brief, interests, wordbook, profileReady, onCal
   const idleTimer = useRef<number | undefined>(undefined);
   const swipe = useSwipe({ onLeft: () => go('person', false, id) });
   const memory = useRef<PartnerMemory | null>(null);
+  const memorySettings = useRef<MemorySettings>(DEFAULT_MEMORY_SETTINGS);
   const memoryLoad = useRef<Promise<void>>(Promise.resolve());
   const memoryStale = useRef(false);
 
   const loadMemory = useCallback(() => {
-    memoryLoad.current = getPartnerMemory(id).then(
+    const loadedMemory = getPartnerMemory(id).then(
       (m) => {
         memory.current = m;
       },
       () => {},
     );
+    const loadedSettings = getMemorySettingsOrDefault().then((s) => {
+      memorySettings.current = s;
+    });
+    memoryLoad.current = Promise.all([loadedMemory, loadedSettings]).then(() => {});
   }, [id]);
 
   useEffect(() => {
@@ -143,7 +149,7 @@ function Conversation({ partner, brief, interests, wordbook, profileReady, onCal
         loadMemory();
       }
       await memoryLoad.current;
-      const instruction = buildChatInstruction(partner, brief, memory.current, interests ?? [], wordbook ?? null);
+      const instruction = buildChatInstruction(partner, brief, memory.current, interests ?? [], wordbook ?? null, memorySettings.current);
       const res = await sendChat(id, instruction, text);
       setMessages((prev) => [...(prev ?? []), ...(res.messages as ChatItem[])]);
       if (alive.current) {

@@ -12,6 +12,7 @@ import { TopicChips, type TopicChip } from '../components/TopicChips';
 import { QuietButton, useWide } from '../components/ui';
 import { WordText } from '../components/WordText';
 import { getPartnerMemory, serverNow, type Wordbook } from '../lib/api';
+import { DEFAULT_MEMORY_SETTINGS, getMemorySettingsOrDefault, type MemorySettings } from '../lib/apiMemorySettings';
 import { elapsedNoticeText, elapsedSeconds, nextElapsedNotice, NOTICE_SHOW_MS, shouldOfferRedial } from '../lib/callTime';
 import { useKeyboardInset } from '../lib/keyboardInset';
 import { go } from '../lib/router';
@@ -71,18 +72,19 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, wordbo
   const wantsMemory = (baseSetup.kind === 'smalltalk' || baseSetup.kind === 'freetalk') && !isPark(partner);
   const [loaded, setLoaded] = useState<{ id: string; state: MemoryState }>({ id: partnerId, state: { status: 'loading' } });
   const memoryState: MemoryState = loaded.id === partnerId ? loaded.state : { status: 'loading' };
+  const [memorySettings, setMemorySettings] = useState<MemorySettings>(DEFAULT_MEMORY_SETTINGS);
   const [chosenChip, setChosenChip] = useState({ partnerId, id: NO_CHIP });
   const chips = useMemo<TopicChip[]>(() => {
     const wantsChips = baseSetup.kind === 'smalltalk' || (baseSetup.kind === 'freetalk' && !sanitizeTopic(baseSetup.topic));
     if (!wantsChips) return [];
-    const threads = wantsMemory && memoryState.status === 'ready' && memoryState.memory ? memoryState.memory.threads : [];
+    const threads = wantsMemory && memorySettings.remember.threads && memoryState.status === 'ready' && memoryState.memory ? memoryState.memory.threads : [];
     const list: TopicChip[] = [
       { id: NO_CHIP, label: '그냥 시작' },
       ...threads.map((t) => ({ id: `thread:${t.text}`, label: t.ko, value: t.text })),
       ...cleanInterests(interests).map((text) => ({ id: `interest:${text}`, label: text, value: text })),
     ];
     return list.filter((c, i) => list.findIndex((o) => o.id === c.id) === i);
-  }, [baseSetup, wantsMemory, memoryState, interests]);
+  }, [baseSetup, wantsMemory, memoryState, memorySettings, interests]);
   const chip = chips.find((c) => c.id === (chosenChip.partnerId === partnerId ? chosenChip.id : NO_CHIP)) ?? chips[0];
   const chipValue = chip?.value;
   const setup = useMemo<CallSetup>(() => {
@@ -105,6 +107,15 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, wordbo
     );
     return () => controller.abort();
   }, [idle, wantsMemory, partnerId]);
+
+  // 걸기 전에 기억 설정(내 소개글·기억 스위치)을 읽어 둔다. 못 읽으면 기본값으로 가고 통화를 막지 않는다.
+  const wantsSettings = baseSetup.kind !== 'teachback';
+  useEffect(() => {
+    if (!idle || !wantsSettings) return;
+    const controller = new AbortController();
+    getMemorySettingsOrDefault(controller.signal).then(setMemorySettings, () => {});
+    return () => controller.abort();
+  }, [idle, wantsSettings]);
 
   const [captions, setCaptions] = useState(true);
   const [startedAt, setStartedAt] = useState<number | null>(null);
@@ -231,7 +242,7 @@ export function Call({ setup: baseSetup, brief, practiceWords, interests, wordbo
       setNotice(null);
       noticeCount.current = 0;
       await call.start(
-        buildInstruction(setup, brief, practiceWordsFor(setup, practiceWords, wordbook), cleanInterests(interests), memory, wordbook),
+        buildInstruction(setup, brief, practiceWordsFor(setup, practiceWords, wordbook), cleanInterests(interests), memory, wordbook, undefined, memorySettings),
         callMode(setup),
         partner.voice,
         wantsMemory ? partnerId : undefined,
