@@ -611,7 +611,7 @@ def update(
     모델은 사실 연산(ADD/UPDATE/PAST/NOOP)과 threads·self_story·jokes 목록, 에피소드 한 줄을 돌려준다.
     오늘 아직 reflection 문단이 없으면 그것도 함께 쓰게 한다(친구마다 하루 한 번).
     기억 설정(memory_settings)을 갱신할 때마다 다시 읽는다: facts가 꺼져 있으면 사실 연산을 적용하지 않고 성찰 문단·대화 요약도 더하지 않으며(저장된 것은 그대로),
-    threads가 꺼져 있으면 이어 갈 화제를 빈 목록으로 저장한다.
+    threads가 꺼져 있으면 이어 갈 화제를 새로 쌓지 않고 저장된 목록을 그대로 둔다(스위치를 끄는 것만으로는 지우지 않는다).
     어떤 단계가 실패해도 파일은 그대로 두고 로그만 남기고 False. 기존 파일이 깨졌으면 로그를 남기고 빈 기억에서
     시작한다(깨진 파일은 쓰기 직전에 history/ 로 백업된다). load -> 모델 호출 -> write를 락 하나로 묶어
     같은 친구의 두 갱신이 서로 덮어쓰지 못하게 한다. source는 이 대화의 출처(통화 전문 stem 등)로 새 사실에 적는다.
@@ -651,7 +651,7 @@ def update(
                 if not isinstance(data.get(key), list):
                     data[key] = list((old or {}).get(key) or [])
             if not remember["threads"]:
-                data["threads"] = []
+                data["threads"] = list((old or {}).get("threads") or [])
             if summary and remember["facts"]:
                 episodes.insert(0, {"date": today, "mode": mode, "summary": summary})
             reflection = (old or {}).get("reflection")

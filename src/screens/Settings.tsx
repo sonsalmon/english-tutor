@@ -169,7 +169,7 @@ function MemorySettingsSection() {
           <ToggleRow label="내가 말한 사실 기억하기" desc="대화에서 내가 말한 내 이야기, 친구가 정리한 인상, 지난 대화 요약을 기억해요." checked={remember.facts} onChange={(v) => changeSwitch('facts', v)} />
           <ToggleRow label="지난 화제 이어 가기" desc="지난 대화에서 남긴 이어 갈 이야기를 다음 대화에서 먼저 꺼내요." checked={remember.threads} onChange={(v) => changeSwitch('threads', v)} />
           <ToggleRow label="관심사 기억하기" desc="통화에서 알게 된 내 관심사를 학습자 카드에 쌓고 친구가 대화에 써요." checked={remember.interests} onChange={(v) => changeSwitch('interests', v)} />
-          <p className="text-sm text-ink-soft">스위치를 꺼도 이미 저장된 기억은 지워지지 않아요. 다만 지난 화제는 꺼 둔 채 대화가 끝나면 비워져요. 다음 대화부터 적용돼요.</p>
+          <p className="text-sm text-ink-soft">스위치를 꺼도 이미 저장된 기억은 지워지지 않아요. 꺼 둔 동안에는 새로 쌓지도, 대화에 꺼내지도 않아요. 다음 대화부터 적용돼요.</p>
           <div className="flex items-center gap-3">
             <button
               type="button"

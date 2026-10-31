@@ -168,14 +168,16 @@ class PartnerMemoryGatingTest(SettingsPathCase):
         self.assertEqual([j["text"] for j in memory["jokes"]], ["The sax thing"])
         self.assertNotIn("reflection", prompts[0].split("Return ONLY")[1])  # 문단을 쓰라고 요구하지도 않는다
 
-    def test_threads_off_stores_empty_threads_and_facts_still_work(self):
+    def test_threads_off_keeps_stored_threads_unchanged_and_facts_still_work(self):
         self.update(model())
+        before = pm.load_memory("priya")["threads"]
         ms.save_settings(settings(threads=False), NOW)
 
-        self.update(model(fact_ops=[{"op": "ADD", "text": "Has a dog", "importance": 3}]), NOW + timedelta(days=1))
+        new_thread = [{"text": "The dog's vet visit", "ko": "강아지 병원", "last_seen": "2026-10-21"}]
+        self.update(model(fact_ops=[{"op": "ADD", "text": "Has a dog", "importance": 3}], threads=new_thread), NOW + timedelta(days=1))
 
         memory = pm.load_memory("priya")
-        self.assertEqual(memory["threads"], [])
+        self.assertEqual(memory["threads"], before)
         self.assertEqual(len(memory["facts"]), 2)
         self.assertEqual(len(memory["episodes"]), 2)
 
