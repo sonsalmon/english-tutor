@@ -1,9 +1,9 @@
 # english-tutor
 
-정범 혼자 쓰는 영어 통화 앱. 고정 튜터 Ms. Park이 지난 통화를 기억하고 다음 통화를 맞춘다.
+고정 튜터 Ms. Park이 지난 통화를 기억하고 다음 통화를 맞춰 주는 영어 회화 연습 앱.
 
 - 명세: `docs/spec.md` (11절 Pipecat 통화, 12절 화면·폰 접속)
-- 출처: immergo(`~/dev/immergo`, Google의 Immersive Language Learning 데모를 고친 것)에서 시작했다. `NOTICE` 참고.
+- 출처: immergo(Google의 Immersive Language Learning 데모를 고친 것)에서 시작했다. `NOTICE` 참고.
 - 구성: 서버 FastAPI + Pipecat 1.13(Gemini Live on Vertex, SmallWebRTC), 화면 React + TypeScript + Tailwind(Vite).
 
 ## 실행 (Mac)
@@ -28,15 +28,13 @@
 
 ## 데이터 위치 (저장소 밖)
 
-- 통화 전문: `~/dev/learning/english/sessions/`
-- 통화 뒤 튜터링: `~/dev/learning/english/tutoring/`
-- Teach-back 결과: `~/dev/learning/english/teachback/`
-- 학습자 카드: `~/dev/learning/english/learner-profile.json` (바꾸기 전 카드는 `learner-profile-history/`)
+통화 전문·통화 뒤 튜터링·Teach-back 결과·학습자 카드 같은 개인 학습 데이터는 저장소 밖의 별도 폴더에 보관하고, 이 저장소에는 포함하지 않는다. 위치는 환경 설정으로 지정한다.
+
 - 첫 카드 다시 만들기: `.venv/bin/python scripts/build_learner_profile.py` (미리보기), 저장은 `--write`
 
 ## readgloss 연결 (선택)
 
-readgloss 다리(`127.0.0.1:47831`)가 켜져 있으면 홈에 "읽다가 찾아본 단어"가 뜨고, 통화 튜터링의 새 단어·고친 표현이 readgloss 단어장(복습)에 들어간다. 다리가 꺼져 있으면 이 부분만 빠지고 나머지는 그대로다. 토큰 파일은 `~/dev/readgloss/data/token`을 읽는다(바꿀 때 `READGLOSS_URL`·`READGLOSS_TOKEN_FILE`). 명세 14절.
+readgloss 다리(`127.0.0.1:47831`)가 켜져 있으면 홈에 "읽다가 찾아본 단어"가 뜨고, 통화 튜터링의 새 단어·고친 표현이 readgloss 단어장(복습)에 들어간다. 다리가 꺼져 있으면 이 부분만 빠지고 나머지는 그대로다. 토큰 파일 경로는 `READGLOSS_TOKEN_FILE` 환경변수로 지정한다(주소 변경은 `READGLOSS_URL`). 명세 14절.
 
 ## 검사
 
